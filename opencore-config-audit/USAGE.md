@@ -1,80 +1,80 @@
-# opencore-config-audit —— 使用说明
+# opencore-config-audit —— Panduan penggunaan
 
-> 给**使用者**看的速查。技术细节在 `SKILL.md` 与 `references/` 里，不用管。
+> Referensi ringkas untuk **pengguna**. Detail teknisnya ada di `SKILL.md` dan `references/`, tidak perlu dipusingkan.
 
-## 怎么用
+## Cara pakai
 
-**直接用自然语言说需求就行**，不用记技能名、不用记命令。系统会自己挑到它。
+**Cukup nyatakan kebutuhannya dengan bahasa alami**, tanpa perlu mengingat nama skill maupun perintahnya. Sistem akan memilihnya sendiri.
 
-也可以手动指定：输入框打 **`/`** → 选 `opencore-config-audit`；或点输入框左下角 **`+` → 技能**。
+Bisa juga ditentukan manual: ketik **`/`** di kolom input → pilih `opencore-config-audit`; atau klik **`+` → Skill** di pojok kiri bawah kolom input.
 
-## 说这些话就会触发
+## Kalimat yang memicu skill ini
 
-| 你想做什么 | 直接这么说 |
+| Yang ingin kamu lakukan | Ucapkan begini |
 |---|---|
-| **查 BIOS** | 「帮我审一下 BIOS 设置」「装系统找不到硬盘」「CFG Lock 要不要关」 |
-| 审配置 | 「审一下我的 OpenCore 配置」「校验一下 config.plist」 |
-| 补 SSDT | 「看日志还有没有要补的 SSDT」「ACPI 热补丁怎么做」「SSDT 样例在哪」 |
-| **装不上 / 进不去系统** | 「装系统找不到硬盘」「卡在苹果 logo 进不去」「开机循环重启」「黑屏只剩鼠标」「装完第一次开机进不去」 |
-| 查开机慢 | 「开机很慢，分析一下时间线」「卡在苹果 logo」 |
-| **启动项没了** | 「BIOS 里看不到 OpenCore 了」「只剩 Windows」「用 U 盘引导后启动项消失」「bcfg 怎么加启动项」 |
-| **换引导盘** | 「从 U 盘启动改成硬盘启动」「怎么在 macOS 里加启动项」「启动项排第一」 |
-| 精简 | 「kext 精简一下，不用的删掉」「屏蔽一下其它磁盘」 |
-| **更新 kext / OC** | 「把所有 kext 更新到最新」「OpenCore 要不要升级」「这个 kext 是不是官方的」 |
-| 装驱动 | 「装 NVIDIA 驱动」「Intel 无线网卡怎么配」「我这块 MT7922 能用吗」「MT7921 能上网吗」「MT7922 Reno/RZ616 怎么装」「原生 Sunrise 要装什么」「博通网卡怎么配」「有线网卡/2.5G 网卡怎么驱动」 |
-| **AirDrop / 接力** | 「隔空投送搜不到设备」「AirDrop 用不了」「接力不工作」「Handoff 没反应」「是不是 ROM 填错了」「`awdl0` 没有」 |
-| 调 CPU | 「CPU 频率被压住了」「睿频怎么开」「换了 CPUFriend 数据反而更慢了」「睿频改完没效果」 |
-| **CPU 名字不对** | 「关于本机显示 Xeon W，但我的是 i7」「处理器名称怎么改」「CPU 型号显示错了」 |
-| **App 拿不到权限** | 「麦克风没权限」「不弹权限窗」「隐私设置里没有这个软件的开关」「装完显卡驱动后语音软件用不了」 |
-| **App 打不开 / 任何来源** | 「无法验证开发者」「已损坏，应移到废纸篓」「任何来源怎么开」「未知来源装不上」「`spctl` 怎么关」 |
-| **开/关小核** | 「小核怎么开」「关掉小核」「CPU 明明是 12 核，为什么只看到 8 核」「E 核用不上」 |
-| **换机型 / 三码** | 「换一下 SMBIOS 机型」「三码怎么配」「序列号怎么生成」「ROM 填什么」「换了机型开不了机」 |
-| 升系统 | 「从 15 升到 26 要改什么」「升级后 Wi-Fi 没了」「升级后板载声卡没声音了」 |
-| **声卡** | 「板载声卡没声音」「只有 HDMI 有声音」「AppleHDA 怎么装回来」「layout-id 填多少」「自己做一个 layout-id」「codec dump 怎么取」「前置麦克风没声音」「插上耳机不切换」「哪个口是哪个口」 |
-| 换构建 | 「从 release 换成 debug 版 OpenCore 并开日志」 |
-| **换主题** | 「换个 OpenCore 主题」「图标集怎么装」「选择器界面不出现」「图标显示不对/变形」「启动没有声音」「PickerAttributes 怎么配」 |
-| 首次装机 | 「第一次装黑苹果，EFI 怎么生成」 |
+| **Periksa BIOS** | "Audit pengaturan BIOS saya", "Saat instalasi sistem disk tidak ditemukan", "Apakah CFG Lock perlu dimatikan" |
+| Audit konfigurasi | "Audit konfigurasi OpenCore saya", "Validasi config.plist" |
+| Tambahkan SSDT | "Cek log, masih ada SSDT yang perlu ditambah?", "Bagaimana cara membuat hot patch ACPI", "Di mana contoh SSDT" |
+| **Gagal instalasi / tidak bisa masuk sistem** | "Saat instalasi sistem disk tidak ditemukan", "Macet di logo Apple tidak bisa masuk", "Boot loop restart", "Layar hitam hanya kursor", "Setelah instalasi, boot pertama tidak bisa masuk" |
+| Periksa boot lambat | "Boot sangat lambat, analisis timeline-nya", "Macet di logo Apple" |
+| **Entri boot hilang** | "OpenCore tidak terlihat di BIOS", "Hanya tersisa Windows", "Entri boot hilang setelah boot dari U disk", "Bagaimana cara menambah entri boot dengan bcfg" |
+| **Ganti media boot** | "Ubah boot dari U disk menjadi boot dari disk", "Bagaimana cara menambah entri boot di macOS", "Entri boot di posisi pertama" |
+| Rampingkan | "Rampingkan kext, hapus yang tidak dipakai", "Blokir disk yang lain" |
+| **Perbarui kext / OC** | "Perbarui semua kext ke versi terbaru", "Apakah OpenCore perlu di-upgrade", "Apakah kext ini yang resmi" |
+| Pasang driver | "Pasang driver NVIDIA", "Bagaimana konfigurasi Wi-Fi Intel", "Apakah MT7922 saya bisa dipakai", "Apakah MT7921 bisa terhubung ke internet", "Bagaimana cara memasang MT7922 Reno/RZ616", "Apa yang perlu dipasang untuk Sunrise native", "Bagaimana konfigurasi kartu Broadcom", "Bagaimana cara mendriver Ethernet/2.5G" |
+| **AirDrop / Handoff** | "AirDrop tidak menemukan perangkat", "AirDrop tidak bisa dipakai", "Handoff tidak berfungsi", "Handoff tidak bereaksi", "Apakah ROM diisi dengan benar", "`awdl0` tidak ada" |
+| Atur CPU | "Frekuensi CPU tertahan", "Bagaimana cara mengaktifkan turbo boost", "Setelah ganti data CPUFriend malah jadi lebih lambat", "Setelah ubah turbo boost tidak ada efek" |
+| **Nama CPU salah** | "Tentang Mac ini menampilkan Xeon W padahal punya i7", "Bagaimana cara mengubah nama processor", "Model CPU yang ditampilkan salah" |
+| **App tidak mendapat izin** | "Mikrofon tidak diizinkan", "Jendela izin tidak muncul", "Tidak ada sakelar aplikasi ini di pengaturan privasi", "Aplikasi suara tidak bisa dipakai setelah memasang driver GPU" |
+| **App tidak bisa dibuka / sumber apa saja** | "Tidak bisa memverifikasi developer", "Sudah rusak, harus dipindahkan ke Sampah", "Bagaimana cara mengaktifkan sumber apa saja", "Tidak bisa memasang dari sumber tak dikenal", "Bagaimana cara mematikan `spctl`" |
+| **Aktif/nonaktifkan E core** | "Bagaimana cara mengaktifkan E core", "Matikan E core", "CPU jelas 12 core tapi hanya terlihat 8 core", "E core tidak terpakai" |
+| **Ganti model / tiga kode** | "Ganti model SMBIOS", "Bagaimana konfigurasi tiga kode", "Bagaimana cara membuat serial number", "Isi ROM dengan apa", "Ganti model lalu tidak bisa boot" |
+| Upgrade sistem | "Dari 15 ke 26 apa yang perlu diubah", "Setelah upgrade Wi-Fi hilang", "Setelah upgrade onboard sound card tidak ada suara" |
+| **Kartu suara** | "Onboard sound card tidak ada suara", "Hanya HDMI yang bersuara", "Bagaimana cara memasang AppleHDA kembali", "Berapa nilai layout-id", "Buat layout-id sendiri", "Bagaimana cara mengambil codec dump", "Mikrofon depan tidak ada suara", "Tidak beralih output saat headset dipasang", "Port mana untuk apa" |
+| Ganti build | "Ganti OpenCore release ke versi debug dan nyalakan log" |
+| **Ganti tema** | "Ganti tema OpenCore", "Bagaimana cara memasang icon set", "Tampilan selector tidak muncul", "Ikon tampil salah/berubah bentuk", "Tidak ada suara saat boot", "Bagaimana konfigurasi PickerAttributes" |
+| Instalasi pertama | "Pertama kali pasang Hackintosh, bagaimana cara membuat EFI" |
 
-## 你会拿到什么
+## Yang kamu dapatkan
 
-- **审查报告**：每个结论都对着官方文档 / 官方校验器，不是「经验之谈」
-- **可回滚的改动**：改之前备份、改完算 sha、卸载重挂复验 —— 出问题能退回
-- **校验过的清单**：SSDT 该加哪个、kext 该删哪个，逐条给依据
-- **分析文档**：启动耗时、日志取证这类会落成文件
+- **Laporan audit**: setiap kesimpulan mengacu pada dokumentasi resmi / validator resmi, bukan "pengalaman" belaka
+- **Perubahan yang bisa dikembalikan**: cadangan sebelum mengubah, hitung sha setelah mengubah, unload lalu mount ulang untuk verifikasi — kalau ada masalah bisa dikembalikan
+- **Checklist yang sudah tervalidasi**: SSDT mana yang perlu ditambah, kext mana yang perlu dihapus, disertai alasan untuk tiap butir
+- **Dokumen analisis**: durasi boot, pengumpulan bukti dari log, dan sejenisnya ditulis ke file
 
-## 配套脚本（18 个）
+## Skrip pendukung (18 buah)
 
-| 脚本 | 作用 |
+| Skrip | Fungsi |
 |---|---|
-| `oc-nvram-bootentry.sh` | **从系统里读/写固件启动项**（`dump` / `backup` / `restore` / `add` / `del`）★ 写操作要提权，且需 `RequestBootVarRouting=false` |
-| `bios-audit.ps1` | **Windows 侧 BIOS 审查（只读）** —— 在 Windows 里先跑这个 |
-| `fetch-opencore-docs.sh` | 取同版官方包 + 建配置键库 |
-| `oc-verify.sh` | 一键校验（`plutil` + `ocvalidate` + 引用完整性 + sha） |
-| `oc-swap-build.sh` | RELEASE ↔ DEBUG 换构建 |
-| `oc-edit-safe.sh` | 安全改 config（备份 / 校验 / 存档 / 重挂复验） |
-| `grab-logs.sh` | 抓引导日志与内核日志 |
-| `boot-timeline.sh` | 启动耗时总览 |
-| `find-boot-gap.sh` | 启动停顿窗口精查 |
-| `mask-other-disks.sh` | 按 UUID 屏蔽非系统卷 |
-| `cpu-freq-probe.sh` | CPU 实际频率探针 |
-| `e-cores-check.sh` | **小核（E 核）体检**（拓扑 / 频率 / `CpuTopologyRebuild` 加载 + 判读） |
-| `kext-inventory.sh` | **kext 清单体检**（版本 / `DTXcode` / sha256 / config 引用核对 / OC 本体版本） |
-| `cpu-name-check.sh` | **CPU 显示名体检**（名字对照 / `rev*` 参数 / `RestrictEvents` / `ProcessorType`） |
-| `mem-check.sh` | 校验内存注入摆位 |
-| `redact-check.sh` | **发布前脱敏自检**（扫三码 / MAC / 密钥等） |
-| `oc-theme-check.sh` | **Resources 树合规检查**（必需图标 / 真实像素尺寸 / 标签 / 字体 / 音频） |
-| `oc-fetch-iconset.sh` | 从官方 OcBinaryData 取图标集 / 字体 / 标签 / 音频 |
+| `oc-nvram-bootentry.sh` | **Baca/tulis entri boot firmware dari sistem** (`dump` / `backup` / `restore` / `add` / `del`) ★ operasi tulis butuh hak admin, dan memerlukan `RequestBootVarRouting=false` |
+| `bios-audit.ps1` | **Audit BIOS sisi Windows (hanya baca)** —— jalankan ini lebih dulu di Windows |
+| `fetch-opencore-docs.sh` | Ambil paket resmi versi yang sama + bangun pustaka kunci konfigurasi |
+| `oc-verify.sh` | Validasi sekali klik (`plutil` + `ocvalidate` + integritas referensi + sha) |
+| `oc-swap-build.sh` | Ganti build RELEASE ↔ DEBUG |
+| `oc-edit-safe.sh` | Ubah config dengan aman (cadangan / validasi / arsip / mount ulang + verifikasi) |
+| `grab-logs.sh` | Ambil log boot dan log kernel |
+| `boot-timeline.sh` | Ringkasan durasi boot |
+| `find-boot-gap.sh` | Pemeriksaan detail jeda saat boot |
+| `mask-other-disks.sh` | Blokir volume non-sistem berdasarkan UUID |
+| `cpu-freq-probe.sh` | Probe frekuensi CPU aktual |
+| `e-cores-check.sh` | **Pemeriksaan E core** (topologi / frekuensi / pemuatan `CpuTopologyRebuild` + interpretasi) |
+| `kext-inventory.sh` | **Pemeriksaan inventaris kext** (versi / `DTXcode` / sha256 / pencocokan referensi config / versi inti OC) |
+| `cpu-name-check.sh` | **Pemeriksaan nama tampilan CPU** (perbandingan nama / parameter `rev*` / `RestrictEvents` / `ProcessorType`) |
+| `mem-check.sh` | Validasi penempatan injeksi memori |
+| `redact-check.sh` | **Pemeriksaan sanitasi sebelum publikasi** (pindai tiga kode / MAC / kunci, dll.) |
+| `oc-theme-check.sh` | **Pemeriksaan kepatuhan pohon Resources** (ikon wajib / ukuran piksel asli / label / font / audio) |
+| `oc-fetch-iconset.sh` | Ambil icon set / font / label / audio dari OcBinaryData resmi |
 
-## 参考文档（32 份）
+## Dokumen referensi (32 buah)
 
-按主题挑：`bios-settings.md`（BIOS）· `lifecycle.md`（全流程）· `os-upgrade-15-to-26.md`（升系统）·
-`nvidia-driver.md` · `amfi-and-tcc.md`（**App 拿不到权限 → tcc-helper**）· `intel-wifi.md` · `mediatek-wifi.md`（**含原生 Sunrise 打包方案**） · `broadcom-wifi.md`（四类网卡/显卡）· `airdrop-handoff.md`（**AirDrop / 接力：只看 `awdl0`，与 `ROM`/`en0`/UUID 无关**）·
-`applealc-custom.md`（**声卡 / macOS 26 恢复 AppleHDA / 定制 layout 前先取 Windows 侧数据：HDAU 或 HDAudDev.dll 脚本**）· `hidpi.md`（显示）· `intel-turbo.md`（睿频）· `e-cores.md`（**开/关小核**）· `cpu-name.md`（**CPU 显示名**）· `memory-injection.md`（内存）· `boot-failure-debug.md`（**装不上/进不去系统**）· `boot-timeline.md` / `logs-and-debug.md`（日志）· `boot-entries.md`（启动项）·
-`acpi-ssdt.md`（**ACPI 热补丁样例库索引**）· `disks-and-kexts.md` · `kext-and-oc-update.md`（**更新 kext / OC**）· `official-docs-method.md` · `rapidefi-first-efi.md` ·
-`smbios-and-serials.md`（换机型 + 三码）· `network-en0-order.md`（`en0` 归属）· `ethernet-drivers.md`（有线网卡）· `ecosystem-sources.md`（**权威来源与工具索引**）· `laobamac-toolkit.md`（工具索引）· `pitfalls.md`（踩过的坑）· `theme-opencanopy.md`（选择器主题）· `machine-facts.md`（参考机器事实）
+Pilih sesuai tema: `bios-settings.md` (BIOS) · `lifecycle.md` (alur lengkap) · `os-upgrade-15-to-26.md` (upgrade sistem) ·
+`nvidia-driver.md` · `amfi-and-tcc.md` (**App tidak mendapat izin → tcc-helper**) · `intel-wifi.md` · `mediatek-wifi.md` (**memuat skema paket Sunrise native**) · `broadcom-wifi.md` (empat jenis kartu Wi-Fi/GPU) · `airdrop-handoff.md` (**AirDrop / Handoff: hanya melihat `awdl0`, tidak terkait `ROM`/`en0`/UUID**) ·
+`applealc-custom.md` (**kartu suara / memulihkan AppleHDA di macOS 26 / sebelum membuat layout kustom, ambil dulu data sisi Windows: skrip HDAU atau HDAudDev.dll**) · `hidpi.md` (tampilan) · `intel-turbo.md` (turbo boost) · `e-cores.md` (**aktif/nonaktifkan E core**) · `cpu-name.md` (**nama tampilan CPU**) · `memory-injection.md` (memori) · `boot-failure-debug.md` (**gagal instalasi / tidak bisa masuk sistem**) · `boot-timeline.md` / `logs-and-debug.md` (log) · `boot-entries.md` (entri boot) ·
+`acpi-ssdt.md` (**indeks pustaka contoh hot patch ACPI**) · `disks-and-kexts.md` · `kext-and-oc-update.md` (**perbarui kext / OC**) · `official-docs-method.md` · `rapidefi-first-efi.md` ·
+`smbios-and-serials.md` (ganti model + tiga kode) · `network-en0-order.md` (kepemilikan `en0`) · `ethernet-drivers.md` (kartu Ethernet) · `ecosystem-sources.md` (**indeks sumber otoritatif dan alat**) · `laobamac-toolkit.md` (indeks alat) · `pitfalls.md` (jebakan yang pernah dialami) · `theme-opencanopy.md` (tema selector) · `machine-facts.md` (fakta mesin referensi)
 
-## 注意
+## Perhatian
 
-- 这个技能会**改你的 EFI**。改动都走安全流程（备份 → 校验 → 复验），但**请自己留一份 EFI 备份**。
-- 涉及安全边界的改动（放宽 SIP、`SecureBootModel=Disabled`、AMFI 参数）会在报告里明确写出来。
-- `-v` 要不要开、选择器主题这类**你能看见的偏好**，会先问你，不会替你决定。
+- Skill ini akan **mengubah EFI kamu**. Semua perubahan lewat alur aman (cadangan → validasi → verifikasi ulang), tapi **simpan sendiri satu salinan cadangan EFI**.
+- Perubahan yang menyentuh batas keamanan (melonggarkan SIP, `SecureBootModel=Disabled`, parameter AMFI) akan ditulis secara eksplisit di dalam laporan.
+- Hal-hal seperti apakah `-v` perlu dinyalakan dan tema selector adalah **preferensi yang bisa kamu lihat sendiri**, jadi skill akan bertanya lebih dulu, tidak memutuskan untukmu.

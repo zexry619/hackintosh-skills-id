@@ -1,46 +1,46 @@
-# AirDrop / 接力（Handoff / 连续互通）—— 为什么不能用，怎么查
+# AirDrop / Handoff (Continuity) —— kenapa tidak bisa dipakai, dan bagaimana cara memeriksanya
 
-> ★ **本文的定位**：AirDrop / 接力是**独立于 `en0` / `ROM` / 三码**的一条问题线。
-> 过去 skill 里把它混进 `network-en0-order.md` 的「依赖 `en0`」清单，**是错的**，
-> 会把排查方向带到 `ROM` 上去。本文是那条线的**唯一权威出口**。
+> ★ **Posisi dokumen ini**: AirDrop / Handoff adalah **garis masalah yang terpisah dari `en0` / `ROM` / tiga kode**.
+> Di skill sebelumnya hal ini dicampur ke dalam daftar "bergantung pada `en0`" di `network-en0-order.md`, **itu salah**,
+> karena membuat arah troubleshooting mengarah ke `ROM`. Dokumen ini adalah **satu-satunya pintu keluar resmi untuk garis masalah itu**.
 >
-> 来源分级（本文只用前两类做依据，本机实测单列）：
+> Grading sumber (dokumen ini hanya memakai dua kelas pertama sebagai dasar, hasil uji mesin ini dipisah):
 >
-> | 级别 | 来源 |
+> | Kelas | Sumber |
 > |---|---|
-> | **Apple 官方** | 连续互通 / AirDrop 系统要求 |
-> | **驱动官方** | itlwm（OpenIntelWireless）FAQ、Dortania |
-> | 本机实测 | 命令输出、两份 EFI 的 `config.plist` 对比 |
+> | **Resmi Apple** | Continuity / persyaratan sistem AirDrop |
+> | **Resmi driver** | FAQ itlwm (OpenIntelWireless), Dortania |
+> | Uji mesin ini | output perintah, perbandingan `config.plist` dua EFI |
 
-## 0. 一句话
+## 0. Satu kalimat
 
-**AirDrop / 接力能不能用，只取决于一件事：无线网卡是否跑在 Broadcom 原生 `IO80211Family` 栈上、从而产生 `awdl0`。**
+**Apakah AirDrop / Handoff bisa dipakai hanya bergantung pada satu hal: apakah kartu Wi-Fi berjalan di stack `IO80211Family` asli Broadcom sehingga menghasilkan `awdl0`.**
 
-- **`itlwm.kext`（Intel 网卡的以太网式驱动）⇒ 永远没有 `awdl0` ⇒ AirDrop 必然不可用**
-  —— 这是驱动设计层面的限制，不是配置问题，**改任何 config 都救不回来**。
-- **`ROM` / `en0` 归属 / 机型 / 序列号 / `SystemUUID` 与 AirDrop 无关**，别往那儿查。
+- **`itlwm.kext` (driver bergaya Ethernet untuk kartu Intel) ⇒ tidak pernah ada `awdl0` ⇒ AirDrop pasti tidak bisa dipakai**
+  —— ini adalah keterbatasan pada level desain driver, bukan masalah konfigurasi, **tidak bisa diselamatkan dengan mengubah config apa pun**.
+- **`ROM` / kepemilikan `en0` / model mesin / nomor seri / `SystemUUID` tidak ada hubungannya dengan AirDrop**, jangan telusuri ke sana.
 
-## 1. 权威依据
+## 1. Dasar otoritatif
 
-### 1.1 Apple 官方：连续互通只要三件事
+### 1.1 Apple resmi: Continuity hanya butuh tiga hal
 
-Apple 支持《使用"连续互通"在 Apple 设备间工作》：
+Dukungan Apple, "Memakai Continuity di antara perangkat Apple":
 
-> 若要使用"连续互通"功能，请在所有设备上**通过相同 Apple ID 登录**。
-> 此外，你的设备还必须**打开 Wi-Fi 和蓝牙**且**满足系统要求**。
+> Untuk memakai fitur "Continuity", silakan **masuk dengan Apple ID yang sama di semua perangkat**.
+> Selain itu, perangkat Anda juga harus **mengaktifkan Wi-Fi dan Bluetooth** serta **memenuhi persyaratan sistem**.
 
-—— **没有** `en0`，**没有** `ROM`，**没有** 序列号 / UUID。
+—— **tidak perlu** `en0`, **tidak perlu** `ROM`, **tidak perlu** nomor seri / UUID.
 
-AirDrop 的设备发现与点对点传输走 **Wi-Fi + 蓝牙**，macOS 上的点对点通道就是：
+Penemuan perangkat dan transfer peer-to-peer AirDrop berjalan lewat **Wi-Fi + Bluetooth**, dan kanal peer-to-peer di macOS adalah:
 
-| 接口 | 全称 | 作用 |
+| Antarmuka | Nama lengkap | Peran |
 |---|---|---|
-| **`awdl0`** | Apple Wireless Direct Interface | AirDrop / 接力 / 随航的主通道 |
-| **`llw0`** | Low-Latency WLAN | 低延迟链路，缺它接力会不灵 |
+| **`awdl0`** | Apple Wireless Direct Interface | kanal utama untuk AirDrop / Handoff / Sidecar |
+| **`llw0`** | Low-Latency WLAN | kanal low-latency, tanpa itu Handoff tidak berjalan baik |
 
-**AWDL 是 Apple 私有协议，跑在 `IO80211Family` 栈里** ⇒ 驱动不在这个栈里就**不可能**有 `awdl0`。
+**AWDL adalah protokol privat Apple yang berjalan di dalam stack `IO80211Family`** ⇒ kalau driver tidak ada di stack ini, `awdl0` **mustahil** ada.
 
-### 1.2 itlwm 官方 FAQ：明确不支持 AirDrop
+### 1.2 FAQ resmi itlwm: AirDrop jelas tidak didukung
 
 `https://openintelwireless.github.io/itlwm/FAQ.html`
 
@@ -53,97 +53,97 @@ AirDrop 的设备发现与点对点传输走 **Wi-Fi + 蓝牙**，macOS 上的�
 > **Is it a replacement of natively supported Broadcom Cards**
 > **No.**
 
-而更基础的 `itlwm.kext`（不是 `AirportItlwm`）：
+Dan untuk `itlwm.kext` yang lebih dasar (bukan `AirportItlwm`):
 
 > `itlwm.kext` uses Apple's public **IOEthernetController instead of the private IO80211Family**.
 > `AirportItlwm` enables the native Wi-Fi selection menu with limited continuity features.
 
-⇒ `itlwm.kext` **把无线网卡伪装成以太网卡**，根本不进 `IO80211Family`，**不会产生 `awdl0`**。
-⇒ 即使 `AirportItlwm` 也只是「Handoff + 通用剪贴板」，**AirDrop 仍不支持**。
+⇒ `itlwm.kext` **menyamarikan kartu Wi-Fi sebagai kartu Ethernet**, sama sekali tidak masuk ke `IO80211Family`, jadi **tidak menghasilkan `awdl0`**.
+⇒ Bahkan dengan `AirportItlwm`, yang tersedia hanya "Handoff + clipboard universal", **AirDrop tetap tidak didukung**.
 
-### 1.3 Dortania：`en0` / `ROM` 只管 iServices，且**与接口类型无关**
+### 1.3 Dortania: `en0` / `ROM` hanya untuk iServices, dan **tidak terkait jenis antarmuka**
 
 `https://dortania.github.io/OpenCore-Post-Install/universal/iservices.html`
 
-整篇标题是 **"Fixing iMessage and other services"**，通篇讲 iMessage / FaceTime / iCloud / App Store，
-**没有一处提到 AirDrop 或 Handoff**。关于 `en0` 类型，原文：
+Seluruh judul dokumennya adalah **"Fixing iMessage and other services"**, pembicaraannya iMessage / FaceTime / iCloud / App Store seluruhnya,
+**tidak ada satu pun menyebut AirDrop atau Handoff**. Untuk jenis `en0`, kutipan aslinya:
 
 > **Note**: `en0` can be either Wifi, ethernet or even Thunderbolt. **The type doesn't matter**,
 > just that it's present and marked as built-in.
 
-⇒ **`en0` 是以太网完全合规**（本机 `en0` = Intel I225-V，Wi-Fi 是 `en1`）⇒ **不影响 AirDrop**。
+⇒ **`en0` yang berupa Ethernet sepenuhnya sah** (di mesin ini `en0` = Intel I225-V, Wi-Fi adalah `en1`)⇒ **tidak memengaruhi AirDrop**.
 
-## 2. 排查顺序（按权威依赖链，从便宜到贵）
+## 2. Urutan troubleshooting (menurut rantai ketergantungan otoritatif, dari murah ke mahal)
 
-| 顺序 | 检查 | 命令 | 期望 / 说明 |
+| Urutan | Yang diperiksa | Perintah | Harapan / penjelasan |
 |---|---|---|---|
-| 1 | **`awdl0` 存在且 RUNNING** | `ifconfig awdl0` | `flags=8843<UP,BROADCAST,RUNNING,…>`；**没有 ⇒ 直接看第 2 步**（最常见根因） |
-| 2 | **Wi-Fi 走的是哪个驱动** | `kmutil showloaded --list-only \| grep -i 80211`<br>`ioreg -l \| grep -i IO80211`<br>看 `Kernel > Add` | 必须是 **Broadcom 原生栈**（`IOSkywalkFamily` + `IO80211FamilyLegacy` + `AirPortBrcmNIC`）；**`itlwm.kext` 一定不行** |
-| 3 | `llw0` 是否存在 | `ifconfig llw0` | `flags=8863<…SMART,RUNNING…>`；缺它接力会不灵 |
-| 4 | AirDrop 是否 Supported | `system_profiler SPAirPortDataType \| grep AirDrop` | `AirDrop: Supported`；否则查国家码 / 卡是否被识别 |
-| 5 | 蓝牙 BLE 服务 | `system_profiler SPBluetoothDataType \| grep "Supported services"` | 要有 **`LEA` / `AACP` / `GATT`**（连续互通需要）；缺 ⇒ 蓝牙驱动问题 |
-| 6 | 是否两台蓝牙控制器 | `ioreg -p IOUSB -w0 -l \| grep -i bluetooth` | 原 Intel 网卡没拔 / 没屏蔽 ⇒ macOS 会犯迷糊 |
-| 7 | 系统开关 | 系统设置 → 通用 → 隔空投送与接力 | 接力开关、AirDrop 可见性 |
-| 8 | Apple ID | 两台设备是否同一账号 | Apple 官方第一条要求 |
+| 1 | **`awdl0` ada dan RUNNING** | `ifconfig awdl0` | `flags=8843<UP,BROADCAST,RUNNING,…>`; **kalau tidak ada ⇒ langsung lihat langkah 2** (akar masalah paling sering) |
+| 2 | **driver mana yang dipakai Wi-Fi** | `kmutil showloaded --list-only \| grep -i 80211`<br>`ioreg -l \| grep -i IO80211`<br>lihat `Kernel > Add` | harus **stack asli Broadcom** (`IOSkywalkFamily` + `IO80211FamilyLegacy` + `AirPortBrcmNIC`); **`itlwm.kext` jelas tidak bisa** |
+| 3 | apakah `llw0` ada | `ifconfig llw0` | `flags=8863<…SMART,RUNNING…>`; tanpa itu Handoff tidak berjalan baik |
+| 4 | apakah AirDrop didukung | `system_profiler SPAirPortDataType \| grep AirDrop` | `AirDrop: Supported`; kalau tidak, periksa kode negara / apakah kartu terdeteksi |
+| 5 | layanan Bluetooth BLE | `system_profiler SPBluetoothDataType \| grep "Supported services"` | harus ada **`LEA` / `AACP` / `GATT`** (dibutuhkan Continuity); kalau tidak ada ⇒ masalah driver Bluetooth |
+| 6 | apakah ada dua Bluetooth controller | `ioreg -p IOUSB -w0 -l \| grep -i bluetooth` | kartu Intel asli tidak dicabut / tidak dinonaktifkan ⇒ macOS menjadi bingung |
+| 7 | sakelar sistem | Pengaturan Sistem → Umum → AirDrop & Handoff | sakelar Handoff, visibilitas AirDrop |
+| 8 | Apple ID | apakah kedua perangkat memakai akun yang sama | persyaratan pertama dari Apple resmi |
 
-> ★★ **判据纪律**：`system_profiler SPAirPortDataType` 在重启后**十几秒才准**，
-> **别拿它判 Wi-Fi 死活**；`ifconfig awdl0` / `ifconfig enX` 才是硬判据
-> （见 `broadcom-wifi.md` §4）。
+> ★★ **Disiplin kriteria**: `system_profiler SPAirPortDataType` baru akurat **belasan detik setelah restart**,
+> **jangan memakainya untuk menilai apakah Wi-Fi hidup atau mati**; `ifconfig awdl0` / `ifconfig enX` baru kriteria keras
+> (lihat `broadcom-wifi.md` §4).
 
-## 3. 四个常见误判（都验证过是错的）
+## 3. Empat salah paham yang umum (sudah diverifikasi semuanya salah)
 
-| 误判 | 为什么错 |
+| Salah paham | Kenapa salah |
 |---|---|
-| **「`ROM` 必须是真实 Wi-Fi MAC，否则 AirDrop 坏」** | `ROM` 是 Dortania **iServices**（iMessage / FaceTime / App Store）的要求，**Apple 官方对连续互通只要求 Apple ID + Wi-Fi + 蓝牙**。实测：`ROM` 与 `en0` 不一致时 AirDrop **照样可用** |
-| **「Continuity / AirDrop 挂在 `en0` 上」** | 同上。Dortania 原文 *"The type doesn't matter"*，且通篇不提 AirDrop |
-| **「`SystemUUID` / `IOPlatformUUID` 不一致导致 AirDrop 坏」** | 反证很直接：本机 `config SystemUUID` 与 `IOPlatformUUID` **至今仍不一致**（且两次启动之间还会变），而 AirDrop **实测可用** ⇒ 不是因素，**不要为 AirDrop 去动 UUID** |
-| **「机型 / 序列号不对导致 AirDrop 坏」** | 无依据。序列号影响的是 iServices 与「关于本机」 |
+| **"`ROM` harus berupa MAC Wi-Fi asli, kalau tidak AirDrop rusak"** | `ROM` adalah syarat **iServices** Dortania (iMessage / FaceTime / App Store), sementara **Apple resmi hanya mensyaratkan Apple ID + Wi-Fi + Bluetooth untuk Continuity**. Teruji: saat `ROM` dan `en0` tidak konsisten, AirDrop **tetap bisa dipakai** |
+| **"Continuity / AirDrop bergantung pada `en0`"** | Sama seperti di atas. Teks asli Dortania *"The type doesn't matter"*, dan tidak menyebut AirDrop sama sekali |
+| **"`SystemUUID` / `IOPlatformUUID` tidak konsisten membuat AirDrop rusak"** | Buktinya sangat langsung: `config SystemUUID` dan `IOPlatformUUID` di mesin ini **sampai sekarang masih tidak konsisten** (dan berubah antar boot), sementara AirDrop **teruji bisa dipakai** ⇒ bukan faktor, **jangan mengubah UUID demi AirDrop** |
+| **"Model mesin / nomor seri salah membuat AirDrop rusak"** | Tidak ada dasar. Yang dipengaruhi nomor seri adalah iServices dan "Tentang Mac Ini" |
 
-> ★ **别为了「符合规范」去改 `ROM`** —— 那要付一次「重建 `ByHost` + 重新认证」的代价，
-> 还可能把本来正常的 iServices 弄坏。详见 `smbios-and-serials.md` §6.1。
+> ★ **Jangan mengubah `ROM` demi "sesuai kaidah"** —— itu menuntut harga "membangun ulang `ByHost` + autentikasi ulang",
+> dan mungkin merusak iServices yang tadinya normal. Lihat `smbios-and-serials.md` §6.1.
 
-## 4. 选卡原则（一句话）
+## 4. Prinsip pemilihan kartu (satu kalimat)
 
-> **要 AirDrop / 接力 ⇒ 必须用 Broadcom 原生支持的卡**（BCM43602 / BCM94360CDP 这类）。
-> **Intel 卡无论 `itlwm` 还是 `AirportItlwm`，都拿不到 AirDrop**；
-> **MediaTek 第三方路线（`SimpleMtkWlan`）设计上就不可能**（见 `mediatek-wifi.md` §4.1）。
+> **Mau AirDrop / Handoff ⇒ harus memakai kartu yang didukung asli oleh Broadcom** (seperti BCM43602 / BCM94360CDP).
+> **Kartu Intel, baik `itlwm` maupun `AirportItlwm`, tidak akan pernah mendapat AirDrop**;
+> **jalur pihak ketiga MediaTek (`SimpleMtkWlan`) secara desain tidak mungkin** (lihat `mediatek-wifi.md` §4.1).
 
-| 卡 | AirDrop | 依据 |
+| Kartu | AirDrop | Dasar |
 |---|---|---|
-| Broadcom（原生栈 + OCLP root patch） | ✅ | 有 `awdl0` / `llw0` |
-| Intel + `AirportItlwm` | ❌（仅 Handoff / 通用剪贴板） | itlwm 官方 FAQ |
-| Intel + `itlwm.kext` | ❌（连 `IO80211Family` 都不进） | 同上 |
-| MediaTek 第三方 kext | ❌（"not possible with this design"） | `mediatek-wifi.md` §4.1 |
+| Broadcom (stack asli + OCLP root patch) | ✅ | ada `awdl0` / `llw0` |
+| Intel + `AirportItlwm` | ❌ (hanya Handoff / clipboard universal) | FAQ resmi itlwm |
+| Intel + `itlwm.kext` | ❌ (tidak sampai masuk `IO80211Family`) | sama seperti di atas |
+| Kext pihak ketiga MediaTek | ❌ ("not possible with this design") | `mediatek-wifi.md` §4.1 |
 
-## 5. 本机实测（Z690 / i7-12700K / macOS 26.7.1 / BCM43602 + BCM20703）
+## 5. Uji mesin ini (Z690 / i7-12700K / macOS 26.7.1 / BCM43602 + BCM20703)
 
-| 项 | 值 |
+| Item | Nilai |
 |---|---|
 | `awdl0` | `flags=8843<UP,BROADCAST,RUNNING,…>` ✅ |
 | `llw0` | `flags=8863<UP,BROADCAST,SMART,RUNNING,…>` ✅ |
 | AirDrop | `Supported` ✅ |
-| 蓝牙服务 | `HFP AVRCP A2DP HID Braille LEA AACP GATT SerialPort` ✅ |
-| `en0` | **Ethernet** `Intel I225-V`（built-in ✅）—— 无线是 `en1` |
-| 无线驱动 | `AirPortBrcmNIC-Tahoe.kext`（`MinKernel 25.0.0`） |
-| 加载的驱动 | `com.apple.driver.AirPort.BrcmNIC (1400.1.1)` —— **只来自 EFI**，系统卷里一份都没有 |
+| Layanan Bluetooth | `HFP AVRCP A2DP HID Braille LEA AACP GATT SerialPort` ✅ |
+| `en0` | **Ethernet** `Intel I225-V` (built-in ✅)—— nirkabel adalah `en1` |
+| Driver nirkabel | `AirPortBrcmNIC-Tahoe.kext` (`MinKernel 25.0.0`) |
+| Driver yang dimuat | `com.apple.driver.AirPort.BrcmNIC (1400.1.1)` —— **hanya dari EFI**, di system volume tidak ada satupun |
 
-### 5.1 一个反例：U 盘 EFI 为什么 AirDrop 坏
+### 5.1 Satu kasus pembalik: kenapa AirDrop rusak saat memakai USB EFI
 
-| | U 盘 EFI | 内部盘 EFI |
+| | USB EFI | EFI disk internal |
 |---|---|---|
-| 无线驱动 | **`itlwm.kext`**（Intel，走 `IOEthernetController`） | **`AirPortBrcmNIC-Tahoe.kext`**（Broadcom，走 `IO80211Family`） |
-| `DeviceProperties:Add` | **0 条**（连 `built-in` 都没有） | 3 条（含 Wi-Fi 节点 `built-in=<01>`） |
-| 蓝牙 | `IntelBluetoothFirmware` + `BlueToolFixup` | `BlueToolFixup` |
-| 结果 | 无 `awdl0` ⇒ **AirDrop / 接力不可用** | `awdl0` + `llw0` RUNNING ⇒ **可用** |
+| Driver nirkabel | **`itlwm.kext`** (Intel, lewat `IOEthernetController`) | **`AirPortBrcmNIC-Tahoe.kext`** (Broadcom, lewat `IO80211Family`) |
+| `DeviceProperties:Add` | **0 entri** (bahkan `built-in` pun tidak ada) | 3 entri (termasuk node Wi-Fi `built-in=<01>`) |
+| Bluetooth | `IntelBluetoothFirmware` + `BlueToolFixup` | `BlueToolFixup` |
+| Hasil | tidak ada `awdl0` ⇒ **AirDrop / Handoff tidak bisa dipakai** | `awdl0` + `llw0` RUNNING ⇒ **bisa dipakai** |
 
-★ 关键细节：U 盘启动时**靠有线（`AppleIGC.kext` + I225-V）上网**，所以用户感受是
-「能上网，但 AirDrop / 接力不能用」——**与「Wi-Fi 根本不存在」完全吻合**，容易被误读成「Wi-Fi 正常但 AirDrop 坏了」。
+★ Detail penting: saat boot dari USB, **koneksinya lewat kabel (`AppleIGC.kext` + I225-V)**, sehingga kesan penggunanya adalah
+"bisa accessing internet, tapi AirDrop / Handoff tidak bisa dipakai"——**sangat cocok dengan "Wi-Fi-nya praktis tidak ada"**, sehingga mudah disalahartikan sebagai "Wi-Fi normal tapi AirDrop rusak".
 
-★ 另一个易混项：`brcmfx-country=#a` **只影响可用信道**，不影响 `awdl0` 是否存在。
+★ Item lain yang mudah tertukar: `brcmfx-country=#a` **hanya memengaruhi kanal yang bisa dipakai**, tidak memengaruhi apakah `awdl0` ada.
 
-## 6. 相关文档
+## 6. Dokumen terkait
 
-- `broadcom-wifi.md` —— 博通卡的完整配置（`awdl0` 的前提是这套栈起来）
-- `intel-wifi.md` —— Intel 卡的能力边界（FAQ 原文）
-- `mediatek-wifi.md` —— MediaTek 第三方路线的硬限制
-- `network-en0-order.md` —— **只管 `en0` 归属与 iServices**，与 AirDrop 无关
+- `broadcom-wifi.md` —— konfigurasi lengkap kartu Broadcom (prasyarat `awdl0` adalah stack ini aktif)
+- `intel-wifi.md` —— batas kemampuan kartu Intel (teks asli FAQ)
+- `mediatek-wifi.md` —— batas keras jalur pihak ketiga MediaTek
+- `network-en0-order.md` —— **hanya gestionar kepemilikan `en0` dan iServices**, tidak ada hubungannya dengan AirDrop

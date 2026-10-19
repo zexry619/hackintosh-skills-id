@@ -1,73 +1,73 @@
-# 系统升级：macOS 15 (Sequoia) → 26 (Tahoe) 的配置修改
+# Peningkatan versi sistem: macOS 15 (Sequoia) → 26 (Tahoe) — perubahan konfigurasi
 
-> ★ **OCLP 的另一选择**：`laobamac/OCLP-Mod`（OCLP 的 mod 版：中文界面、Sequoia 的 Intel 无线、
-> KDK/MetalLib 加速下载）。⚠️ **该项目 2026-06-13 已存档**，已存在的版本仍可用，但**API 节点会逐步关闭**
-> ⇒ ★ **在 OCLP-Mod 设置里关掉 `SimpleHacAPI`**。索引见 `laobamac-toolkit.md`。
+> ★ **Alternatif lain dari OCLP**: `laobamac/OCLP-Mod` (versi mod dari OCLP: antarmuka bahasa Mandarin, nirkabel Intel untuk Sequoia,
+> unduhan akselerasi KDK/MetalLib). ⚠️ **Proyek ini diarsipkan sejak 2026-06-13**, versi yang sudah ada masih dapat digunakan, tetapi **node API akan ditutup secara bertahap**
+> ⇒ ★ **Matikan `SimpleHacAPI` di pengaturan OCLP-Mod**. Indeksnya ada di `laobamac-toolkit.md`.
 
-> 本文是**大版本升级**的专用流程（不是装机流程；装机见 `lifecycle.md`）。
-> 核心命题：**同一份 OpenCore 配置要同时服务两个 Darwin 大版本 ⇒ 必须用 `MinKernel` / `MaxKernel` 把按版本分构建的 kext 分流**。
-> 本机实测基线：macOS **26.7.1 (25G241)** / Darwin **25.6.0**，机型 `MacPro7,1`，网卡 BCM943602CDP。
+> Artikel ini adalah **alur khusus untuk peningkatan versi besar** (bukan alur instalasi; untuk instalasi lihat `lifecycle.md`).
+> Inti persoalan: **konfigurasi OpenCore yang sama harus melayani dua versi besar Darwin sekaligus ⇒ harus menggunakan `MinKernel` / `MaxKernel` untuk melakukan pembagian versi kext**.
+> Baseline hasil pengukuran di mesin ini: macOS **26.7.1 (25G241)** / Darwin **25.6.0**, model `MacPro7,1`, kartu jaringan BCM943602CDP.
 
-## ★★ 两条硬约束（先读这两条，再往下）
+## ★★ Dua batasan mutlak (baca dua ini dulu, baru lanjut)
 
-1. **升级时不许改机型** —— `PlatformInfo` 里任何 `SystemProductName` / `BoardProduct` / 三码都不动。
-   **机型不在新版白名单里 ⇒ 加 boot-arg 绕过**（`-no_compat_check` + `revpatch=sbvmm`），**不是换机型**。详见 §5。
-2. **按版本分构建的 kext 必须做版本分流** —— 用 `MinKernel` / `MaxKernel`。详见 §1、§2。
+1. **Jangan ubah model saat upgrade** —— setiap `SystemProductName` / `BoardProduct` / tiga kode di dalam `PlatformInfo` tidak boleh disentuh.
+   **Jika model tidak ada di whitelist versi baru ⇒ tambahkan boot-arg untuk bypass** (`-no_compat_check` + `revpatch=sbvmm`), **bukan mengganti model**. Lihat §5.
+2. **Kext yang dibangun per versi harus melakukan pembagian versi** —— gunakan `MinKernel` / `MaxKernel`. Lihat §1, §2.
 
-## 0. 结论先行：升级会「必然」打断什么
+## 0. Kesimpulan lebih dulu: apa yang pasti akan terputus saat upgrade
 
-| 会被打断的 | 为什么 | 是不是「配置坏了」 |
+| Yang akan terputus | Mengapa | Apakah ini "konfigurasi rusak" |
 |---|---|---|
-| **Wi-Fi 直接消失** | 按 Sequoia 构建的无线 kext 条目写着 `MaxKernel=24.99.99` ⇒ 升到 Darwin 25 后**被 OpenCore 跳过** | **不是**。这是必然 |
-| **OCLP root patch 全部失效** | 系统升级会把系统卷恢复成原生状态（`IO80211.framework` 变空壳、补丁记录消失） | **不是**。每次大版本升级都这样 |
-| **FileVault 挡住 OCLP** | OCLP 的 Post-Install 拒绝在 FileVault 开启时打补丁 | 不是 |
-| **`/Library/Extensions` 里的第三方 kext 被搬走** | OCLP 打补丁前会清理 **mtime < 2021-10-01** 的 kext，搬到 `/Library/Relocated Extensions`（NVIDIA 那批的时间戳是 `1970-01-01`） | 不是 |
+| **Wi-Fi langsung hilang** | Entri kext nirkabel yang dibangun untuk Sequoia tertulis `MaxKernel=24.99.99` ⇒ setelah naik ke Darwin 25 **dilewati oleh OpenCore** | **Bukan**. Ini pasti terjadi |
+| **Semua OCLP root patch gagal** | Upgrade sistem mengembalikan volume sistem ke kondisi native (`IO80211.framework` menjadi kerangka kosong, catatan patch hilang) | **Bukan**. Setiap peningkatan versi besar begitu |
+| **FileVault menghalangi OCLP** | Post-Install OCLP menolak melakukan patch ketika FileVault diaktifkan | Bukan |
+| **kext pihak ketiga di `/Library/Extensions` dipindahkan** | Sebelum melakukan patch, OCLP membersihkan kext dengan **mtime < 2021-10-01** dan memindahkannya ke `/Library/Relocated Extensions` (NVIDIA punya timestamp `1970-01-01`) | Bukan |
 
-> ★★ **先记住这句**：**升级后 Wi-Fi 必死、root patch 必丢 —— 这是设计使然，不是你把配置改坏了。**
-> 所以升级流程的重点不是「排查」，而是**按顺序做那几件必做的事**（§3）。
+> ★★ **Ingat kalimat ini lebih dulu**: **Setelah upgrade Wi-Fi pasti mati, root patch pasti hilang — ini memang disengaja, bukan karena Anda merusak konfigurasi.**
+> Karena itu fokus alur upgrade bukan "mencari masalah", melainkan **melakukan hal-hal yang wajib dilakukan secara berurutan** (§3).
 
 ---
 
-## 1. ★★ 核心机制：`MinKernel` / `MaxKernel` 与 Darwin 版本
+## 1. ★★ Mekanisme inti: `MinKernel` / `MaxKernel` dan versi Darwin
 
-### 1.1 Darwin ↔ macOS 对照
+### 1.1 Perbandingan Darwin ↔ macOS
 
-macOS 的「大版本」在内核里是 **Darwin 主版本号**，`Kernel > Add/Block/Patch` 的 `MinKernel` / `MaxKernel`
-写的就是它（格式 `MAJOR.MINOR.PATCH`，**空 = 不限制**）：
+"Versi besar" macOS pada kernel adalah **nomor utama Darwin**, dan itulah yang ditulis pada `MinKernel` / `MaxKernel` di `Kernel > Add/Block/Patch`
+(format `MAJOR.MINOR.PATCH`, **kosong = tanpa batasan**):
 
-| macOS | Darwin | 典型 `MinKernel` 写法 |
+| macOS | Darwin | Penulisan `MinKernel` yang umum |
 |---|---|---|
 | 14 Sonoma | 23.x | `23.0.0` |
-| **15 Sequoia** | **24.x** | `24.0.0` / 上限 `24.99.99` |
+| **15 Sequoia** | **24.x** | `24.0.0` / batas atas `24.99.99` |
 | **26 Tahoe** | **25.x** | **`25.0.0`** |
-| （查本机） | — | `uname -r` |
+| (periksa mesin ini) | — | `uname -r` |
 
-### 1.2 ★ `24.99.99` 这个写法是什么意思
+### 1.2 ★ Apa arti penulisan `24.99.99` ini
 
-它是**「把上限钉死在整个 Darwin 24，但不误伤 Darwin 25」**的惯用写法：
+Ini adalah cara umum untuk **"menancapkan batas atas di seluruh Darwin 24, tanpa melukai Darwin 25"**:
 
 ```
-MaxKernel = 24.99.99   ⇒ 只在 Darwin 23 / 24 生效，Darwin 25 起自动跳过
-MinKernel = 25.0.0     ⇒ 只在 Darwin 25 起生效
+MaxKernel = 24.99.99   ⇒ hanya berlaku di Darwin 23 / 24, otomatis dilewati mulai Darwin 25
+MinKernel = 25.0.0     ⇒ hanya berlaku mulai Darwin 25
 ```
 
-**不要**写 `MaxKernel = 25.0.0`（会把 Darwin 25 本身也框进去）或 `MaxKernel = 24.0.0`（会把 24.1–24.99 全排除）。
-`24.99.99` 是 OCLP 官方配置里用的写法，跟着用。
+**Jangan** menulis `MaxKernel = 25.0.0` (itu juga akan memagari Darwin 25 itu sendiri) atau `MaxKernel = 24.0.0` (itu akan mengeluarkan seluruh 24.1–24.99).
+`24.99.99` adalah penulisan yang dipakai dalam konfigurasi resmi OCLP, ikuti saja.
 
-### 1.3 条目字段（`Kernel > Add` 一条的完整形态）
+### 1.3 Field entri (bentuk lengkap satu entri di `Kernel > Add`)
 
-| 字段 | 值 | 说明 |
+| Field | Nilai | Keterangan |
 |---|---|---|
 | `Arch` | `x86_64` | |
-| `BundlePath` | `Xxx.kext` | **plugin 要写全路径**，见下 |
-| `Comment` | 自由文本 | 建议写清「给哪个系统、来自哪」 |
+| `BundlePath` | `Xxx.kext` | **plugin harus ditulis dengan path lengkap**, lihat di bawah |
+| `Comment` | teks bebas | **disarankan** menuliskan dengan jelas "untuk sistem mana, berasal dari mana" |
 | `Enabled` | `True` / `False` | |
-| `ExecutablePath` | `Contents/MacOS/<可执行名>` | plugin 同理要带前缀路径 |
+| `ExecutablePath` | `Contents/MacOS/<nama-executable>` | plugin juga perlu path awalan |
 | `PlistPath` | `Contents/Info.plist` | |
-| **`MinKernel`** | **`25.0.0`** | ★ 版本分流 |
-| **`MaxKernel`** | **`24.99.99`** | ★ 版本分流 |
+| **`MinKernel`** | **`25.0.0`** | ★ pembagian versi |
+| **`MaxKernel`** | **`24.99.99`** | ★ pembagian versi |
 
-**★ plugin 的写法**（本机实例：博通卡驱动是 `IO80211FamilyLegacy.kext` 里的一个 plugin）：
+**★ Penulisan untuk plugin** (contoh dari mesin ini: driver kartu Broadcom adalah sebuah plugin di dalam `IO80211FamilyLegacy.kext`):
 
 ```
 BundlePath     = IO80211FamilyLegacy.kext/Contents/PlugIns/AirPortBrcmNIC.kext
@@ -77,130 +77,130 @@ MinKernel      = 23.0.0
 MaxKernel      = 24.99.99
 ```
 
-### 1.4 三条规则
+### 1.4 Tiga aturan
 
-1. **同一个功能如果上游提供了「按内核版本分别构建」的产物 ⇒ 必须写两条条目、用 `MinKernel`/`MaxKernel` 分开**。
-   **不能**只留一条（会有一个系统用不了），也**不能**两条都不写限制（会两个系统都加载 ⇒ 冲突/panic）。
-2. **上限一律用 `24.99.99`** 收口到 Darwin 24。
-3. **通用 kext（Lilu / VirtualSMC / WhateverGreen / RestrictEvents / USBToolBox …）不需要写** ——
-   它们跨版本通用，留空即可。**只给「按系统分构建」的那些写。**
+1. **Jika satu fitur yang sama menyediakan "produk yang dibangun terpisah per versi kernel" di hulu ⇒ harus menulis dua entri, dipisahkan dengan `MinKernel`/`MaxKernel`**.
+   **Tidak boleh** menyisakan hanya satu entri (sebuah sistem tidak akan bisa memakainya), dan **tidak boleh** juga membiarkan keduanya tanpa batasan (kedua sistem akan memuatnya ⇒ konflik/panic).
+2. **Batas atas selalu gunakan `24.99.99`** untuk mengunci ke Darwin 24.
+3. **kext universal (Lilu / VirtualSMC / WhateverGreen / RestrictEvents / USBToolBox …) tidak perlu ditulis** ——
+  Mereka lintas versi, biarkan kosong saja. **Hanya tulis untuk yang "dibangun per sistem".**
 
 ---
 
-## 2. ★ 逐部件版本限制清单
+## 2. ★ Checklist batasan versi per komponen
 
-### 2.1 网卡（最常踩，也是本文重点）
+### 2.1 Kartu jaringan (paling sering menjadi jebakan, dan fokus artikel ini)
 
-| 网卡 | Sequoia (Darwin 24) 条目 | Tahoe (Darwin 25) 条目 | 来源 |
+| Kartu jaringan | Entri Sequoia (Darwin 24) | Entri Tahoe (Darwin 25) | Sumber |
 |---|---|---|---|
-| **博通 BCM43602 / BCM943602CDP** | `IO80211FamilyLegacy.kext`（`Min 23.0.0`）<br>+ **plugin** `…/PlugIns/AirPortBrcmNIC.kext`（`Min 23.0.0` / **`Max 24.99.99`**） | **`AirPortBrcmNIC-Tahoe.kext`**<br>（`Min 25.0.0`，**OCLP 3.0.0-rc.3 起才提供**） | `broadcom-wifi.md` |
-| **Intel** | `AirportItlwm-Sequoia`（`Min 24.2.0` / `Max 24.99.99`） | `AirportItlwm-Tahoe`（`Min 25.0.0`） | `intel-wifi.md` |
-| **MediaTek MT792x** | 无版本分流（本来就都实验性） | 同左 | `mediatek-wifi.md` |
+| **Broadcom BCM43602 / BCM943602CDP** | `IO80211FamilyLegacy.kext` (`Min 23.0.0`)<br>+ **plugin** `…/PlugIns/AirPortBrcmNIC.kext` (`Min 23.0.0` / **`Max 24.99.99`**) | **`AirPortBrcmNIC-Tahoe.kext`**<br>(`Min 25.0.0`, **baru tersedia sejak OCLP 3.0.0-rc.3**) | `broadcom-wifi.md` |
+| **Intel** | `AirportItlwm-Sequoia` (`Min 24.2.0` / `Max 24.99.99`) | `AirportItlwm-Tahoe` (`Min 25.0.0`) | `intel-wifi.md` |
+| **MediaTek MT792x** | tanpa pembagian versi (memang semuanya eksperimental) | sama seperti di sebelah kiri | `mediatek-wifi.md` |
 
-> ★★ **博通这条是本机踩过的坑**：`AirPortBrcmNIC.kext` 的 `MaxKernel=24.99.99` 是 **OCLP 2.5.1 写死的**，
-> 而 **OCLP 2.5.1 根本没有 Tahoe 支持** ⇒ 升到 26 后 Wi-Fi 直接消失。
-> **必须换 OCLP 3.0.0-rc.3+**（它的 `payloads/Config/config.plist` 里才有 `AirPortBrcmNIC-Tahoe.kext` 那条）。
-> 三条条目的正确形态（对照 OCLP 官方配置）：
+> ★★ **Kasus Broadcom ini adalah jebakan yang pernah dialami di mesin ini**: `MaxKernel=24.99.99` pada `AirPortBrcmNIC.kext` **ditulis mati oleh OCLP 2.5.1**,
+> dan **OCLP 2.5.1 sama sekali tidak mendukung Tahoe** ⇒ setelah naik ke 26, Wi-Fi langsung hilang.
+> **Wajib ganti ke OCLP 3.0.0-rc.3+** (di dalam `payloads/Config/config.plist`-nya barulah ada entri `AirPortBrcmNIC-Tahoe.kext`).
+> Bentuk yang benar dari ketiga entri tersebut (dibandingkan dengan konfigurasi resmi OCLP):
 >
 > ```
 > [1] IOSkywalkFamily.kext                      Min 23.0.0  Max —
 > [2] IO80211FamilyLegacy.kext                  Min 23.0.0  Max —
 > [3] …/AirPortBrcmNIC.kext                     Min 23.0.0  Max 24.99.99   ← Darwin 23–24
-> [4] AirPortBrcmNIC-Tahoe.kext                 Min 25.0.0  Max —          ← Darwin 25+（3.0.0 新增）
+> [4] AirPortBrcmNIC-Tahoe.kext                 Min 25.0.0  Max —          ← Darwin 25+ (baru di 3.0.0)
 > ```
 
-### 2.2 网卡配套（不分版本，但升级时状态会变）
+### 2.2 Pendukung kartu jaringan (tidak dibedakan versi, tetapi statusnya berubah saat upgrade)
 
-| 项 | Sequoia / Tahoe 的差别 |
+| Item | Perbedaan Sequoia / Tahoe |
 |---|---|
-| `Kernel > Block > com.apple.iokit.IOSkywalkFamily` | 两版都要（`Min 23.0.0`），让第三方驱动接管 |
-| 蓝牙 NVRAM 两条 data（`bluetoothExternalDongleFailed` / `bluetoothInternalControllerInfo`） | 两版都要，且 `NVRAM > Add` 与 `Delete` 都要有 |
-| `USB` 端口映射（蓝牙端口 `UsbConnector=255` Internal） | 两版都要 |
-| `built-in` / `IONameMatch` | 两版都要 |
+| `Kernel > Block > com.apple.iokit.IOSkywalkFamily` | dibutuhkan di kedua versi (`Min 23.0.0`), agar driver pihak ketiga mengambil alih |
+| Dua data NVRAM Bluetooth (`bluetoothExternalDongleFailed` / `bluetoothInternalControllerInfo`) | dibutuhkan di kedua versi, dan `NVRAM > Add` maupun `Delete` harus ada |
+| Pemetaan port `USB` (port Bluetooth `UsbConnector=255` Internal) | dibutuhkan di kedua versi |
+| `built-in` / `IONameMatch` | dibutuhkan di kedua versi |
 
-### 2.3 显卡 / 其它
+### 2.3 Kartu grafis / lainnya
 
-| 部件 | 版本限制怎么处理 |
+| Komponen | Cara menangani batasan versi |
 |---|---|
-| **NVIDIA（NullMoth 驱动）** | **不用 `MinKernel`** —— 它装在 `/Library/Extensions` 从 AuxKC 加载，**不在 EFI 里**。<br>升级靠**换文件**：`/Library/NullMoth/kexts/26/NVAccel.kext` 覆盖 `26` 版，再 `kmutil create` 重建 AuxKC |
-| Lilu / VirtualSMC / WhateverGreen / RestrictEvents / NVMeFix / USBToolBox / XHCI-unsupported / UTBMap / AMFIPass | 留空（通用）。**但要用「支持新系统」的新版本**——升级时顺手更新到最新 |
-| `BlueToolFixup` | 本机写 `Min 21.0.0`（跨版本通用，不需要分流） |
+| **NVIDIA (driver NullMoth)** | **Tidak perlu `MinKernel`** — ia terpasang di `/Library/Extensions` dan dimuat dari AuxKC, **bukan ada di dalam EFI**.<br>Peningkatan dilakukan dengan **mengganti file**: `/Library/NullMoth/kexts/26/NVAccel.kext` menimpa versi `26`, lalu `kmutil create` membangun ulang AuxKC |
+| Lilu / VirtualSMC / WhateverGreen / RestrictEvents / NVMeFix / USBToolBox / XHCI-unsupported / UTBMap / AMFIPass | biarkan kosong (universal). **Namun harus memakai versi baru "yang mendukung sistem baru"** — perbarui ke versi terbaru saat upgrade |
+| `BlueToolFixup` | di mesin ini ditulis `Min 21.0.0` (lintas versi, tidak perlu pembagian versi) |
 
 ---
 
-## 3. ★★ 升级时序（照着做）
+## 3. ★★ Urutan upgrade (Ikuti sesuai urutan)
 
-### 阶段 A：升级**前**（在 macOS 15 上做）
+### Tahap A: **sebelum** upgrade (dilakukan di macOS 15)
 
-1. **先关 FileVault** —— 否则 OCLP 的 Post-Install 会拒绝打补丁（`Cannot patch due to the following reasons: FileVault is enabled`）。
-   - `fdesetup status` 看状态；**若显示 `in progress`（正在加密）⇒ 只能等它跑完**，加密/解密迁移**不能并发**
-   - ⚠️ `fdesetup disable` **失败时仍返回退出码 0**，别只看 `$?`
-   - ⚠️ `fdesetup` 按**短名**（RecordName）匹配，不认 RealName
-2. **跑 OCLP 前置保护脚本**（★ **必做，不能跳**）—— 防 OCLP 打补丁时把时间戳为 `1970-01-01` 的 NVIDIA kext 搬去 `Relocated Extensions`：
+1. **Matikan FileVault terlebih dahulu** — jika tidak, Post-Install OCLP akan menolak melakukan patch (`Cannot patch due to the following reasons: FileVault is enabled`).
+   - `fdesetup status` untuk melihat status; **jika menampilkan `in progress` (sedang mengenkripsi) ⇒ Anda harus menunggu sampai selesai**, migrasi enkripsi/dekripsi **tidak dapat berjalan bersamaan**
+   - ⚠️ `fdesetup disable` **tetap mengembalikan exit code 0 ketika gagal**, jangan hanya melihat `$?`
+   - ⚠️ `fdesetup` mencocokkan berdasarkan **nama pendek** (RecordName), tidak mengenali RealName
+2. **Jalankan skrip proteksi pra-OCLP** (★ **wajib, tidak boleh dilewati**) — mencegah OCLP memindahkan kext NVIDIA dengan timestamp `1970-01-01` ke `Relocated Extensions` saat melakukan patch:
    ```bash
-   sudo bash prep-oclp-rootpatch.sh     # 只修 mtime、不改内容，并全目录备份
+   sudo bash prep-oclp-rootpatch.sh     # hanya memperbaiki mtime, tidak mengubah isi, dan mencadangkan seluruh direktori
    ```
-3. **备份 EFI**（整个 `EFI` 文件夹，不只 config）+ 记下当前 `opencore-version` 与 `uname -r`。
-4. **准备 Tahoe 专用 kext**：从 **OCLP 3.0.0-rc.3+** 取 `AirPortBrcmNIC-Tahoe.kext`（或 Intel 的 `AirportItlwm-Tahoe`）。
-5. **★ 确认机型不在白名单时，加绕过参数（不动机型）**：`-no_compat_check` + `revpatch=sbvmm`（§5.3）。
-   > 这一步**只改 boot-args**。**不要**顺手把机型换成白名单里的 —— 那是另一件事（§5.2）。
-6. **★ 核对一遍「不许动」清单**：`PlatformInfo` 三处 `SystemProductName`、`BoardProduct`、三码 —— 全都没动。
+3. **Cadangkan EFI** (seluruh folder `EFI`, bukan hanya config) + catat `opencore-version` dan `uname -r` saat ini.
+4. **Siapkan kext khusus Tahoe**: ambil `AirPortBrcmNIC-Tahoe.kext` dari **OCLP 3.0.0-rc.3+** (atau `AirportItlwm-Tahoe` untuk Intel).
+5. **★ Saat model dipastikan tidak ada di whitelist, tambahkan parameter bypass (tanpa mengubah model)**: `-no_compat_check` + `revpatch=sbvmm` (§5.3).
+   > Langkah ini **hanya mengubah boot-args**. **Jangan** sekalian mengganti model dengan model yang ada di whitelist — itu adalah hal lain (§5.2).
+6. **★ Periksa sekali lagi checklist "dilarang diubah"**: tiga tempat `SystemProductName` di `PlatformInfo`, `BoardProduct`, tiga kode — semuanya tidak berubah.
 
-### 阶段 B：升级**中**
+### Tahap B: **saat** upgrade
 
-5. 从「系统设置 → 通用 → 软件更新」升级。
-   - **不要**用 OCLP 的 "Build and Install OpenCore" —— 它会重写整个 EFI，把你的 boot-args / SMBIOS / DeviceProperties 全冲掉。**我们只要 root patch。**
+5. Upgrade dari "Pengaturan Sistem → Umum → Pembaruan Software".
+   - **Jangan** gunakan "Build and Install OpenCore" dari OCLP — perintah itu menulis ulang seluruh EFI dan menghapus boot-args / SMBIOS / DeviceProperties Anda. **Yang kita perlukan hanya root patch.**
 
-### 阶段 C：升级**后**（在 macOS 26 上做）
+### Tahap C: **setelah** upgrade (dilakukan di macOS 26)
 
-6. **补版本分流的 kext 条目**（§2.1）—— 装 `AirPortBrcmNIC-Tahoe.kext` + 在 `Kernel > Add` 加 `MinKernel=25.0.0` 那条。重启，先让内核栈通。
-7. **重打 OCLP root patch**：`OpenCore-Patcher.app` → **Post-Install Root Patch** → Start Root Patching。
-   应看到 **"Networking: Modern Wireless"**。
-8. **重启**，然后按 §6 验证。
+6. **Lengkapi entri kext dengan pembagian versi** (§2.1) — pasang `AirPortBrcmNIC-Tahoe.kext` + tambahkan entri `MinKernel=25.0.0` di `Kernel > Add`. Restart, pastikan dulu stack kernel berfungsi.
+7. **Terapkan ulang OCLP root patch**: `OpenCore-Patcher.app` → **Post-Install Root Patch** → Start Root Patching.
+   Seharusnya terlihat **"Networking: Modern Wireless"**.
+8. **Restart**, lalu verifikasi sesuai §6.
 
-> **FileVault 的例外**：若系统卷 `Sealed: Broken` 而又必须开 FileVault，
-> 需要补 OCLP 的 **`Force FileVault on Broken Seal`** 内核补丁（见 §4.5）。
+> **Pengecualian FileVault**: jika volume sistem `Sealed: Broken` dan FileVault harus diaktifkan,
+> Anda perlu menambahkan patch kernel OCLP **`Force FileVault on Broken Seal`** (lihat §4.5).
 
 ---
 
-## 4. 升级时必须改的 config 项
+## 4. Item config yang wajib diubah saat upgrade
 
-### 4.1 `Kernel > Add` —— 补版本分流条目
+### 4.1 `Kernel > Add` — lengkapi entri pembagian versi
 
-见 §2.1。**这是「升级 15→26」最核心的一处改动。**
+Lihat §2.1. **Ini adalah perubahan paling inti dari "upgrade 15→26".**
 
 ### 4.2 `Kernel > Block > com.apple.iokit.IONDRVSupport`
 
-**桌面机 + 第三方显卡驱动**：**`Enabled = true`**（屏蔽掉系统自带的，让驱动抢 display index 0）。
+**Desktop + driver kartu grafis pihak ketiga**: **`Enabled = true`** (blokir yang bawaan sistem, biarkan driver mengambil display index 0).
 
-但**安装器 / 升级期要反过来**：**`Enabled = false`**（允许固件 framebuffer 活过 PCI setup）。
-装好驱动后再改回 `true`。
+Namun untuk **installer / masa upgrade harus dibalik**: **`Enabled = false`** (izinkan firmware framebuffer bertahan melewati PCI setup).
+Setelah driver terpasang, kembalikan lagi ke `true`.
 
-> 判据：**若内屏挂在「无驱动的 Intel iGPU」上** ⇒ 必须 `false`（否则内屏黑）；否则桌面机用 `true`。
+> Kriteria: **jika layar internal terpasang pada "Intel iGPU tanpa driver"** ⇒ wajib `false` (jika tidak layar internal jadi hitam); selain itu untuk desktop gunakan `true`.
 
-### 4.3 BAR 相关（安装器友好 ↔ 日常）
+### 4.3 Yang terkait BAR (ramah installer ↔ pemakaian harian)
 
-| 键 | 升级 / 安装期 | 升级后（日常） |
+| Kunci | Masa upgrade / instalasi | Setelah upgrade (harian) |
 |---|---|---|
-| `UEFI > Quirks > ResizeGpuBars` | **`-1`**（交给固件，不 resize） | 按需（本机 `13` = 8 GB） |
-| `Booter > Quirks > ResizeAppleGpuBars` | **`0`**（安装器用小 BAR） | **`-1`**（日常） |
+| `UEFI > Quirks > ResizeGpuBars` | **`-1`** (serahkan ke firmware, tanpa resize) | sesuai kebutuhan (di mesin ini `13` = 8 GB) |
+| `Booter > Quirks > ResizeAppleGpuBars` | **`0`** (installer memakai BAR kecil) | **`-1`** (harian) |
 
-**为什么**：安装器跑在固件 framebuffer 上，大 BAR 会让它卡在 PCI configuration。
+**Mengapa**: installer berjalan di atas firmware framebuffer, BAR besar membuatnya tersangkut di PCI configuration.
 
-### 4.4 安全与 SIP
+### 4.4 Keamanan dan SIP
 
-| 键 | 值 | 说明 |
+| Kunci | Nilai | Keterangan |
 |---|---|---|
-| `Misc > Security > SecureBootModel` | **`Disabled`** | 第三方 kext 非 Apple 签名，必须 |
-| `csr-active-config` | 按需放宽 | 本机实测 `430A0000`（≈ `0x0A43`：UNTRUSTED_KEXTS + UNRESTRICTED_FS + KERNEL_DEBUGGER + UNRESTRICTED_NVRAM + UNAPPROVED_KEXTS + UNAUTHENTICATED_ROOT）。**OCLP 与第三方驱动都要求它非 0** |
+| `Misc > Security > SecureBootModel` | **`Disabled`** | kext pihak ketiga tidak bertanda tangan Apple, wajib |
+| `csr-active-config` | longgarkan sesuai kebutuhan | hasil pengukuran di mesin ini `430A0000` (≈ `0x0A43`: UNTRUSTED_KEXTS + UNRESTRICTED_FS + KERNEL_DEBUGGER + UNRESTRICTED_NVRAM + UNAPPROVED_KEXTS + UNAUTHENTICATED_ROOT). **OCLP dan driver pihak ketiga sama-sama mensyaratkan nilainya bukan 0** |
 
-### 4.5 `Kernel > Patch` —— OCLP 的 FileVault 补丁（按需）
+### 4.5 `Kernel > Patch` — patch FileVault dari OCLP (sesuai kebutuhan)
 
-系统卷 Seal 被 OCLP 破了、又开着 FileVault 时必需：
+Wajib jika Seal volume sistem sudah di-break oleh OCLP dan FileVault menyala:
 
 ```
 Identifier = com.apple.filesystems.apfs
-Base       = _apfs_filevault_allowed     ← 用符号定位，Find 留空
+Base       = _apfs_filevault_allowed     ← gunakan simbol untuk penentuan, Find dikosongkan
 Replace    = b801000000c3                ← mov eax,1; ret
 MinKernel  = 20.4.0
 Count / Skip / Limit = 0
@@ -208,198 +208,198 @@ Count / Skip / Limit = 0
 
 ### 4.6 boot-args
 
-| token | 什么时候要 |
+| token | Kapan dibutuhkan |
 |---|---|
-| **`-no_compat_check`** | ★ **机型不在新版白名单里时必需**（见 §5）—— 解决「能不能启动」 |
-| **`revpatch=sbvmm`** | ★ **同上，解决「能不能收到/安装系统更新」**（见 §5.3）—— 这个容易被漏掉 |
-| `revpatch=cpuname` + `revcpu=1` + `revcpuname=<名字>` | CPU 名称显示（本机 `revcpu=1`） |
-| `-wegnoigpu` | 藏掉无驱动的核显（否则 `IOGraphicsFamily` bring-up 会等它，实测慢 ~60 s） |
-| `-v` | **偏好项，必须问客户**（见 `lifecycle.md` §6.3） |
+| **`-no_compat_check`** | ★ **wajib saat model tidak ada di whitelist versi baru** (lihat §5) — menyelesaikan "apakah bisa boot" |
+| **`revpatch=sbvmm`** | ★ **sama seperti di atas, menyelesaikan "apakah bisa menerima/memasang pembaruan sistem"** (lihat §5.3) — ini yang mudah terlewat |
+| `revpatch=cpuname` + `revcpu=1` + `revcpuname=<nama>` | Menampilkan nama CPU (di mesin ini `revcpu=1`) |
+| `-wegnoigpu` | menyembunyikan iGPU tanpa driver (jika tidak, bring-up `IOGraphicsFamily` akan menunggunya, hasil pengukuran lambat ~60 s) |
+| `-v` | **pilihan, wajib ditanyakan ke klien** (lihat `lifecycle.md` §6.3) |
 
-> 用 `revpatch=` / `revcpu=` 需要 **`RestrictEvents.kext`**（Lilu 插件）。
+> Menggunakan `revpatch=` / `revcpu=` memerlukan **`RestrictEvents.kext`** (plugin Lilu).
 
 ---
 
-## 5. ★★ 硬约束：升级时不改机型，用参数绕过
+## 5. ★★ Batasan mutlak: jangan mengubah model saat upgrade, gunakan parameter bypass
 
-### 5.1 约束
+### 5.1 Batasan
 
-> **升级系统时，`PlatformInfo` 的机型相关字段一个都不动。**
-> **机型不在新版白名单里 ⇒ 加 boot-arg 绕过，不是换机型。**
+> **Saat meningkatkan versi sistem, tidak satu pun field terkait model di `PlatformInfo` boleh disentuh.**
+> **Jika model tidak ada di whitelist versi baru ⇒ tambahkan boot-arg untuk bypass, bukan mengganti model.**
 
-具体「不许动」的：
+Secara spesifik yang "dilarang diubah":
 
 - `PlatformInfo > Generic > SystemProductName`
 - `PlatformInfo > SMBIOS > SystemProductName`
 - `PlatformInfo > DataHub > SystemProductName`
-- `PlatformInfo > SMBIOS > BoardProduct`（board-id）
-- 序列号 / MLB / UUID（三码）
+- `PlatformInfo > SMBIOS > BoardProduct` (board-id)
+- Nomor seri / MLB / UUID (tiga kode)
 
-### 5.2 为什么这是硬约束，而不是「两种路线可选」
+### 5.2 Mengapa ini batasan mutlak, bukan "dua jalur yang boleh dipilih"
 
-换机型**不是一个孤立改动，而是一次耦合改动**：
+Mengganti model **bukan perubahan yang terisolasi, melainkan perubahan yang berkoupling**:
 
-| 连带影响 | 后果 |
+| Dampak turunan | Akibat |
 |---|---|
-| **board-id 变 ⇒ ACPI 表重新解析** | ★ 本机真因：BIOS 里那张 **`OEM Table ID = xh_adls3`** 的 SSDT 解析不过（**`HS06 AE_NOT_FOUND`**）⇒ 循环重启。**不是 USB 图**（见 `smbios-and-serials.md` §2） |
-| **board-id 变了** | 触发**系统卷重建 / 校验** ⇒ 若 OCLP 已破封印，**可能卡住**（本机 10-12 就踩过） |
-| XCPM profile 跟着换 | CPU 频率行为变化（`MacPro7,1` 强制 `hwp=on` ⇒ 必须重做 CPUFriend 数据） |
-| AGDC 路径、ByHost 偏好 | 显示/服务行为漂移，排查面变大 |
+| **board-id berubah ⇒ tabel ACPI diurai ulang** | ★ sebab sebenarnya pada mesin ini: SSDT dengan **`OEM Table ID = xh_adls3`** di dalam BIOS gagal diurai (**`HS06 AE_NOT_FOUND`**) ⇒ restart berulang. **Bukan gambar USB** (lihat `smbios-and-serials.md` §2) |
+| **board-id berubah** | memicu **pembangunan ulang / verifikasi volume sistem** ⇒ jika OCLP sudah break seal, proses ini **bisa macet** (pernah dialami di mesin ini pada 10-12) |
+| Profil XCPM ikut berganti | perilaku frekuensi CPU berubah (`MacPro7,1` memaksa `hwp=on` ⇒ data CPUFriend harus dibuat ulang) |
+| Path AGDC, preferensi ByHost | perilaku tampilan/layanan bergeser, area troubleshooting jadi lebih luas |
 
-⇒ **升级本身已经是高风险操作，不要在同一轮里叠加第二个耦合改动。**
-机型该不该换是**独立的决策**（换机型见 **`smbios-and-serials.md`**），跟升级解耦。
+⇒ **Peningkatan versi itu sendiri sudah merupakan operasi berisiko tinggi, jangan menumpuk perubahan berkoupling kedua dalam putaran yang sama.**
+Apakah model sebaiknya diganti adalah **keputusan terpisah** (lihat **`smbios-and-serials.md`**), terpisah dari upgrade.
 
-### 5.3 绕过用什么参数（两个都要，别只加一个）
+### 5.3 Parameter bypass apa yang dipakai (dua-duanya, jangan hanya satu)
 
-| 参数 | 解决什么 | 不加的后果 |
+| Parameter | Apa yang diselesaikan | Akibat jika tidak ditambahkan |
 |---|---|---|
-| **`-no_compat_check`** | **能不能启动** —— 关掉对机型的兼容性检查 | 直接拒绝启动 |
-| **`revpatch=sbvmm`** | **能不能更新** —— 强制 VMM SB 机型，*"allowing OTA updates for unsupported models on macOS 11.3 or newer"*（RestrictEvents 原文） | 能开机，但**收不到 / 装不上系统更新** |
-| `revpatch=cpuname` + `revcpu=1` + `revcpuname=<名字>` | CPU 名称显示 | 「关于本机」里 CPU 名字不对 |
-| `revpatch=pci` / `revblock=pci` | 屏蔽 `MacPro7,1` 机型的 PCI / RAM 配置警告 | 弹配置警告（机型是 MacPro7,1 但硬件不匹配时） |
+| **`-no_compat_check`** | **apakah bisa boot** — mematikan pemeriksaan kompatibilitas model | langsung menolak boot |
+| **`revpatch=sbvmm`** | **apakah bisa pembaruan** — memaksa model VMM SB, *"allowing OTA updates for unsupported models on macOS 11.3 or newer"* (kutipan asli RestrictEvents) | bisa boot, tetapi **tidak menerima / tidak bisa memasang pembaruan sistem** |
+| `revpatch=cpuname` + `revcpu=1` + `revcpuname=<nama>` | Menampilkan nama CPU | nama CPU salah di "Tentang Mac Ini" |
+| `revpatch=pci` / `revblock=pci` | memblokir peringatan konfigurasi PCI / RAM untuk model `MacPro7,1` | muncul peringatan konfigurasi (saat modelnya MacPro7,1 tetapi hardware tidak cocok) |
 
-**★ 最容易漏的是 `revpatch=sbvmm`** —— 很多人只加 `-no_compat_check`，能开机就以为完事了，
-结果到了下次系统更新才发现「收不到更新」。**两个是不同层次的问题。**
+**★ Yang paling mudah terlewat adalah `revpatch=sbvmm`** — banyak orang hanya menambahkan `-no_compat_check`, lalu begitu bisa boot menganggap sudah selesai,
+padahal baru saat pembaruan sistem berikutnya mereka menemukan "tidak menerima pembaruan". **Keduanya adalah masalah pada tingkat yang berbeda.**
 
-### 5.4 白名单（**只用来判断「需不需要绕过」**）
+### 5.4 Whitelist (**hanya dipakai untuk menilai "perlu bypass atau tidak"**)
 
-macOS 26 大幅削减了 Intel 机型支持。参考上游脚本的判定，白名单是：
+macOS 26 sangat memangkas dukungan model Intel. Berdasarkan penilaian pada skrip hulu, whitelist-nya adalah:
 
 ```
 iMac20,1   iMac20,2   MacPro7,1   MacBookPro16,1   MacBookPro16,2   MacBookPro16,4
 ```
 
-**`iMacPro1,1` 被剔除了** —— 它正是 Sequoia 时代最常用的 Intel 机型。
+**`iMacPro1,1` telah dikeluarkan** — justru model Intel yang paling sering dipakai pada era Sequoia.
 
-| 机型在不在白名单 | 该怎么做 |
+| Model ada di whitelist? | Apa yang harus dilakukan |
 |---|---|
-| **在** | 什么都不用加 |
-| **不在** | **加 `-no_compat_check` + `revpatch=sbvmm`**，机型保持不变 |
+| **Ada** | tidak perlu menambahkan apa pun |
+| **Tidak ada** | **tambahkan `-no_compat_check` + `revpatch=sbvmm`**, model tetap dipertahankan |
 
-### 5.5 ★ 明确不要做的事
+### 5.5 ★ Yang jelas-jelas tidak boleh dilakukan
 
-| 不要做 | 为什么 |
+| Jangan lakukan | Mengapa |
 |---|---|
-| 改任何一处 `SystemProductName` | 违反约束；且 board-id 变会触发 **ACPI 重新解析**（本机 `xh_adls3` 会炸）+ 系统卷重建（§5.2） |
-| 改 `BoardProduct`（board-id） | 触发系统卷重建，与 OCLP 冲突 |
-| **跑 `nullmoth-setup.sh --update prepare --pkg <包>`** | ★ **最隐蔽的陷阱**：它会**自动**把机型改成 `MacPro7,1`、board-id 改成 `Mac-27AD2F918AE68F61`、补 `RestrictEvents.kext`。**这条路径与约束正面冲突，必须避开。**<br>（正常点按钮 / 正常更新驱动**不会**触发它 —— 该按钮在 1.0.15 起已从 App UI 移除，只剩脚本能力；本机实测 `PlatformInfo` 仍是原机型） |
-| 用 OCLP 的 "Build and Install OpenCore" | 会重写整个 EFI，冲掉调好的 boot-args / SMBIOS / DeviceProperties |
+| Mengubah salah satu `SystemProductName` | melanggar batasan; dan perubahan board-id memicu **urai ulang ACPI** (di mesin ini `xh_adls3` meledak) + pembangunan ulang volume sistem (§5.2) |
+| Mengubah `BoardProduct` (board-id) | memicu pembangunan ulang volume sistem, berkonflik dengan OCLP |
+| **Menjalankan `nullmoth-setup.sh --update prepare --pkg <paket>`** | ★ **jebakan paling tersembunyi**: perintah ini **otomatis** mengubah model menjadi `MacPro7,1`, board-id menjadi `Mac-27AD2F918AE68F61`, dan menambahkan `RestrictEvents.kext`. **Jalur ini bertabrakan langsung dengan batasan, wajib dihindari.**<br>(menekan tombol secara normal / memperbarui driver secara normal **tidak** memicu ini — tombol tersebut sudah dihapus dari UI App sejak 1.0.15, hanya tersisa kemampuan lewat skrip; hasil pengukuran di mesin ini menunjukkan `PlatformInfo` masih model asli) |
+| Menggunakan "Build and Install OpenCore" dari OCLP | menulis ulang seluruh EFI, menghapus boot-args / SMBIOS / DeviceProperties yang sudah disetel |
 
-### 5.6 约束的代价（要如实告知）
+### 5.6 Biaya dari batasan ini (harus disampaikan apa adanya)
 
-保留原机型 = **放弃新版专属的机型界面**。例如 `PlatformInfo > Memory` 的 `Devices` 数组
-**只在 MacPro 机型上**才会画出那张 12 槽内存图（见 `memory-injection.md`）——
-机型不是 MacPro 就做不出来，**没有 boot-arg 能替代**。
+Mempertahankan model asli = **menyerah pada UI khusus model versi baru**. Misalnya array `Devices` pada `PlatformInfo > Memory`
+hanya **pada model MacPro** yang akan menggambar diagram memori 12 slot tersebut (lihat `memory-injection.md`) —
+bila modelnya bukan MacPro hal itu tidak bisa dilakukan, **tidak ada boot-arg yang bisa menggantikannya**.
 
-所以取舍是：
+Jadi pertimbangannya adalah:
 
-| | 保留原机型 + 参数绕过（**约束默认**） | 换机型 |
+| | Pertahankan model asli + bypass parameter (**bawaan sesuai batasan**) | Ganti model |
 |---|---|---|
-| 能开机 / 能更新 | ✅（靠 `-no_compat_check` + `revpatch=sbvmm`） | ✅ |
-| 升级风险 | **低**（只动 boot-args） | 高（ACPI/SSDT + board-id + CPUFriend + 三码 一起动） |
-| 机型专属界面 | ❌ 拿不到 | ✅ |
-| 与升级是否解耦 | ✅ **解耦** | ❌ 耦合 |
+| Bisa boot / bisa pembaruan | ✅ (lewat `-no_compat_check` + `revpatch=sbvmm`) | ✅ |
+| Risiko upgrade | **rendah** (hanya boot-args yang berubah) | tinggi (ACPI/SSDT + board-id + CPUFriend + tiga kode semuanya berubah) |
+| UI khusus model | ❌ tidak didapat | ✅ |
+| Terpisah dari upgrade? | ✅ **terpisah** | ❌ berkoupling |
 
-⇒ **默认走左边。** 真想要机型专属功能时，**单独一次**做机型切换（走 **`smbios-and-serials.md`** 的完整流程），
-**不要**把它塞进升级那一次。
+⇒ **Gunakan jalur kiri secara bawaan.** Ketika benar-benar membutuhkan fitur khusus model, lakukan **secara terpisah dalam satu kali** switch model (ikuti alur lengkap **`smbios-and-serials.md`**),
+**jangan** dicampur ke dalam upgrade yang sedang dilakukan.
 
 ---
 
-## 6. 验证判据
+## 6. Kriteria verifikasi
 
 ```bash
-# ① Darwin 版本 —— 确认真的升上去了
-uname -r                              # 期望 25.x
+# ① Versi Darwin — pastikan benar-benar sudah naik
+uname -r                              # diharapkan 25.x
 
-# ② 无线内核栈 —— 四个都要在（博通路线）
+# ② Stack kernel nirkabel — keempatnya harus ada (jalur Broadcom)
 kmutil showloaded --list-only | grep -E "IOSkywalkFamily|IO80211FamilyLegacy|AirPort.BrcmNIC|corecapture"
 
-# ③ ★ Wi-Fi 死活看 en1，别只看 system_profiler
-#    ★★ 并确认「无线 = en0」（打补丁/换卡会改变驱动挂载顺序）⇒ network-en0-order.md
+# ③ ★ kelangsungan hidup Wi-Fi ditentukan oleh en1, jangan hanya melihat system_profiler
+#    ★★ dan pastikan "nirkabel = en0" (patch/penggantian kartu dapat mengubah urutan mount driver) ⇒ network-en0-order.md
 networksetup -listallhardwareports
-ifconfig en1                          # 期望有 inet + status: active
-ifconfig awdl0                        # 在 = AirDrop / 接力可用
+ifconfig en1                          # diharapkan ada inet + status: active
+ifconfig awdl0                        # ada = AirDrop / Handoff tersedia
 
-# ④ root patch 是否打上
+# ④ Apakah root patch sudah terpasang
 ls /System/Library/CoreServices/OpenCore-Legacy-Patcher.plist
-ls -l /System/Library/Frameworks/IO80211.framework/Versions/A/   # 要有二进制，不能只剩 Resources
+ls -l /System/Library/Frameworks/IO80211.framework/Versions/A/   # harus ada biner, tidak boleh hanya Resources
 
-# ⑤ 第三方 kext 有没有被搬走
-ls /Library/Relocated\ Extensions 2>/dev/null || echo "OK: 不存在"
+# ⑤ Apakah kext pihak ketiga dipindahkan
+ls /Library/Relocated\ Extensions 2>/dev/null || echo "OK: tidak ada"
 
-# ⑥ OC 注入结果
+# ⑥ Hasil injeksi OC
 ls -lt /Volumes/EFI/opencore-*.txt | head
 ```
 
-| 判据 | 期望 |
+| Kriteria | Diharapkan |
 |---|---|
 | `uname -r` | `25.x` |
-| 无线四件套 | 全 ✅ |
-| `en1` | 有 `inet` + `active` |
-| `awdl0` | 存在 |
-| `OpenCore-Legacy-Patcher.plist` | 存在 |
-| `/Library/Relocated Extensions` | **不存在** |
+| Empat komponen nirkabel | semuanya ✅ |
+| `en1` | ada `inet` + `active` |
+| `awdl0` | ada |
+| `OpenCore-Legacy-Patcher.plist` | ada |
+| `/Library/Relocated Extensions` | **tidak ada** |
 
 ---
 
-## 7. macOS 26 新增的环境坑
+## 7. Jebakan lingkungan baru di macOS 26
 
-| 坑 | 现象 | 正确做法 |
+| Jebakan | Gejala | Cara yang benar |
 |---|---|---|
-| **EFI 挂载必须提权** | `diskutil mount disk1s1` 报 `Volume on disk1s1 failed to mount` | **不是文件系统坏了**：macOS 26 的 `/Volumes` 权限变成 `drwxr-xr-x root wheel`，普通用户**建不了挂载点**。用 `osascript -e 'do shell script "mkdir -p /Volumes/EFI; diskutil mount disk1s1" with administrator privileges'` |
-| **FAT 换成 FSKit 实现** | 挂载选项里出现 `fskit` | 行为与旧 `msdosfs` 有差异，别按旧经验判断 |
-| **在 EFI 上删文件会留 `.Trashes`** | 挂载失败、`..' entry in /.Trashes/501/OC has incorrect start cluster` | `rm -rf` 在 FAT 上会被 safe-delete 转成「移到废纸篓」⇒ 坏目录项。**修法：`diskutil repairVolume diskXsY`** |
-| **`log show` 时间过滤失效** | `--start/--end` 报 `Wall Clock adjustment detected` 返回整个日志库 | 用**流式过滤**，见 `boot-timeline.md` |
+| **Mount EFI wajib dengan hak admin** | `diskutil mount disk1s1` melaporkan `Volume on disk1s1 failed to mount` | **bukan sistem file yang rusak**: hak akses `/Volumes` di macOS 26 menjadi `drwxr-xr-x root wheel`, pengguna biasa **tidak bisa membuat titik mount**. Gunakan `osascript -e 'do shell script "mkdir -p /Volumes/EFI; diskutil mount disk1s1" with administrator privileges'` |
+| **FAT diganti ke implementasi FSKit** | opsi mount memunculkan `fskit` | perilakunya berbeda dari `msdosfs` lama, jangan menilai dengan pengalaman lama |
+| **Menghapus file di EFI menyisakan `.Trashes`** | mount gagal, `..' entry in /.Trashes/501/OC has incorrect start cluster` | `rm -rf` di atas FAT akan diubah safe-delete menjadi "pindahkan ke Sampah" ⇒ entri direktori rusak. **Perbaikan: `diskutil repairVolume diskXsY`** |
+| **Filter waktu pada `log show` tidak berfungsi** | `--start/--end` melaporkan `Wall Clock adjustment detected` dan mengembalikan seluruh basis data log | gunakan **filter streaming**, lihat `boot-timeline.md` |
 
 ---
 
-## 8. 两条 Wi-Fi 路线怎么选
+## 8. Bagaimana memilih antara dua jalur Wi-Fi
 
-| | **OCLP 3.0.0-rc.3+（legacy 路线）** | AppleBCMWLANCompanion（BCMC） |
+| | **OCLP 3.0.0-rc.3+ (jalur legacy)** | AppleBCMWLANCompanion (BCMC) |
 |---|---|---|
-| root patch | **需要** | 不需要 |
-| **AWDL / AirDrop / 接力** | **保留** ✅ | **不支持** ❌（项目 `Documentation/Issues.md` 原文：*"AWDL is not currently available"*） |
-| SIP | 可放宽 | **要求开启 SIP**（与第三方显卡驱动**直接冲突**） |
-| VT-d / AppleVTD | 不需要 | **需要** |
-| OTA 升级 | 正常 | **会 kernel panic**（升级前必须先关掉） |
-| 成熟度 | prerelease，但**是唯一支持 Tahoe 的** | "Beta Testing — Not Recommended for Daily Use" |
+| root patch | **diperlukan** | tidak diperlukan |
+| **AWDL / AirDrop / Handoff** | **dipertahankan** ✅ | **tidak didukung** ❌ (kutipan asli proyek `Documentation/Issues.md`: *"AWDL is not currently available"*) |
+| SIP | dapat dilonggarkan | **wajib menyalakan SIP** (bertabrakan langsung dengan **driver kartu grafis pihak ketiga**) |
+| VT-d / AppleVTD | tidak diperlukan | **diperlukan** |
+| Upgrade OTA | normal | **akan kernel panic** (harus dimatikan sebelum upgrade) |
+| Kematangan | prerelease, tetapi **hanya satu yang mendukung Tahoe** | "Beta Testing — Not Recommended for Daily Use" |
 
-> ⇒ **换博通卡的目的就是 AirDrop / 接力 ⇒ 选 OCLP。** 只有当 OCLP 失败时才退到 BCMC（那时 AirDrop 会没）。
+> ⇒ **Tujuan mengganti kartu Broadcom justru adalah AirDrop / Handoff ⇒ pilih OCLP.** Hanya jika OCLP gagal barulah turun ke BCMC (pada saat itu AirDrop akan hilang).
 
 ---
 
-## 9. 回滚
+## 9. Rollback
 
-| 回滚什么 | 怎么做 |
+| Apa yang di-rollback | Bagaimana caranya |
 |---|---|
-| EFI 改动 | 用升级前的 EFI 备份整个覆盖回去；或 `add-tahoe-wifi-kext.sh --revert` 这类专用脚本 |
-| OCLP root patch | OCLP 的 **Revert Root Patches**（或 Uninstaller） |
-| 被搬走的 kext | `prep-oclp-rootpatch.sh --restore` |
-| 整个系统 | 升级前的时间机器备份（**大版本升级前一定要做**） |
+| Perubahan EFI | timpa seluruhnya dengan cadangan EFI sebelum upgrade; atau skrip khusus seperti `add-tahoe-wifi-kext.sh --revert` |
+| OCLP root patch | **Revert Root Patches** dari OCLP (atau Uninstaller) |
+| Kext yang dipindahkan | `prep-oclp-rootpatch.sh --restore` |
+| Seluruh sistem | cadangan Time Machine sebelum upgrade (**wajib dilakukan sebelum peningkatan versi besar**) |
 
 ---
 
-## 10. 排错
+## 10. Troubleshooting
 
-| 现象 | 检查 |
+| Gejala | Yang perlu diperiksa |
 |---|---|
-| 升级后 Wi-Fi 完全消失 | **正常**。查 §2.1 的条目有没有 `MinKernel=25.0.0` 那条；`kmutil showloaded` 看 `AirPort.BrcmNIC` 在不在 |
-| `IOSkywalkFamily` 在，但 `IO80211FamilyLegacy` 不在 | 看 OC 日志（`opencore-*.txt`）里该 kext 的注入结果；确认 `Kernel > Block` 没把它自己挡住 |
-| root patch 打不上 | FileVault 是否真关了（`fdesetup status`）；是否用了 2.5.1（**它没有 Tahoe 支持**） |
-| 打补丁时 NVIDIA kext 不见了 | 没跑 §3 的前置保护脚本。去 `/Library/Relocated Extensions` 找回来 |
-| **机型不被支持、开不了机** | 加 `-no_compat_check`（**别去换机型**，§5.3） |
-| **能开机但收不到系统更新** | 漏了 **`revpatch=sbvmm`**（§5.3）—— `-no_compat_check` 不解决这个问题 |
-| 开不了机（**如果**你换了机型） | **主板 OEM SSDT 解析不过**（本机 `xh_adls3` ⇒ `HS06 AE_NOT_FOUND`，见 `smbios-and-serials.md` §2）；用 U 盘 EFI 启动并回退。**这也是「升级时不许改机型」这条约束的原因** |
-| 发现机型被改了 | 大概率跑过 `nullmoth-setup.sh --update prepare --pkg`（§5.5）。用升级前的 EFI 备份还原 `PlatformInfo` |
-| EFI 挂不上 | 见 §7：要提权；或先 `diskutil repairVolume` |
-| 升级后开机很慢 | 见 `boot-timeline.md`（`nvrmsettle` / `-wegnoigpu` 两类已知固定延迟） |
+| Wi-Fi sepenuhnya hilang setelah upgrade | **Normal**. Periksa apakah entri `MinKernel=25.0.0` di §2.1 ada; `kmutil showloaded` untuk melihat apakah `AirPort.BrcmNIC` ada |
+| `IOSkywalkFamily` ada, tetapi `IO80211FamilyLegacy` tidak | Lihat hasil injeksi kext tersebut di log OC (`opencore-*.txt`); pastikan `Kernel > Block` tidak memblokirnya sendiri |
+| Root patch tidak bisa dipasang | Apakah FileVault benar-benar dimatikan (`fdesetup status`); apakah memakai 2.5.1 (**tidak mendukung Tahoe**) |
+| Kext NVIDIA hilang saat patch | Skrip proteksi pra-OCLP di §3 belum dijalankan. Ambil kembali dari `/Library/Relocated Extensions` |
+| **Model tidak didukung, tidak bisa boot** | tambahkan `-no_compat_check` (**jangan mengganti model**, §5.3) |
+| **Bisa boot tetapi tidak menerima pembaruan sistem** | Terlewat **`revpatch=sbvmm`** (§5.3) — `-no_compat_check` tidak menyelesaikan masalah ini |
+| Tidak bisa boot (**jika** Anda mengganti model) | **OEM SSDT motherboard gagal diurai** (di mesin ini `xh_adls3` ⇒ `HS06 AE_NOT_FOUND`, lihat `smbios-and-serials.md` §2); boot dengan EFI USB drive lalu kembalikan. **Inilah alasan batasan "jangan ubah model saat upgrade" ada** |
+| Menemukan model sudah berubah | Kemungkinan besar pernah menjalankan `nullmoth-setup.sh --update prepare --pkg` (§5.5). Pulihkan `PlatformInfo` dengan cadangan EFI sebelum upgrade |
+| EFI tidak bisa mount | Lihat §7: perlu hak admin; atau jalankan `diskutil repairVolume` dulu |
+| Boot sangat lambat setelah upgrade | Lihat `boot-timeline.md` (dua jenis penundaan tetap yang diketahui: `nvrmsettle` / `-wegnoigpu`) |
 
 ---
 
-## 11. 与其它 reference 的关系
+## 11. Hubungannya dengan reference lain
 
-- **网卡细节** → `broadcom-wifi.md`（博通，按系统分路线）、`intel-wifi.md`（Intel，Sequoia/Tahoe 两套 ABI）、`mediatek-wifi.md`（MediaTek）
-- **机型与三码**（**独立决策，不跟升级混在一起做**）→ **`smbios-and-serials.md`**（主板 OEM SSDT、顺序铁律、**换机型必须换码**、CPUFriend 重做、连带项清单）
-- **安全改 ESP 的流程** → `SKILL.md` 铁律 1–16 + `scripts/oc-edit-safe.sh`
-- **日志判读** → `logs-and-debug.md`；**耗时分析** → `boot-timeline.md`
-- **装机六阶段** → `lifecycle.md`（本文是它的「大版本升级」补充）
+- **Detail kartu jaringan** → `broadcom-wifi.md` (Broadcom, jalur terpisah per sistem), `intel-wifi.md` (Intel, dua set ABI Sequoia/Tahoe), `mediatek-wifi.md` (MediaTek)
+- **Model dan tiga kode** (**keputusan terpisah, jangan dicampur dengan upgrade**) → **`smbios-and-serials.md`** (OEM SSDT motherboard, aturan urutan, **ganti model wajib ganti kode**, CPUFriend dibuat ulang, checklist item turunan)
+- **Alur aman mengubah ESP** → aturan wajib 1–16 di `SKILL.md` + `scripts/oc-edit-safe.sh`
+- **Pembacaan log** → `logs-and-debug.md`; **analisis durasi** → `boot-timeline.md`
+- **Enam tahap instalasi** → `lifecycle.md` (artikel ini adalah pelengkap "peningkatan versi besar"-nya)

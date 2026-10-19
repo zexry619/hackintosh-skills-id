@@ -1,101 +1,101 @@
-# HiDPI：非 Retina 显示器「更清晰」的等效分辨率
+# HiDPI: resolusi ekuivalen yang membuat monitor non-Retina "lebih tajam"
 
-> 工具：**`xzhih/one-key-hidpi`**（脚本，一键给非 Retina 屏模拟 macOS HiDPI）。
-> 依据：该仓库 README + `hidpi.sh` 实现（写入路径/选项/恢复方式）。
-> ★ **本机特别注意**：显示驱动是 NullMoth 的 NVIDIA 驱动（**自述未完善**），
-> HiDPI 恰好踩在「显示模式 / 缩放 / 元数据」这条它最容易出问题的路径上 ⇒ 见 §5 的风险与前置动作。
+> Alat: **`xzhih/one-key-hidpi`** (skrip, satu klik untuk menyimulasikan HiDPI macOS pada monitor non-Retina).
+> Dasar: README repositori tersebut + implementasi `hidpi.sh` (path penulisan / opsi / cara pemulihan).
+> ★ **Perhatian khusus untuk mesin ini**: driver NVIDIA yang dipakai adalah driver NullMoth (**mengaku sendiri belum sempurna**),
+> dan HiDPI justru berada di jalur "mode tampilan / penskalaan / metadata" yang paling rawan baginya ⇒ lihat risiko dan persiapan pada §5.
 
-## 1. 什么时候需要
+## 1. Kapan dibutuhkan
 
-- 显示器不是 Retina，但分辨率够高（如 4K/2K 屏），macOS 默认按 1:1 显示 ⇒ **字太小、界面元素发虚**
-- 想拿到「看起来像 1080p 的尺寸、但用 4K 的像素渲染」那种效果（系统设置里出现 "Native" 缩放档）
+- Monitor bukan Retina, tetapi resolusinya cukup tinggi (misalnya layar 4K/2K), macOS secara default menampilkan 1:1 ⇒ **huruf terlalu kecil, elemen antarmuka terlihat kabur**
+- Ingin efek "seolah berukuran 1080p, tapi dirender dengan piksel 4K" (muncul tingkat penskalaan "Native" di System Settings)
 
-**原理**：HiDPI = 让 macOS 以 **2× 逻辑分辨率渲染**，再缩放到面板实际像素。
-它**不改面板真实分辨率**，是往显示器上挂一份 **Display Override**（含 `scale-resolutions`）来"造"出中间档位。
-⇒ 官方 README 也提醒：**开机 logo 的缩放问题可能解决不了**（因为高分辨率是"假"的）。
+**Prinsip**: HiDPI = membuat macOS merender dengan **resolusi logis 2×**, lalu menskalakan ke piksel asli panel.
+Ini **tidak mengubah resolusi asli panel**, melainkan memasang **Display Override** (berisi `scale-resolutions`) di monitor untuk "menciptakan" tingkat di antaranya.
+⇒ README resmi juga mengingatkan: **masalah penskalaan logo boot mungkin tidak bisa diperbaiki** (karena resolusi tinggi itu "palsu").
 
-## 2. 它写在哪（决定了风险大小）
+## 2. Di mana ditulisnya (menentukan besarnya risiko)
 
-脚本写的是 **`/Library/Displays/Contents/Resources/Overrides/`**（注意**不是** `/System/Library/...`）：
+Skrip menulis ke **`/Library/Displays/Contents/Resources/Overrides/`** (perhatikan **bukan** `/System/Library/...`):
 
 ```
 /Library/Displays/Contents/Resources/Overrides/
 └── DisplayVendorID-<VID>/
-    └── DisplayProductID-<PID>            ← 注入的 override（含 scale-resolutions，EDID 模式还含 IODisplayEDID）
-        DisplayProductID-<PID>.icns/.tiff ← 可选：给「显示器」图标换个 Mac 的样子
+    └── DisplayProductID-<PID>            ← override yang diinjeksi (berisi scale-resolutions, mode EDID juga berisi IODisplayEDID)
+        DisplayProductID-<PID>.icns/.tiff ← opsional: mengganti ikon "Monitor" dengan tampilan Mac
 ```
 
-- **不动密封系统卷**、不需要 root patch —— 这点比 OCLP 那条路线省心得多
-- VID/PID 从 EDID 推：脚本用 `ioreg -lw0 | grep -i "IODisplayEDID"` 取当前显示器的 EDID 再解析
-- 卸载 = **删掉 `DisplayVendorID-<VID>` 这个目录**即可
+- **Tidak menyentuh system volume tersegel**, tidak perlu root patch — jauh lebih repot daripada jalur OCLP
+- VID/PID diturunkan dari EDID: skrip memakai `ioreg -lw0 | grep -i "IODisplayEDID"` untuk mengambil EDID monitor saat ini lalu menguraikannya
+- Uninstall = **hapus direktori `DisplayVendorID-<VID>`** tersebut
 
-## 3. 怎么用
+## 3. Cara pakai
 
 ```bash
-# 远程模式（直接跑 master 上的脚本）
+# Mode jarak jauh (jalankan skrip di master secara langsung)
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/xzhih/one-key-hidpi/master/hidpi.sh)"
 
-# 或本地模式：下载 ZIP 解压 → 双击 hidpi.command
+# Atau mode lokal: unduh ZIP, ekstrak → klik dua kali hidpi.command
 ```
 
-菜单流程（按提示走）：**选显示器 → 选显示器图标（iMac / MacBook / MBP / ProDisplayXDR / 自定义）→ 选分辨率配置**
-（有预设列表，也可手动输入多个分辨率）。两个模式：
+Alur menu (ikuti petunjuknya): **pilih monitor → pilih ikon monitor (iMac / MacBook / MBP / ProDisplayXDR / kustom) → pilih konfigurasi resolusi**
+(ada daftar preset, dan juga bisa mengetik beberapa resolusi secara manual). Dua mode:
 
-| 模式 | 说明 |
+| Mode | Penjelasan |
 |---|---|
-| `Enable HIDPI` | 只注入 `scale-resolutions` override |
-| `Enable HIDPI (with EDID)` | **同时注入 patched EDID** —— 官方 README：*"Some device have wake-up issue, script's second option may help, it inject a patched EDID, but another problem may exists here."*（**可能解决唤醒问题，也可能引入新问题**） |
+| `Enable HIDPI` | Hanya menyuntikkan override `scale-resolutions` |
+| `Enable HIDPI (with EDID)` | **Sekaligus menyuntikkan EDID yang sudah dipatch** — README resmi: *"Some device have wake-up issue, script's second option may help, it inject a patched EDID, but another problem may exists here."* (**mungkin menyelesaikan masalah wake-up, tapi juga bisa menimbulkan masalah baru**) |
 
-⇒ **先试第一个**；只有遇到唤醒/模式异常才考虑第二个。
+⇒ **Coba yang pertama dulu**; opsi kedua hanya dipertimbangkan bila menghadapi masalah wake-up/mode yang tidak normal.
 
-## 4. 恢复（**必须先知道这个再做**）
+## 4. Pemulihan (**wajib diketahui sebelum melakukan**)
 
-| 情况 | 做法 |
+| Situasi | Cara |
 |---|---|
-| 能进系统 | 再跑一次脚本，选 **恢复/disable** 那一项（README 里写的是「选项 3」，以脚本菜单实际显示为准） |
-| 脚本生成的便捷脚本 | 脚本会在你的用户目录生成 **`.hidpi-disable`**，直接 `./.hidpi-disable` 即可 |
-| **进不去系统** | 进 **macOS Recovery** 的「终端」：<br>`ls /Volumes/` → `cd /Volumes/<系统盘>/Users/<用户名>` → `./.hidpi-disable` |
-| Recovery 里手动清 | `rm -rf "/Volumes/<系统盘>/Library/Displays/Contents/Resources/Overrides"`（删掉整个 Overrides，或只删注入的 `DisplayVendorID-<VID>`） |
+| Bisa masuk sistem | Jalankan skrip sekali lagi, pilih item **restore/disable** (di README tertulis "opsi 3", sesuaikan dengan tampilan menu skrip sebenarnya) |
+| Skrip pintasan yang dihasilkan | Skrip membuat **`.hidpi-disable`** di direktori user Anda, cukup jalankan `./.hidpi-disable` |
+| **Tidak bisa masuk sistem** | Masuk ke **Terminal** di **macOS Recovery**: <br>`ls /Volumes/` → `cd /Volumes/<disk sistem>/Users/<nama pengguna>` → `./.hidpi-disable` |
+| Pembersihan manual di Recovery | `rm -rf "/Volumes/<disk sistem>/Library/Displays/Contents/Resources/Overrides"` (hapus seluruh Overrides, atau hapus hanya `DisplayVendorID-<VID>` yang diinjeksi) |
 
-## 5. ★★ 与 NVIDIA（NullMoth）驱动的风险 —— 本机尤其要小心
+## 5. ★★ Risiko dengan driver NVIDIA (NullMoth) — ekstra berhati-hati pada mesin ini
 
-HiDPI 要求驱动正确处理**「非面板原生分辨率的模式 + 缩放 + 模式元数据」**，而这正是这个驱动已知薄弱的地方：
+HiDPI menuntut driver menangani dengan benar **"mode non-asli panel + penskalaan + metadata mode"**, dan justru di situlah driver ini diketahui lemah:
 
-| 已知事实 | 为什么与 HiDPI 相关 |
+| Fakta yang diketahui | Mengapa relevan dengan HiDPI |
 |---|---|
-| 本机曾出现**显示器被报成 30.5 英寸** | 真因 = 驱动没填 `IODisplayModeInformation.imageWidth/imageHeight`（后已修，PR #199）。**说明这个驱动在「显示模式元数据」上出过真 bug** |
-| 官方 `TROUBLESHOOTING` 里有「**100–240 Hz 黑屏/闪**」「**DSC 模式黑屏**」 | HiDPI 会引入新的模式/时序组合，容易踩到同一条路 |
-| 官方 `Known issues` 里有「**BAR ≥ 4 GB 时窗口重叠出现幽灵/黑块**（#127）」 | 缩放合成路径更容易暴露这类合成问题 |
-| 官方自述「Most testing is done on an RTX 5060」、`CARD-SUPPORT` 里 Ampere 一栏写 **Pending** | 本机是 RTX 3080 ⇒ 属"能跑但未系统验证"的组合 |
+| Di mesin ini pernah muncul **monitor terdeteksi 30,5 inci** | Penyebab sebenarnya = driver tidak mengisi `IODisplayModeInformation.imageWidth/imageHeight` (sudah diperbaiki, PR #199). **Ini menunjukkan driver ini pernah punya bug nyata pada "metadata mode tampilan"** |
+| `TROUBLESHOOTING` resmi memuat "**layar hitam/berkedip pada 100–240 Hz**" dan "**layar hitam pada mode DSC**" | HiDPI memperkenalkan kombinasi mode/timing baru, sehingga mudah terjebak di jalur yang sama |
+| `Known issues` resmi memuat "**window tumpang tindih dengan bayangan/kotak hitam saat BAR ≥ 4 GB** (#127)" | Jalur kompositor penskalaan lebih mudah membongkar masalah kompositor semacam ini |
+| Klaim resmi "Most testing is done on an RTX 5060" dan di `CARD-SUPPORT` kolom Ampere tertulis **Pending** | Mesin ini memakai RTX 3080 ⇒ termasuk kombinasi "bisa jalan tapi belum terverifikasi sistematis" |
 
-### 开 HiDPI 之前/之后必须做的四件事
+### Empat hal yang wajib dilakukan sebelum/sesudah mengaktifkan HiDPI
 
-1. **记录基线**（出问题才有对比）：
+1. **Catat baseline** (supaya ada pembanding saat ada masalah):
    ```bash
    system_profiler SPDisplaysDataType > ~/before-hidpi-displays.txt
    ioreg -l -w0 | grep -iE "IODisplayMode|IODisplayEDID|IOFBCurrentPixel" | head -50 > ~/before-hidpi-ioreg.txt
    ```
-2. **一次只改一项**：先只开 HiDPI（不要同时改 boot-args / 换驱动 / 动 `ResizeGpuBars`）
-3. **准备好恢复路径**：确认 `.hidpi-disable` 已生成、知道 Recovery 里怎么删（§4）
-4. **出问题的典型症状**（按概率）：模式列表异常 / 选完黑屏或花屏 / 闪 / 唤醒后异常 / 开机 logo 不缩放
-   ⇒ **黑屏或进不去系统时优先按 §4 恢复**，再考虑是不是驱动侧的问题（查 `log show` 里 NVRM/NVRMFB 的消息）
+2. **Ubah satu hal saja**: nyalakan HiDPI dulu (jangan sekaligus mengubah boot-args / mengganti driver / menyentuh `ResizeGpuBars`)
+3. **Siapkan jalur pemulihan**: pastikan `.hidpi-disable` sudah terbentuk, dan tahu cara menghapusnya di Recovery (§4)
+4. **Gejala khas kalau ada masalah** (berdasarkan kemungkinan): daftar mode tidak normal / layar hitam atau bergambar setelah dipilih / berkedip / tidak normal setelah wake-up / logo boot tidak berskala
+   ⇒ **Saat layar hitam atau tidak bisa masuk sistem, 우선 pemulihan lewat §4**, baru pikirkan apakah masalahnya di sisi driver (periksa pesan NVRM/NVRMFB di `log show`)
 
-> 若 HiDPI 在驱动侧反复出问题，可考虑：先在**较低的目标分辨率**上试（更接近原生、时序更简单），
-> 或暂时放弃 HiDPI 等驱动完善 —— **不要为了 HiDPI 去动驱动基线**（`ResizeGpuBars` 等）。
+> Bila HiDPI terus bermasalah di sisi driver, pertimbangkan: coba dulu pada **resolusi target yang lebih rendah** (lebih mendekati native, timing lebih sederhana),
+> atau sementara tinggalkan HiDPI sampai driver selesai disempurnakan — **jangan mengubah baseline driver demi HiDPI** (`ResizeGpuBars` dan sejenisnya).
 
-## 6. 别和「选择器的 HiDPI」搞混
+## 6. Jangan campurkan dengan "HiDPI di selector"
 
-| | 系统内 HiDPI（本文） | 引导期 HiDPI |
+| | HiDPI di dalam sistem (dokumen ini) | HiDPI masa boot |
 |---|---|---|
-| 管什么 | macOS 桌面的缩放档位 | OpenCore 选择器 / FileVault 界面 / 开机 logo 的文字与图标 |
-| 怎么设 | Display Override（本工具） | `UEFI>Output>UIScale`（`1` 普通 / `2` HiDPI / `0` 自动 / `-1` 不变）+ `Resolution=Max` |
-| 资源要求 | — | 图标/标签要有 @2x（`.l2x`）；见 `opencore-picker-theme` skill |
+| Mengatur apa | Tingkat penskalaan desktop macOS | Teks dan ikon di selector OpenCore / antarmuka FileVault / logo boot |
+| Cara menyetel | Display Override (alat ini) | `UEFI>Output>UIScale` (`1` normal / `2` HiDPI / `0` otomatis / `-1` tidak berubah) + `Resolution=Max` |
+| Kebutuhan sumber daya | — | Ikon/label harus punya @2x (`.l2x`); lihat skill `opencore-picker-theme` |
 
-两者**互相独立**，可以只开一个。
+Keduanya **saling independen**, boleh menyalakan hanya satu.
 
-## 7. 本机速记
+## 7. Catatan singkat mesin ini
 
-- 显示路径：RTX 3080（`10de:2206`）→ NVRMFB；驱动包 1.15.0；`ResizeGpuBars=13` + `ResizeAppleGpuBars=-1`
-- 已知显示侧历史：显示器尺寸报错（已修）、无 HDMI/DP 音频、雷电 eGPU 无显示
-- 屏幕如果被识别为电视（`kDisplayModeTelevisionFlag`）或尺寸异常，**先查是不是驱动侧的模式元数据问题**，再考虑 HiDPI
-- 改完记得：Display Override 在 `/Library/Displays/...`（**不在 ESP**）⇒ 与 EFI 改动无关，但同样**改前备份、改后验证**
+- Jalur tampilan: RTX 3080 (`10de:2206`) → NVRMFB; paket driver 1.15.0; `ResizeGpuBars=13` + `ResizeAppleGpuBars=-1`
+- Riwayat sisi tampilan yang diketahui: kesalahan ukuran monitor (sudah diperbaiki), tidak ada audio HDMI/DP, eGPU Thunderbolt tanpa output
+- Bila layar dikenali sebagai TV (`kDisplayModeTelevisionFlag`) atau ukurannya tidak normal, **periksa dulu apakah itu masalah metadata mode di sisi driver**, baru pertimbangkan HiDPI
+- Setelah selesai diubah, ingat: Display Override ada di `/Library/Displays/...` (**bukan di ESP**) ⇒ tidak berkaitan dengan perubahan EFI, tapi tetap **backup sebelum mengubah dan verifikasi setelahnya**

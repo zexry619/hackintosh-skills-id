@@ -1,17 +1,17 @@
 #!/bin/sh
-# cpu-name-check.sh —— CPU 显示名（「关于本机」的处理器名称）体检
+# cpu-name-check.sh —— pemeriksaan nama tampilan CPU (nama processor di "Tentang Mac Ini")
 #
-# 用途：判「显示的 CPU 名对不对」「改名的三个键配齐没有」，并给出判读。
-#       配合 references/cpu-name.md 使用。
+# Cara pakai: menilai "apakah nama CPU yang ditampilkan sudah benar" dan "apakah tiga kunci untuk mengganti nama sudah lengkap", lalu memberi interpretasi.
+#       Gunakan bersama references/cpu-name.md.
 #
-# 用法：
-#   ./cpu-name-check.sh                     # 完整体检
-#   ./cpu-name-check.sh --name              # 只看名字对照
-#   ./cpu-name-check.sh --args              # 只看 rev* 参数
-#   ./cpu-name-check.sh /path/to/config.plist   # 额外核对 config（ProcessorType 等）
+# Cara pakai:
+#   ./cpu-name-check.sh                     # pemeriksaan lengkap
+#   ./cpu-name-check.sh --name              # hanya perbandingan nama
+#   ./cpu-name-check.sh --args              # hanya parameter rev*
+#   ./cpu-name-check.sh /path/to/config.plist   # verifikasi tambahan config (ProcessorType dll)
 #
-# 依赖：sysctl / system_profiler / nvram（macOS 自带）。config 检查需 python3。
-# 退出码：0 正常；1 有可疑项（仅提示）。
+# Dependensi: sysctl / system_profiler / nvram (bawaan macOS). Pemeriksaan config butuh python3.
+# Kode keluar: 0 normal; 1 ada item mencurigakan (hanya pemberitahuan).
 
 set -u
 
@@ -22,7 +22,7 @@ for a in "$@"; do
     --name) ONLY=name ;;
     --args) ONLY=args ;;
     -h|--help) sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
-    -*) echo "未知参数：$a（-h 看用法）" >&2; exit 2 ;;
+    -*) echo "parameter tidak dikenal: $a (-h untuk melihat cara pakai)" >&2; exit 2 ;;
     *) CONFIG="$a" ;;
   esac
 done
@@ -31,112 +31,112 @@ REV_GUID="4D1FDA02-38C7-4A6A-9CC6-4BCCA8B30102"
 WARN=0
 
 names() {
-  echo "=========== 1) 名字对照 ==========="
+  echo "=========== 1) Perbandingan nama ==========="
   pn=$(system_profiler SPHardwareDataType 2>/dev/null | sed -n 's/^ *Processor Name: *//p' | head -1)
   bs=$(sysctl -n machdep.cpu.brand_string 2>/dev/null)
-  printf '  %-26s = %s\n' "显示的 Processor Name" "${pn:-<空>}"
-  printf '  %-26s = %s\n' "CPU 自报 brand_string" "${bs:-<空>}"
-  printf '  %-26s = %s\n' "机型 hw.model" "$(sysctl -n hw.model 2>/dev/null)"
+  printf '  %-26s = %s\n' "Processor Name yang ditampilkan" "${pn:-<kosong>}"
+  printf '  %-26s = %s\n' "brand_string yang dilaporkan CPU" "${bs:-<kosong>}"
+  printf '  %-26s = %s\n' "model hw.model" "$(sysctl -n hw.model 2>/dev/null)"
   echo
   if [ -n "$pn" ] && [ -n "$bs" ]; then
     if [ "$pn" = "$bs" ]; then
-      echo "  ✅ 两者一致 ⇒ 显示名就是 CPU 自报值（未被机型映射改掉）"
+      echo "  ✅ Keduanya sama ⇒ nama tampilan adalah nilai yang dilaporkan CPU (tidak diubah oleh pemetaan model)"
     else
-      echo "  ⚠ 两者不一致 ⇒ 显示名是按机型映射出来的（cpu-name.md §0）"
-      echo "     想改成 brand_string 或自定义名 ⇒ 用 revpatch=cpuname + revcpu=1 + revcpuname"
+      echo "  ⚠ Keduanya berbeda ⇒ nama tampilan dihasilkan dari pemetaan model (cpu-name.md §0)"
+      echo "     Ingin mengubah ke brand_string atau nama kustom ⇒ gunakan revpatch=cpuname + revcpu=1 + revcpuname"
       WARN=1
     fi
   fi
-  # 常见「机型映射」错名特征
+  # Ciri khas nama salah akibat "pemetaan model"
   case "$pn" in
-    *Xeon*W*) echo "  ★ 典型症状：Xeon W 是 MacPro7,1 的映射名（真 CPU 若是 i7/i9 则明显不符）" ;;
+    *Xeon*W*) echo "  ★ Gejala khas: Xeon W adalah nama hasil pemetaan untuk MacPro7,1 (jika CPU sebenarnya i7/i9, jelas tidak cocok)" ;;
   esac
 }
 
 args() {
-  echo "=========== 2) rev* 参数（RestrictEvents） ==========="
+  echo "=========== 2) Parameter rev* (RestrictEvents) ==========="
   ba=$(sysctl -n kern.bootargs 2>/dev/null)
-  echo "  -- boot-args 里的 rev* --"
+  echo "  -- rev* di dalam boot-args --"
   echo "$ba" | tr ' ' '\n' | grep -E '^-?rev|^revpatch=|^revcpu=|^revcpuname=|^revblock=' | sed 's/^/     /'
-  [ -n "$(echo "$ba" | tr ' ' '\n' | grep -E '^rev')" ] || echo "     （无）"
+  [ -n "$(echo "$ba" | tr ' ' '\n' | grep -E '^rev')" ] || echo "     (tidak ada)"
 
   echo "  -- NVRAM ($REV_GUID) --"
   got=0
   for k in revpatch revcpu revcpuname revblock; do
-    # nvram 把不可打印字节打成 %XX；结尾的 %00 是 C 字符串终止符，去掉更可读
+    # nvram mencetak byte yang tidak bisa dicetak sebagai %XX; %00 di akhir adalah terminator string C, menghapusnya membuat lebih mudah dibaca
     v=$(nvram "$REV_GUID:$k" 2>/dev/null | sed "s/^$REV_GUID:$k[[:space:]]*//" | sed 's/%00$//')
     if [ -n "$v" ]; then printf '     %-12s = %s\n' "$k" "$v"; got=1; fi
   done
-  [ "$got" -eq 1 ] || echo "     （无）"
+  [ "$got" -eq 1 ] || echo "     (tidak ada)"
 
-  echo "  -- RestrictEvents 是否加载 --"
+  echo "  -- Apakah RestrictEvents dimuat --"
   if command -v kmutil >/dev/null 2>&1; then
     if kmutil showloaded --list-only 2>/dev/null | grep -qi RestrictEvents; then
-      echo "     ✅ 已加载"
+      echo "     ✅ sudah dimuat"
     else
-      echo "     ❌ 未加载（或需提权）⇒ 三件套都不会生效"
+      echo "     ❌ belum dimuat (atau butuh hak akses yang lebih tinggi) ⇒ ketiga kunci tidak akan berlaku"
       WARN=1
     fi
   else
-    echo "     kmutil 不可用，跳过"
+    echo "     kmutil tidak tersedia, dilewati"
   fi
   echo
-  echo "  ★★ 优先级坑：NVRAM 的 rev* 与 boot-arg 同效，但**优先级更低**"
-  echo "     ⇒ boot-args 里若也有 revpatch=…，就**以 boot-args 为准**"
-  echo "     ⇒ 想让 cpuname 生效，boot-args 的 revpatch 里**必须也含 cpuname**（cpu-name.md §3）"
-  echo "  ★ revcpuname 含空格 ⇒ **只能放 NVRAM**（boot-args 会按空格切碎）（§3.1）"
-  echo "  ★ Intel CPU 上 revcpu **默认 0** ⇒ 必须显式 revcpu=1（§2）"
+  echo "  ★★ Jebakan prioritas: rev* di NVRAM sama efektifnya dengan boot-arg, tapi **prioritasnya lebih rendah**"
+  echo "     ⇒ kalau boot-args juga punya revpatch=…, maka **boot-args yang menjadi acuan**"
+  echo "     ⇒ Agar cpuname berlaku, revpatch di dalam boot-args **wajib memuat cpuname** juga (cpu-name.md §3)"
+  echo "  ★ revcpuname mengandung spasi ⇒ **hanya bisa ditaruh di NVRAM** (boot-args akan terpecah pada spasi) (§3.1)"
+  echo "  ★ Pada CPU Intel, revcpu **bawaan 0** ⇒ wajib menulis eksplisit revcpu=1 (§2)"
 }
 
 cfg() {
   [ -n "$CONFIG" ] || return 0
   echo
-  # ★ bash 3.2：`$VAR` 后紧跟全角字符必须写成 `${VAR}`，否则变量名会被吞进去
-  echo "=========== 3) config 核对（${CONFIG}） ==========="
-  [ -f "$CONFIG" ] || { echo "  找不到该文件，跳过"; return 0; }
+  # ★ bash 3.2: karakter full-width yang menyusul `$VAR` harus ditulis sebagai `${VAR}`, jika tidak nama variabelnya akan tertelan
+  echo "=========== 3) Verifikasi config (${CONFIG}) ==========="
+  [ -f "$CONFIG" ] || { echo "  File tidak ditemukan, dilewati"; return 0; }
   python3 - "$CONFIG" <<'PY'
 import sys, plistlib
 d = plistlib.load(open(sys.argv[1], "rb"))
 pi = d.get("PlatformInfo", {})
 g  = pi.get("Generic", {}) or {}
-pt = g.get("ProcessorType", "<缺>")
+pt = g.get("ProcessorType", "<hilang>")
 print(f"  PlatformInfo>Generic>ProcessorType = {pt}")
 try:
     pt = int(pt)
     n = 0x0F01 if pt == 0x0F01 else (0x0601 if pt == 0x0601 else None)
     if n == 0x0F01:
-        print("     ✓ 0x0F01 = 8 核及以上（官方要求，见 cpu-name.md §5）")
+        print("     ✓ 0x0F01 = 8 core atau lebih (persyaratan resmi, lihat cpu-name.md §5)")
     elif n == 0x0601:
-        print("     ✓ 0x0601 = 1/2/4/6 核（官方要求）")
+        print("     ✓ 0x0601 = 1/2/4/6 core (persyaratan resmi)")
     else:
-        print("     ⚠ 不是 0x0F01 / 0x0601 ⇒ 可能导致 CPU 图标 / 核数显示异常")
+        print("     ⚠ Bukan 0x0F01 / 0x0601 ⇒ bisa menyebabkan ikon CPU / jumlah core tampil tidak normal")
 except Exception:
     pass
-print(f"  SystemProductName = {g.get('SystemProductName','<缺>')}")
+print(f"  SystemProductName = {g.get('SystemProductName','<hilang>')}")
 ba = ""
 for guid, dd in (d.get("NVRAM", {}).get("Add", {}) or {}).items():
     if isinstance(dd, dict) and "boot-args" in dd:
         ba = dd["boot-args"]
 toks = ba.split()
 has = lambda t: any(x == t or x.startswith(t) for x in toks)
-print(f"  boot-args 含 revpatch=cpuname : {'✓' if has('revpatch=cpuname') or any(x.startswith('revpatch=') and 'cpuname' in x for x in toks) else '✗ 缺'}")
-print(f"  boot-args 含 revcpu=1         : {'✓' if 'revcpu=1' in toks else '✗ 缺（Intel 默认 0）'}")
+print(f"  boot-args memuat revpatch=cpuname : {'✓' if has('revpatch=cpuname') or any(x.startswith('revpatch=') and 'cpuname' in x for x in toks) else '✗ hilang'}")
+print(f"  boot-args memuat revcpu=1         : {'✓' if 'revcpu=1' in toks else '✗ hilang (Intel bawaan 0)'}")
 nvr = d.get("NVRAM", {}).get("Add", {}).get("4D1FDA02-38C7-4A6A-9CC6-4BCCA8B30102", {}) or {}
 rn = nvr.get("revcpuname")
-print(f"  NVRAM revcpuname              : {rn if rn else '（无）'}" + (f"  [{len(rn)} 字符，上限 48]" if rn else ""))
-# Delete 里是否也列了这些键
+print(f"  NVRAM revcpuname              : {rn if rn else '(tidak ada)'}" + (f"  [{len(rn)} karakter, batas atas 48]" if rn else ""))
+# Apakah kunci ini juga dicantumkan di Delete
 dl = d.get("NVRAM", {}).get("Delete", {}).get("4D1FDA02-38C7-4A6A-9CC6-4BCCA8B30102", []) or []
-print(f"  NVRAM>Delete 是否列出 rev* 键 : {dl if dl else '（空 ⇒ Add 的键可能不生效）'}")
+print(f"  NVRAM>Delete mencantumkan kunci rev* : {dl if dl else '(kosong ⇒ kunci di Add mungkin tidak berlaku)'}")
 PY
 }
 
 verdict() {
   echo
-  echo "=========== 4) 判读 ==========="
-  echo "  名字不一致 且 想改 ⇒ 三件套缺一不可："
-  echo "    revpatch=cpuname（boot-args） + revcpu=1（boot-args） + revcpuname=<名>（NVRAM）"
-  echo "  ★ 改完必须重启；★ 别忘了 NVRAM>Delete 也要有这些键"
-  echo "  ★ 这是纯外观改动，不影响性能 —— 不在意就别改（cpu-name.md §0）"
+  echo "=========== 4) Interpretasi ==========="
+  echo "  Nama berbeda dan ingin mengubah ⇒ ketiga kunci wajib lengkap:"
+  echo "    revpatch=cpuname (boot-args) + revcpu=1 (boot-args) + revcpuname=<nama> (NVRAM)"
+  echo "  ★ Setelah diubah harus boot ulang; ★ jangan lupa NVRAM>Delete juga harus memuat kunci ini"
+  echo "  ★ Ini murni perubahan tampilan, tidak memengaruhi performa — kalau tidak peduli, jangan diubah (cpu-name.md §0)"
 }
 
 case "$ONLY" in

@@ -1,25 +1,25 @@
-# MacPro 机型内存定制
+# Kustomisasi memori model MacPro
 
-> ★★ **先确认机型再动手 —— 槽位数随机型变**：
-> **`MacPro7,1` = 12 槽**（本文的「12 槽映射表」只适用于它）；
-> **`iMac20,1` 这类消费级机型 = 4 槽**，按普通 SMBIOS Type 17 摆即可（Slot 1–4）。
-> 换机型时必须**同步重做 `PlatformInfo>Memory>Devices`**，否则「关于本机」的内存图会错位
-> ⇒ 见 `smbios-and-serials.md` §3.1 连带项 ④。（`PlatformInfo > Memory`）
+> ★★ **Pastikan modelnya dulu sebelum mulai —— jumlah slot berbeda per model**:
+> **`MacPro7,1` = 12 slot** ("tabel pemetaan 12 slot" di dokumen ini hanya berlaku untuk model ini);
+> **Model konsumen seperti `iMac20,1` = 4 slot**, cukup diisi seperti SMBIOS Type 17 biasa (Slot 1–4).
+> Saat mengganti model, **`PlatformInfo>Memory>Devices` harus ikut dibuat ulang**, jika tidak diagram memori di "Tentang Mac ini" akan salah posisi
+> ⇒ Lihat `smbios-and-serials.md` §3.1 item terkait ④. (`PlatformInfo > Memory`)
 
-> 依据：**本机 10-13 的完整破案链（v19 → v38）** + 真机取证
-> （`khronokernel/DarwinDumped` 的 MacPro7,1 dmidecode Type 17 / system_profiler 输出 + Apple 官方槽位图与配置图，
-> 全部存于工作区 `内存弹窗-官方参考-20261013/`）。
+> Dasar: **rantai penyelesaian lengkap mesin ini 10-13 (v19 → v38)** + bukti dari mesin asli
+> (output dmidecode Type 17 / system_profiler untuk MacPro7,1 dari `khronokernel/DarwinDumped` + peta slot dan peta konfigurasi resmi Apple,
+> semuanya tersimpan di workspace `popup-memori-referensi-resmi-20261013/`).
 >
-> ★★ **本流程分两层，别混**：
-> - **A 层｜系统信息（系统报告 → 内存）** —— **全机型通用**：就是标准 SMBIOS Type 17 字段，macOS 照抄
-> - **B 层｜「关于本机」的内存图** —— **MacPro 机型专有**：那张 12 槽图（左图）的摆位由 **`Devices` 数组顺序**决定，
->   下面那张映射表 `f` 就是这一层的核心
+> ★★ **Proses ini punya dua lapisan, jangan dicampur**:
+> - **Lapisan A | System Information (System Report → Memory)** —— **semua model**: itu field SMBIOS Type 17 standar, macOS menyalin apa adanya
+> - **Lapisan B | diagram memori di "Tentang Mac ini"** —— **khusus model MacPro**: penempatan pada diagram 12 slot itu (gambar kiri) ditentukan oleh **urutan array `Devices`**,
+>   dan tabel pemetaan di bawah dengan `f` adalah inti lapisan ini
 
 ---
 
-## 1. MacPro7,1 真机 12 槽映射表（★ B 层的基础，很值得存）
+## 1. Tabel pemetaan 12 slot MacPro7,1 mesin asli (★ dasar Lapisan B, layak disimpan)
 
-| 槽号 | 真机 DeviceLocator | 通道/DIMM |
+| Nomor slot | DeviceLocator mesin asli | Channel/DIMM |
 |---|---|---|
 | **1** | `Slot 1 (Channel F / DIMM 1)` | F1 |
 | **2** | `Slot 2 (Channel F / DIMM 2)` | F2 |
@@ -34,87 +34,87 @@
 | **11** | `Slot 11 (Channel C / DIMM 2)` | C2 |
 | **12** | `Slot 12 (Channel C / DIMM 1)` | C1 |
 
-- 12 槽 = **6 通道 × 2 DIMM**；上组 1–6 = 通道 F/E/D，下组 7–12 = 通道 A/B/C
-- ★ 下组每对里 **DIMM2 在前、DIMM1 在后**（7=A2、8=A1），这是最容易记反的地方
-- 真机（8 核型）Type 16：`Number Of Devices = 12`、`Maximum Capacity 4606 GB`、ECC Single-bit
-- **Apple 官方只支持 4 / 6 / 8 / 10 / 12 条**；**4 条 = 槽 3, 5, 8, 10**（每通道一条，官方 x4 图深色槽）
-  ⇒ **2 条属非官方配置**，macOS 会弹「建议成对、至少四条」+ 顾问 `!` 标记 —— **这是真机行为，改位置去不掉**（要完全干净只能上 4 条官方配置）
+- 12 slot = **6 channel × 2 DIMM**; kelompok atas 1–6 = channel F/E/D, kelompok bawah 7–12 = channel A/B/C
+- ★ Pada setiap pasangan kelompok bawah, **DIMM2 di depan, DIMM1 di belakang** (7=A2, 8=A1), inilah bagian yang paling mudah terbalik
+- Mesin asli (tipe 8 core) Type 16: `Number Of Devices = 12`, `Maximum Capacity 4606 GB`, ECC Single-bit
+- **Apple resmi hanya mendukung 4 / 6 / 8 / 10 / 12 keping**; **4 keping = slot 3, 5, 8, 10** (satu per channel, slot gelap di gambar resmi x4)
+  ⇒ **2 keping termasuk konfigurasi non-resmi**, macOS akan menampilkan "disarankan dipasang berpasangan, minimal empat" + tanda `!` dari konsultan —— **ini perilaku mesin asli, tidak bisa dihilangkan dengan menukar posisi** (agar benar-benar bersih, harus memakai konfigurasi resmi 4 keping)
 
-## 2. ★★ B 层规则：摆位 = 数组序号 → 固定图位
+## 2. ★★ Aturan Lapisan B: penempatan = nomor array → posisi gambar tetap
 
-「关于本机 → 内存」图把 `PlatformInfo/Memory/Devices` 的**第 j 个条目画到固定的第 f(j) 个图位**：
+Diagram "Tentang Mac ini → Memory" menggambar **entri ke-j dari `PlatformInfo/Memory/Devices` ke posisi gambar ke-f(j) yang tetap**:
 
 ```
-f = [8, 7, 10, 9, 12, 11, 5, 6, 3, 4, 1, 2]      ← 与真机 SMBIOS Type 17 的表顺序完全一致
+f = [8, 7, 10, 9, 12, 11, 5, 6, 3, 4, 1, 2]      ← sama persis dengan urutan tabel SMBIOS Type 17 mesin asli
 ```
 
-| 数组第 j 项 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 |
+| Entri ke-j | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
-| **画到图位** | 8 | 7 | 10 | 9 | 12 | 11 | 5 | 6 | 3 | 4 | 1 | 2 |
+| **Digambar ke posisi** | 8 | 7 | 10 | 9 | 12 | 11 | 5 | 6 | 3 | 4 | 1 | 2 |
 
-- **为什么真机正常**：真机固件的 Type 17 表**本来就是 f 序** ⇒ 图位 v 恰好显示 `Slot v` ⇒ 图与「系统信息」列表**天然一致**
-- **为什么按 1..12 排会错位**：图位 v 显示的是数组第 `f⁻¹(v)` 项 ⇒ 图与列表对不上
-  （本机实测：实装在第 2/8 项时，图上出现在 6/7）
-- **正确做法（三步）**：
-  1. 槽号用**真机编号**（1=F1 2=F2 3=E1 4=E2 5=D1 6=D2 7=A2 8=A1 9=B2 10=B1 11=C2 12=C1），**不是** 1..12 顺序号
-  2. **`Devices` 数组按 f 序排列**（第 1 项 = `Slot 8`、第 2 项 = `Slot 7`、…、第 12 项 = `Slot 2`）
-  3. 于是「图位 v = `Slot v` = 列表第 v 行」，**两处永远一致**，任何实装位置都能一致
-- **副证**：Apple 官方 6-DIMM 截图（槽 1,3,5,8,10,12 有内存）在 f 序下占数组第 11,9,7,1,3,5 项 → 图位 1,3,5,8,10,12，**与官方截图逐位吻合**
-- **一个反例（省得白试）**：**4 槽消费主板布局下「关于本机」左图不画编号、也不标占用**（本机 v24/v26/v27 三轮验证）
-  ⇒ **要让左图标出「哪几条装了内存」，就必须用 Mac Pro 的 12 槽结构**
+- **Kenapa mesin asli benar**: tabel Type 17 pada firmware mesin asli **memang sudah berurutan f** ⇒ posisi gambar v menampilkan `Slot v` ⇒ diagram dan daftar "System Information" **konsisten secara alami**
+- **Kenapa diurutkan 1..12 jadi salah posisi**: posisi gambar v menampilkan entri ke-`f⁻¹(v)` pada array ⇒ diagram dan daftar tidak cocok
+  (pengukuran di mesin ini: terpasang di entri ke-2/8, di diagram muncul di 6/7)
+- **Cara yang benar (tiga langkah)**:
+  1. Nomor slot memakai **nomor mesin asli** (1=F1 2=F2 3=E1 4=E2 5=D1 6=D2 7=A2 8=A1 9=B2 10=B1 11=C2 12=C1), **bukan** nomor urut 1..12
+  2. **Array `Devices` diurutkan sesuai f** (entri ke-1 = `Slot 8`, entri ke-2 = `Slot 7`, …, entri ke-12 = `Slot 2`)
+  3. Dengan begitu "posisi gambar v = `Slot v` = baris ke-v pada daftar", **keduanya selalu konsisten**, dan posisi instalasi apa pun tetap konsisten
+- **Bukti tambahan**: tangkapan layar resmi Apple untuk 6-DIMM (slot 1,3,5,8,10,12 terisi memori) dalam urutan f menempati entri ke-11,9,7,1,3,5 pada array → posisi gambar 1,3,5,8,10,12, **cocok persis dengan tangkapan layar resmi per posisi**
+- **Satu kontra-contoh (hemat waktu)**: **pada layout motherboard konsumen 4 slot, gambar kiri di "Tentang Mac ini" tidak menggambar nomor dan tidak menandai pemakaian** (tiga putaran verifikasi v24/v26/v27 pada mesin ini)
+  ⇒ **agar gambar kiri menunjukkan "keping mana yang terisi memori", struktur 12 slot Mac Pro wajib dipakai**
 
-> 校验工具：`scripts/mem-check.sh <config.plist>` —— 读 `Devices` 数组，按 f 算出**每个条目会被画到哪个图位**，
-> 并直接告出「数组顺序对不对」（槽号与预测图位不一致 = 会错位）。
+> Alat validasi: `scripts/mem-check.sh <config.plist>` —— membaca array `Devices`, menghitung dengan f **ke posisi gambar mana setiap entri akan digambar**,
+> lalu langsung memberi tahu "apakah urutan array sudah benar" (nomor slot tidak cocok dengan posisi prediksi = akan salah posisi).
 
-## 3. A 层：系统信息（全机型通用）的字段
+## 3. Lapisan A: field "System Information" (semua model)
 
-`PlatformInfo > Memory` 的字段就是标准 SMBIOS Type 16/17，**与机型无关**：
+Field pada `PlatformInfo > Memory` persis SMBIOS Type 16/17 standar, **tidak bergantung pada model**:
 
-| 层级 | 字段 | 注意 |
+| Tingkat | Field | Perhatikan |
 |---|---|---|
-| 顶层 | `Devices[]` | 一条内存 = 一个 dict；**空槽也要列**（官方 Sample 结构） |
-| 顶层 | `MaxCapacity` | ★ **单位是 bytes** |
-| 顶层 | `Type` / `FormFactor` / `DataWidth` / `TotalWidth` / `ErrorCorrection` | 见 OpenCore 文档 `PlatformInfo → Memory Properties` |
-| 每条 | `DeviceLocator` | ★ **系统报告里显示的就是这个字符串** |
-| 每条 | `BankLocator` | 为空 ⇒ 无前缀；**非空** ⇒ 显示成 `BankLocator/DeviceLocator` |
-| 每条 | `Size` / `Speed` / `Manufacturer` / `SerialNumber` / `PartNumber` / `AssetTag` | ★ 键名是 **`SerialNumber`**（不是 `Serial`） |
+| Top-level | `Devices[]` | Satu memori = satu dict; **slot kosong juga harus dicantumkan** (struktur Sample resmi) |
+| Top-level | `MaxCapacity` | ★ **satuan adalah bytes** |
+| Top-level | `Type` / `FormFactor` / `DataWidth` / `TotalWidth` / `ErrorCorrection` | Lihat dokumentasi OpenCore `PlatformInfo → Memory Properties` |
+| Per entri | `DeviceLocator` | ★ **string inilah yang ditampilkan di System Report** |
+| Per entri | `BankLocator` | Kosong ⇒ tanpa prefix; **tidak kosong** ⇒ ditampilkan sebagai `BankLocator/DeviceLocator` |
+| Per entri | `Size` / `Speed` / `Manufacturer` / `SerialNumber` / `PartNumber` / `AssetTag` | ★ nama kuncinya adalah **`SerialNumber`** (bukan `Serial`) |
 
-**命名规则（真机实测）**：系统报告显示的名字 = **`DeviceLocator` 本身**（如 `Slot 7 (Channel A / DIMM 2)`）；
-真机空槽的四项是 `Size: Empty / Type: Empty / Speed: Empty / Status: Empty`，
-`Manufacturer / Serial Number / Part Number` 全是 **`NO DIMM`**。
+**Aturan penamaan (hasil pengukuran mesin asli)**: nama yang ditampilkan di System Report = **`DeviceLocator` itu sendiri** (misalnya `Slot 7 (Channel A / DIMM 2)`);
+empat item slot kosong pada mesin asli adalah `Size: Empty / Type: Empty / Speed: Empty / Status: Empty`,
+sementara `Manufacturer / Serial Number / Part Number` semuanya **`NO DIMM`**.
 
-> ★ **两层可以独立调**：B 层（摆位）只影响「关于本机」那张图；A 层列表**照数组写什么就显示什么**。
+> ★ **Dua lapisan bisa diatur terpisah**: Lapisan B (penempatan) hanya memengaruhi diagram di "Tentang Mac ini"; daftar Lapisan A **menampilkan apa pun yang ditulis pada array**.
 
-## 4. 本机实况与最终配置
+## 4. Kondisi nyata mesin ini dan konfigurasi final
 
-- 本机物理：ASUS TUF Z690-PLUS D4，**4 槽（A1/A2/B1/B2）**，SPD 实读 **两条 16GB Kingston KHX2666C16/16G 在 A2 / B2**
-  （通道 A 第 2 槽、通道 B 第 2 槽）
-- **物理最忠实的映射** = **Slot 7 (Channel A / DIMM 2) + Slot 9 (Channel B / DIMM 2)**（即 A2 + B2）
-- **用户最终选** = **Slot 8 + Slot 2**（上组第 2 根 + 下组第 2 根，两个内存仓各一条、视觉对称）
-- **现行 = v38**：12 条 `Devices`，**数组按 f 序**；实装 `Slot 8` + `Slot 2`（各自填**该内存条的真实序列号**），
-  其余 10 槽 `NO DIMM`；`MaxCapacity = 68719476736`（64 GB，单位 bytes）
-- **回退** = `config.plist.v16-MacPro71-CPUFriend`（**无** `PlatformInfo/Memory` 段）
+- Fisik mesin ini: ASUS TUF Z690-PLUS D4, **4 slot (A1/A2/B1/B2)**, SPD terbaca **dua keping 16GB Kingston KHX2666C16/16G di A2 / B2**
+  (slot ke-2 channel A, slot ke-2 channel B)
+- **Pemetaan paling setia secara fisik** = **Slot 7 (Channel A / DIMM 2) + Slot 9 (Channel B / DIMM 2)** (yaitu A2 + B2)
+- **Pilihan akhir pengguna** = **Slot 8 + Slot 2** (keping ke-2 kelompok atas + keping ke-2 kelompok bawah, satu per compartment memori, simetris secara visual)
+- **Berlaku sekarang = v38**: 12 entri `Devices`, **array diurutkan sesuai f**; terpasang `Slot 8` + `Slot 2` (masing-masing diisi **nomor seri asli keping memorinya**),
+  10 slot sisanya `NO DIMM`; `MaxCapacity = 68719476736` (64 GB, satuan bytes)
+- **Kembalikan** = `config.plist.v16-MacPro71-CPUFriend` (**tanpa** bagian `PlatformInfo/Memory`)
 
-## 5. 踩过的坑（都写下来，别再试）
+## 5. Jebakan yang pernah dialami (semua ditulis di sini, jangan coba lagi)
 
-| 坑 | 事实 |
+| Jebakan | Fakta |
 |---|---|
-| 以为「槽号 = 数组顺序号」 | **数组序号决定图位**（见 §2），槽号必须用真机编号 |
-| v32 崩 `SPMemoryReporter`（显示「收集此信息时出错」） | 当时是「**空 `BankLocator` + 纯 `Slot N` 命名**」；真机可用组合是「**空 `BankLocator` + 完整 Locator 串**」（v34 起验证 OK） |
-| 想靠改位置去掉「至少四条」警告 | **去不掉** —— 那是 macOS 对「2 条」这种非官方配置的固定行为，真机也一样 |
-| 用户看到「两处位置不一致」 | 真相是 **顾问动画**（不是配置问题）；稳态下两处一致 |
-| 用 4 槽消费主板布局 | 左图**不画编号、不标占用** ⇒ 拿不到「哪条装了内存」的可视化 |
-| `MaxCapacity` 写成 GB | **单位是 bytes** |
-| 键名写 `Serial` | 是 **`SerialNumber`** |
+| Mengira "nomor slot = nomor urut array" | **Nomor urut array menentukan posisi gambar** (lihat §2), nomor slot harus memakai nomor mesin asli |
+| v32 membuat `SPMemoryReporter` crash (menampilkan "terjadi kesalahan saat mengumpulkan informasi ini") | Saat itu masih "**`BankLocator` kosong + penamaan `Slot N` polos**"; kombinasi yang berhasil pada mesin asli adalah "**`BankLocator` kosong + string Locator lengkap**" (terverifikasi OK sejak v34) |
+| Ingin menghilangkan peringatan "minimal empat" dengan menukar posisi | **Tidak bisa dihilangkan** —— itu perilaku tetap macOS untuk konfigurasi non-resmi seperti "2 keping", mesin asli juga sama |
+| Pengguna melihat "kedua posisi tidak konsisten" | Kenyataannya **animasi konsultan** (bukan masalah konfigurasi); dalam keadaan stabil keduanya konsisten |
+| Menggunakan layout motherboard konsumen 4 slot | Gambar kiri **tidak menggambar nomor, tidak menandai pemakaian** ⇒ visualisasi "keping mana yang terisi memori" tidak didapat |
+| `MaxCapacity` ditulis dalam GB | **satuan adalah bytes** |
+| Nama kunci ditulis `Serial` | Yang benar adalah **`SerialNumber`** |
 
-## 6. 验证方法
+## 6. Metode verifikasi
 
 ```bash
-# A 层：系统信息列表（应为 12 行，实装两条有容量、其余 Empty）
+# Lapisan A: daftar System Information (harus 12 baris, dua keping terpasang punya kapasitas, sisanya Empty)
 system_profiler SPMemoryDataType | head -60
 
-# B 层：拿 config 里的数组算出「会被画到哪个图位」，并与槽号比对
+# Lapisan B: hitung dari array di config posisi gambar yang akan dipakai, lalu bandingkan dengan nomor slot
 scripts/mem-check.sh /Volumes/EFI/EFI/OC/config.plist
 ```
 
-然后**肉眼对照**：「关于本机 → 内存」左图里哪几个槽有内存，应与 `Slot v` 一致、且与系统信息列表逐行一致。
+Lalu **bandingkan secara visual**: slot mana saja yang terisi memori pada gambar kiri "Tentang Mac ini → Memory" harus cocok dengan `Slot v`, dan juga cocok baris per baris dengan daftar System Information.

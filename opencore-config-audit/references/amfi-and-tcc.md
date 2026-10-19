@@ -1,241 +1,241 @@
-# AMFI ↔ TCC 冲突：关掉 AMFI 之后，App 拿不到权限怎么办
+# AMFI ↔ TCC Konflik: Setelah Menonaktifkan AMFI, App Tidak Mendapat Izin, Apa yang Harus Dilakukan
 
-> 依据：**`GeekAudio/tcc-helper` 官方 README**（GUI/CLI 用法、自动授权思路、五个工程坑，逐条引用）
-> + OCLP / `tccplus` 文档（AMFI 关闭 ⇒ 不弹窗 + 不生成条目）+ 上游 NVIDIA 驱动仓库逐行核对。
-> ★ **一句话**：**「AMFI 关闭」和「TCC 弹窗」不能同时要** ——
-> 解法是**用 `tcc-helper` 把「已授权」条目直接写进 TCC 数据库**，代价是**不持久**
-> （系统大版本更新 / `tccutil reset` / 清理工具都会抹掉）。
+> Berdasarkan: **README resmi `GeekAudio/tcc-helper`** (penggunaan GUI/CLI, ide otorisasi otomatis, lima jebakan engineering, dikutip satu per satu)
+> + dokumentasi OCLP / `tccplus` (AMFI dinonaktifkan ⇒ tidak ada popup + tidak ada entri yang dibuat) + pengecekan baris per baris ke repositori driver NVIDIA upstream.
+> ★ **Dalam satu kalimat**: **"AMFI nonaktif" dan "popup TCC" tidak bisa sama-sama didapat** ——
+> solusinya adalah **menggunakan `tcc-helper` untuk menulis entri "sudah diotorisasi" langsung ke database TCC**, dengan harga **tidak persisten**
+> (pembaruan versi besar sistem / `tccutil reset` / alat pembersih akan menghapusnya).
 
-## 0. 现象三连（对号入座就是这个问题）
+## 0. Tiga gejala beruntun (cocokkan dengan tabel di bawah, inilah masalahnya)
 
-1. 语音 / 摄像头类 App 报 **「没有权限」**；
-2. **不弹权限窗**（点多少次都不弹）；
-3. **「系统设置 → 隐私与安全性」里根本没有那个 App 的开关**（不是灰的，是**不存在**）。
+1. App suara / kamera melaporkan **"tidak ada izin"**;
+2. **Popup izin tidak muncul** (seberapa kali pun diklik, tetap tidak muncul);
+3. **Di "System Settings → Privacy & Security" sama sekali tidak ada sakelar untuk App tersebut** (bukan dalam keadaan abu-abu, tapi **tidak ada**).
 
-★ **第三条才是判据** —— 与「用户点了拒绝」的区别就在这里：
-被拒的 App **在列表里有条目**（只是开关关着）；这个问题是**条目压根不生成**。
+★ **Butir ketiga itulah kriteria** —— bedanya dengan "pengguna menekan Tolak" ada di sini:
+App yang ditolak **memiliki entri di daftar** (hanya sakelarnya nonaktif); masalah ini adalah **entri tidak pernah dibuat sama sekali**.
 
-## 1. 根因：AMFI 被关闭
+## 1. Akar masalah: AMFI dinonaktifkan
 
-boot-args 里有这两条（任一条即可）⇒ **AMFI 被禁用**：
+Ada dua entri ini di dalam boot-args (salah satu saja sudah cukup) ⇒ **AMFI dinonaktifkan**:
 
 ```
 amfi_get_out_of_my_way=0x1
 amfi=0x80
 ```
 
-后果（**OCLP / `tccplus` 文档原话**）：
+Konsekuensinya (**kutipan asli dari dokumentasi OCLP / `tccplus`**):
 
 > *"macOS will fail to prompt users for special permissions upon application start
 > as well as omit the entries in System Preferences"*
 
-⇒ **既不弹窗，也不在隐私列表里生成条目** ⇒ App 永远拿不到权限，
-**不是 App 坏了、也不是麦克风/摄像头设备坏了**。
+⇒ **Tidak ada popup, dan entri juga tidak dibuat di daftar privasi** ⇒ App tidak akan pernah mendapat izin,
+**bukan berarti App rusak, dan bukan berarti perangkat mikrofon/kamera rusak**.
 
-> ★ **判据**：`sysctl -n kern.bootargs` / `nvram boot-args` 里有没有 `amfi`；
-> 再看用户 TCC 库里的麦克风条目数（§6 第 1 条）—— **条目数 0 或极少 = 弹窗被抑制**。
+> ★ **Kriteria**: apakah ada `amfi` di dalam `sysctl -n kern.bootargs` / `nvram boot-args`;
+> lalu lihat jumlah entri mikrofon di database TCC pengguna (§6 butir 1) — **jumlah entri 0 atau sangat sedikit = popup ditahan**.
 
-## 2. 谁在要求关 AMFI（以及 AMFIPass 的位置）
+## 2. Siapa yang menuntut AMFI dinonaktifkan (dan posisi AMFIPass)
 
-**不是你想关，是驱动要求的**。典型：
+**Bukan Anda yang ingin menonaktifkannya, melainkan driver yang menyyaratkannya**. Contoh:
 
-| 来源 | 要求 |
+| Sumber | Persyaratan |
 |---|---|
-| **NullMoth NVIDIA 驱动**（`nvidia-driver.md`） | 官方**必需清单是两件套**：boot-args 带 `amfi_get_out_of_my_way=0x1 amfi=0x80` **且** `Lilu.kext` / `AMFIPass.kext` 要启用；安装器 `nullmoth-setup.sh` 主动写入并自动补齐这两个 kext |
-| **OCLP 根补丁 / 博通 Wi-Fi 侧** | 走的是 **`AMFIPass.kext`**（**保留 AMFI** 的做法），不是关 AMFI |
-| 其它第三方 kext | 视驱动而定；**先查驱动 README 有没有明确要求**，别默认「黑苹果就要关 AMFI」 |
+| **Driver NullMoth NVIDIA** (`nvidia-driver.md`) | **Daftar resmi wajibnya dua komponen**: boot-args berisi `amfi_get_out_of_my_way=0x1 amfi=0x80` **dan** `Lilu.kext` / `AMFIPass.kext` harus diaktifkan; installer `nullmoth-setup.sh` secara aktif menuliskan dan otomatis melengkapi kedua kext tersebut |
+| **Root patch OCLP / sisi Wi-Fi Broadcom** | Menggunakan **`AMFIPass.kext`** (pendekatan **mempertahankan AMFI**), bukan menonaktifkan AMFI |
+| Kext pihak ketiga lainnya | Tergantung pada driver; **periksa dulu README driver apakah ada persyaratan eksplisit**, janganlah memakai asumsi default "hackintosh harus nonaktifkan AMFI" |
 
-★★ **别把 kext 和 boot-arg 搞混**：`AMFIPass.kext` 是**驱动必需项**；
-被 `NDSecurityState.m` 列进「不安全覆盖」名单的是 **`-amfipass*` 这个 boot-arg**。
+★★ **Jangan tertukar antara kext dan boot-arg**: `AMFIPass.kext` adalah **item wajib driver**;
+yang masuk daftar "override tidak aman" di `NDSecurityState.m` adalah **boot-arg `-amfipass*` ini**.
 
-⇒ **别的机器**：优先用 `AMFIPass.kext` 顶替 AMFI 参数（**保留 AMFI** ⇒ TCC 弹窗正常，**根本不会有本文档这个问题**）。
-⇒ **本机**：上游把「AMFI 参数 **+** AMFIPass」**两个并列列为必需** ⇒ **只能二选一**，见 §3。
+⇒ **Mesin lain**: prioritaskan memakai `AMFIPass.kext` sebagai pengganti parameter AMFI (**mempertahankan AMFI** ⇒ popup TCC normal, **masalah dalam dokumen ini sama sekali tidak akan muncul**).
+⇒ **Mesin ini**: upstream mencantumkan "parameter AMFI **+** AMFIPass" **secara berjejak sebagai dua hal wajib** ⇒ **hanya bisa pilih salah satu**, lihat §3.
 
-## 3. 结论：只能二选一
+## 3. Kesimpulan: hanya bisa pilih salah satu
 
-| 选 | 做法 | 代价 |
+| Pilihan | Cara | Harga |
 |---|---|---|
-| **保驱动**（现行） | 留着 AMFI 参数，用 **`tcc-helper` 手工注入 TCC 条目**（§4） | **不持久** —— 系统大版本更新 / `tccutil reset` / 清理工具会抹掉，需重跑 |
-| **保弹窗** | 去掉 AMFI 参数 | ★★ 上游不支持该组合 + 未验证；**失败后果 = WindowServer 加载不了 NVIDIA bundle ⇒ 黑屏只剩鼠标** ⇒ **不要做** |
+| **Jaga driver** (sekarang) | Biarkan parameter AMFI, gunakan **`tcc-helper` untuk inject entri TCC secara manual** (§4) | **Tidak persisten** — pembaruan versi besar sistem / `tccutil reset` / alat pembersih akan menghapusnya, perlu dijalankan ulang |
+| **Jaga popup** | Hapus parameter AMFI | ★★ Upstream tidak mendukung kombinasi ini + belum diverifikasi; **kegagalan = WindowServer gagal memuat bundle NVIDIA ⇒ layar hitam hanya tersisa kursor** ⇒ **jangan dilakukan** |
 
-## 4. ★★ 解法：`GeekAudio/tcc-helper`
+## 4. ★★ Solusi: `GeekAudio/tcc-helper`
 
-<https://github.com/GeekAudio/tcc-helper> —— Swift 写的 **GUI（SwiftUI）+ CLI**，MIT 许可。
+<https://github.com/GeekAudio/tcc-helper> — **GUI (SwiftUI) + CLI** yang ditulis dengan Swift, lisensi MIT.
 
-> **它替代了早期那些一次性 shell 脚本**：把「扫谁需要什么权限」这件事**从系统里反推**出来，
-> 而不是靠人肉列 App 清单。
+> **Ini menggantikan skrip shell sekali pakai di masa awal**: hal "memindai siapa membutuhkan izin apa" **diturunkan dari sistem**,
+> bukan dengan mencantumkan daftar App secara manual.
 
-### 4.1 装
+### 4.1 Pemasangan
 
-- **Release**：`v1.0.0` 的 **`TCC.Helper-1.0.dmg`** ⇒ 挂载后把 App 拖进 `Applications`
-- **自构建**：`./build.sh`（出 App）/ `./make-dmg.sh`（出 DMG）—— 只依赖 **Xcode 命令行工具**（`swiftc`），**不需要 Xcode 工程文件**
-- ★ **签名是 ad-hoc**（作者没有 Developer ID）⇒ **首次打开要「右键 → 打开」**（或被 Gatekeeper 拦一次）
+- **Release**: **`TCC.Helper-1.0.dmg`** dari `v1.0.0` ⇒ setelah di-mount, seret App ke `Applications`
+- **Build sendiri**: `./build.sh` (menghasilkan App) / `./make-dmg.sh` (menghasilkan DMG) — hanya bergantung pada **Xcode command line tools** (`swiftc`), **tidak butuh file proyek Xcode**
+- ★ **Tandatangan bersifat ad-hoc** (penulis tidak punya Developer ID) ⇒ **saat pertama dibuka harus "klik kanan → Open"** (atau dicegat Gatekeeper sekali)
 
-### 4.2 GUI 用法（五步）
+### 4.2 Penggunaan GUI (lima langkah)
 
-1. **目标数据库** —— 选 **用户库**（麦克风 / 摄像头 / 音频采集 / 蓝牙…）或 **系统库**（辅助功能 / 屏幕录制…）。
-   面板会显示自检结果；**系统库属主是 root，写它时会弹管理员密码**。
-2. **自动授权（推荐）** —— 打开 App 就自动扫一遍，列出「谁声明了要什么权限、还缺几条」，
-   勾选后点「授权选中的」，**一次事务写完**（§4.3）。
-3. **目标 App（手动）** —— 把 `.app` 拖进虚线框，或用「选择目标…」。
-   ★★ **要授权的是「真正申请权限的那个组件」，不一定是主 App**
-   （例：Loopback 的麦克风/系统音频权限属于它包内的 `Audio Routing Kit (ARK).app`（`com.rogueamoeba.arkaudiod`），
-   **给 `Loopback.app` 授权没用**）⇒ 选目标时可以**钻进 `.app` 内部**选子组件；
-   「从运行中的 App 选…」能直接列出在跑的**后台 helper**。
-4. **权限服务（手动）** —— **109 个服务**，**运行时从系统 `tccd` 二进制里抽出来**的，中英文都能筛。
-5. **操作** —— 预演（不写库）/ 授权 / 撤销 / 刷新条目。
-   **写入前自动备份 `TCC.db`，写完自动 `killall tccd`**，并回读验证。
+1. **Database target** — pilih **database pengguna** (mikrofon / kamera / perekaman audio / bluetooth…) atau **database sistem** (aksesibilitas / perekaman layar…).
+   Panel akan menampilkan hasil pemeriksaan mandiri; **database sistem dimiliki oleh root, jadi saat menuliskannya akan diminta kata sandi administrator**.
+2. **Otorisasi otomatis (disarankan)** — begitu App dibuka, langsung memindai sekali, menampilkan "siapa yang menyatakan butuh izin apa, dan yang masih kurang berapa",
+   setelah dicentang tekan "Authorize Selected", **semuanya ditulis dalam satu transaksi** (§4.3).
+3. **App target (manual)** — seret `.app` ke kotak putus-putus, atau gunakan "Choose Target…".
+   ★★ **Yang perlu diotorisasi adalah "komponen yang benar-benar mengajukan izin", belum tentu App utama**
+   (contoh: izin mikrofon/system audio milik Loopback ada pada `Audio Routing Kit (ARK).app` di dalam paketnya (`com.rogueamoeba.arkaudiod`),
+   **memberi otorisasi ke `Loopback.app` tidak berguna**) ⇒ saat memilih target Anda bisa **masuk ke dalam `.app`** untuk memilih sub-komponen;
+   "Select From Running Apps…" bisa langsung menampilkan **helper latar belakang** yang sedang berjalan.
+4. **Layanan izin (manual)** — **109 layanan**, **diekstrak saat runtime dari binary `tccd` sistem**, bisa difilter dalam bahasa Mandarin maupun Inggris.
+5. **Tindakan** — dry-run (tidak menulis ke database) / otorisasi / pencabutan / refresh entri.
+   **Sebelum menulis, `TCC.db` dicadangkan otomatis, setelah selesai otomatis `killall tccd`**, lalu diverifikasi dengan membaca kembali.
 
-### 4.3 ★★ 自动授权：不猜、也不靠人肉挑，从系统里反推
+### 4.3 ★★ Otorisasi otomatis: tidak menebak, dan tidak mengandalkan pemilihan manual, diturunkan dari sistem
 
-**线索 ①：App 自己就声明了** —— `Info.plist` 里的 usage description 就是它的权限申请清单：
+**Petunjuk ①: App itu sendiri sudah menyatakannya** — usage description di dalam `Info.plist` adalah daftar permintaan izinnya:
 
-| Info.plist 键 | 对应 TCC 服务 |
+| Kunci Info.plist | Layanan TCC yang sesuai |
 |---|---|
 | `NSMicrophoneUsageDescription` | `kTCCServiceMicrophone` |
 | `NSCameraUsageDescription` | `kTCCServiceCamera` |
-| `NSAudioCaptureUsageDescription` | `kTCCServiceAudioCapture`（系统音频采集） |
+| `NSAudioCaptureUsageDescription` | `kTCCServiceAudioCapture` (perekaman audio sistem) |
 | `NSAppleEventsUsageDescription` | `kTCCServiceAppleEvents` |
-| `NSDesktopFolderUsageDescription` … | 桌面 / 文稿 / 下载 / 网络宗卷 / 可移除宗卷 |
+| `NSDesktopFolderUsageDescription` … | Desktop / Documents / Downloads / volume jaringan / volume yang dapat dilepas |
 | `NSBluetoothAlwaysUsageDescription` | `kTCCServiceBluetoothAlways` |
 
-（完整映射见源码 `Sources/TCCAuto.swift` 的 `usageMap`；**会按系统真实服务清单过滤**，系统不认识的键不会写。）
+(Petakan lengkapnya ada di `usageMap` pada source `Sources/TCCAuto.swift`; **disaring berdasarkan daftar layanan sistem yang sebenarnya**, kunci yang tidak dikenali sistem tidak akan ditulis.)
 
-**线索 ②：真正申请权限的往往是后台组件** —— 所以还会扫：
+**Petunjuk ②: yang benar-benar mengajukan izin sering kali komponen latar belakang** — karena itu pemindaian juga menelusuri:
 
-- **launchd 注册的每个 job** → 解析回它所属的 `.app`（`Program` / `ProgramArguments[0]` 往上找 `.app`）
-- **包内子组件**：`Contents/{Library/LoginItems, Library/LaunchServices, XPCServices, PlugIns, Helpers, Resources, MacOS}`
-- **组件目录**：`/Library/Audio/Plug-Ins/HAL`（音频驱动，**ARK 就在这儿**）、`/Library/PrivilegedHelperTools` 等
-- **正在运行的 App**
+- **Setiap job yang terdaftar di launchd** → ditelusuri kembali ke `.app` induknya (naik dari `Program` / `ProgramArguments[0]` untuk mencari `.app`)
+- **Sub-komponen dalam paket**: `Contents/{Library/LoginItems, Library/LaunchServices, XPCServices, PlugIns, Helpers, Resources, MacOS}`
+- **Direktori komponen**: `/Library/Audio/Plug-Ins/HAL` (driver audio, **ARK ada di sini**), `/Library/PrivilegedHelperTools` dll
+- **App yang sedang berjalan**
 
-**效果**：Loopback 那个坑，自动模式**自己就找出了 `com.rogueamoeba.arkaudiod`**，
-并认出它需要 `kTCCServiceMicrophone` + `kTCCServiceAudioCapture` —— **完全不用人工翻包**。
+**Hasilnya**: jebakan Loopback itu, dalam mode otomatis **sistem menemukan `com.rogueamoeba.arkaudiod` sendiri**,
+dan mengenali bahwa ia membutuhkan `kTCCServiceMicrophone` + `kTCCServiceAudioCapture` — **tanpa perlu unpack paket secara manual**.
 
-### 4.4 CLI 用法（与 GUI 共用同一套逻辑，DMG 里自带）
+### 4.4 Penggunaan CLI (logika yang sama dengan GUI, sudah disertakan di dalam DMG)
 
 ```sh
-bin/tcchelper-cli auto                                  # 预演（只列，不写）
-bin/tcchelper-cli auto --apply                          # 真正写入
-bin/tcchelper-cli auto --root /Applications --no-running # 限定扫描范围
-bin/tcchelper-cli auto --service kTCCServiceAudioCapture # 只处理某一个服务
+bin/tcchelper-cli auto                                  # dry-run (hanya daftar, tidak menulis)
+bin/tcchelper-cli auto --apply                          # benar-benar menulis
+bin/tcchelper-cli auto --root /Applications --no-running # membatasi cakupan pemindaian
+bin/tcchelper-cli auto --service kTCCServiceAudioCapture # hanya menangani satu layanan
 
-bin/tcchelper-cli services                              # 列出全部服务
-bin/tcchelper-cli inspect  <App>                        # 看 bundle id / 签名 / DR
-bin/tcchelper-cli list     <App> [--db user|system]     # 列出该 App 的条目
-bin/tcchelper-cli dry      <App> <service> [--db ...]   # 预演
+bin/tcchelper-cli services                              # daftar semua layanan
+bin/tcchelper-cli inspect  <App>                        # melihat bundle id / tanda tangan / DR
+bin/tcchelper-cli list     <App> [--db user|system]     # daftar entri App tersebut
+bin/tcchelper-cli dry      <App> <service> [--db ...]   # dry-run
 bin/tcchelper-cli grant    <App> <service> [--db ...] [--path]
 bin/tcchelper-cli revoke   <App> <service> [--db ...] [--path]
 ```
 
-★ **`--path` = 按绝对路径授权**（`client_type=1`），用于**没有 bundle 的裸可执行文件**。
+★ **`--path` = otorisasi berdasarkan jalur absolut** (`client_type=1`), dipakai untuk **file executable telanjang tanpa bundle**.
 
-### 4.5 原理：写的是 `access` 表
+### 4.5 Prinsipnya: yang ditulis adalah tabel `access`
 
-| 列 | 值 |
+| Kolom | Nilai |
 |---|---|
 | `service` | `kTCCService…` |
-| `client` | bundle id（`client_type=0`）或绝对路径（`client_type=1`） |
-| **`auth_value`** | **`2` = 允许**（0 拒绝 / 3 未决） |
-| `auth_reason` | `4` = 服务策略（**系统自己生成的条目用的就是这个**） |
+| `client` | bundle id (`client_type=0`) atau jalur absolut (`client_type=1`) |
+| **`auth_value`** | **`2` = diizinkan** (0 ditolak / 3 belum diputuskan) |
+| `auth_reason` | `4` = kebijakan layanan (**entri yang dibuat sistem sendiri memakai nilai ini**) |
 | `auth_version` | `1` |
-| **`csreq`** | DER blob，由目标 App 的 **designated requirement** 生成 |
-| `indirect_object_identifier` | 字面量 **`'UNUSED'`**（不是空串） |
+| **`csreq`** | blob DER, dihasilkan dari **designated requirement** App target |
+| `indirect_object_identifier` | literal **`'UNUSED'`** (bukan string kosong) |
 
-**`csreq` 生成**：`codesign -d -r- <App>` 取 `designated =>` **之后**的文本 → `csreq -r- -b out.bin`。
-★ **magic 必须是 `fade0c00`**；把 `designated =>` 前缀一起喂进去会得到 **`fade0c01`（集合格式）⇒ TCC 不认**。
+**Pembuatan `csreq`**: `codesign -d -r- <App>` mengambil teks **sesudah** `designated =>` → `csreq -r- -b out.bin`.
+★ **Nilai magic harus `fade0c00`**; jika prefiks `designated =>` ikut dimasukkan, hasilnya **`fade0c01` (format himpunan) ⇒ TCC tidak mengenali**.
 
-## 5. ★ 五个工程坑（代码里都处理了，自己写脚本时会全踩一遍）
+## 5. ★ Lima jebakan engineering (sudah ditangani di dalam kodenya, kalau menulis skrip sendiri akan mengalaminya semua)
 
-1. **`codesign -dvvv -r-` 把 DR 打在 stdout、详细信息打在 stderr** ⇒
-   **只看一个流会把有签名的 App 误判成「无签名」**，两个流都要解析。
-2. **ad-hoc 签名的 App 没有显式 DR** —— codesign 打成 `# designated => cdhash H"…"`（带 `#`，是注释）。
-   这种情况 **`csreq` 留空**，靠 Bundle ID 匹配（**系统给 Apple 守护进程写的条目也是这样**）。
-3. **别用临时表做写权限自检** —— `create temp table` **只写 temp 库**、永远「成功」，测不出主库只读；
-   要用**主库上的 DDL + `rollback`**。
-4. ★ **扫描阶段绝不能对每个 App 跑 `codesign`** —— 每次是一个子进程，
-   36 个 App 串行要 **17–21 秒**，界面直接卡死 ⇒ 改成**惰性 + 并行**（`DispatchQueue.concurrentPerform`）后：
-   扫描 **0.9 s** + 签名检查 **2.1 s**。
-5. ★ **`systemServices()` 必须缓存** —— 它要读几 MB 的 `tccd` 再跑正则，而扫描会对**每个 App** 调一次；
-   不缓存 = 几十遍全量扫描。
+1. **`codesign -dvvv -r-` mencetak DR ke stdout, sedangkan informasi detail ke stderr** ⇒
+   **hanya melihat satu aliran akan salah menilai App bertanda tangan sebagai "tanpa tanda tangan"**, kedua aliran harus diparse.
+2. **App dengan tanda tangan ad-hoc tidak memiliki DR eksplisit** — codesign mencetaknya sebagai `# designated => cdhash H"…"` (dengan `#`, itu komentar).
+   Dalam kasus seperti ini **`csreq` dikosongkan**, pencocokan mengandalkan Bundle ID (**entri yang ditulis sistem untuk daemon Apple juga begitu**).
+3. **Jangan pakai tabel sementara untuk menguji hak tulis** — `create temp table` **hanya menulis ke database temp** dan selalu "berhasil", tidak bisa mendeteksi database utama yang hanya-baca;
+   gunakan **DDL pada database utama + `rollback`**.
+4. ★ **Pada tahap pemindaian tidak boleh menjalankan `codesign` untuk setiap App** — setiap pemanggilan adalah satu subprocess,
+   36 App secara serial butuh **17–21 detik**, antarmuka langsung macet ⇒ ubah menjadi **lazy + paralel** (`DispatchQueue.concurrentPerform`), hasilnya:
+   pemindaian **0,9 s** + pemeriksaan tanda tangan **2,1 s**.
+5. ★ **`systemServices()` wajib di-cache** — fungsi ini harus membaca beberapa MB `tccd` lalu menjalankan regex, sementara pemindaian memanggilnya **untuk setiap App**;
+   tanpa cache = puluhan kali pemindaian penuh.
 
-## 6. 排查判据（下次直接照做）
+## 6. Kriteria troubleshooting (tinggal ikuti lain kali)
 
-1. **查用户 TCC 库的条目**：
+1. **Periksa entri di database TCC pengguna**:
 
    ```bash
    sqlite3 "$HOME/Library/Application Support/com.apple.TCC/TCC.db" \
      "select service,client,auth_value from access where service like '%Microphone%';"
    ```
 
-   - **条目数 0 或极少** ⇒ **弹窗被抑制**（AMFI 关着）⇒ 本文档；
-   - 条目在但 `auth_value=0` ⇒ 是**被拒**（`tccutil reset` 后重试，或直接改 `auth_value=2`）。
-2. **查 boot-args 里有没有 `amfi`**：`sysctl -n kern.bootargs` / `nvram boot-args`。
-3. **查 `csr-active-config` 要看字节**：用 `plistlib` 读；
-   ⚠️ **`PlistBuddy -c Print` 打的是 base64** —— 本机显示 `C` 其实是 `430a0000`（= `0x0A43`）。
-4. ★★ **诊断纪律（先分三类，别一上来就写库）**：
-   ① **条目不存在** ⇒ 本文档（AMFI 抑制）
-   ② **条目存在但被拒** ⇒ 用户操作，`tccutil reset` 后重试
-   ③ **条目存在且已允许但仍失败** ⇒ **App 自身 / 设备问题，别再折腾 TCC**
-   ★ 还有一类最容易漏：**授权的对象选错了** —— 要授权的是**真正申请权限的那个 helper / 子组件**（§4.2 第 3 步）。
+   - **Jumlah entri 0 atau sangat sedikit** ⇒ **popup ditahan** (AMFI nonaktif) ⇒ dokumen ini;
+   - Entri ada tetapi `auth_value=0` ⇒ itu **ditolak** (coba ulang setelah `tccutil reset`, atau langsung ubah `auth_value=2`).
+2. **Periksa apakah ada `amfi` di boot-args**: `sysctl -n kern.bootargs` / `nvram boot-args`.
+3. **Periksa `csr-active-config` dan perhatikan byte-nya**: baca dengan `plistlib`;
+   ⚠️ **`PlistBuddy -c Print` mencetak base64** — yang tampil `C` di mesin ini sebenarnya `430a0000` (= `0x0A43`).
+4. ★★ **Disiplin diagnosis (klasifikasikan dulu tiga kategori, jangan buru-buru menulis ke database)**:
+   ① **Entri tidak ada** ⇒ dokumen ini (AMFI menahan)
+   ② **Entri ada tapi ditolak** ⇒ tindakan pengguna, coba ulang setelah `tccutil reset`
+   ③ **Entri ada dan sudah diizinkan tapi tetap gagal** ⇒ **masalah pada App itu sendiri / perangkatnya, jangan lagi repot-repot dengan TCC**
+   ★ Ada satu kategori lain yang paling mudah terlewat: **objek yang diotorisasi salah pilih** — yang perlu diotorisasi adalah **helper / sub-komponen yang benar-benar mengajukan izin** (§4.2 langkah 3).
 
-## 7. 注意与边界
+## 7. Perhatikan dan Batasannya
 
-- **条目不持久** —— 系统大版本更新 / `tccutil reset` / 清理工具都会抹掉，**需要重跑**
-- **用户库不可读时** ⇒ 给这个 App 勾「**完全磁盘访问权限**」；
-  也可以点面板上的「给自己完全磁盘访问」（**写系统库，需要管理员密码**）
-- **撤销**：用「撤销」按钮，或 `tccutil reset <service> <bundle-id>`
-- ★ 这是**有意降低系统安全边界**的操作 ⇒ **只给确实需要的 App 授权**
-- ★ 同一个机制适用于**所有** TCC 服务（把 `service` 换掉即可）；
-  但**屏幕录制 / 辅助功能**在部分系统上还要额外处理 ⇒ **先用 §6 第 1 条确认到底是「没条目」还是「被拒」**
+- **Entri tidak persisten** — pembaruan versi besar sistem / `tccutil reset` / alat pembersih akan menghapusnya, **perlu dijalankan ulang**
+- **Jika database pengguna tidak bisa dibaca** ⇒ beri App ini centang "**Full Disk Access**";
+  Anda juga bisa menekan "Grant Full Disk Access to Yourself" di panel (**menulis ke database sistem, butuh kata sandi administrator**)
+- **Pencabutan**: gunakan tombol "Revoke", atau `tccutil reset <service> <bundle-id>`
+- ★ Ini adalah tindakan yang **sengaja menurunkan batas keamanan sistem** ⇒ **hanya beri otorisasi pada App yang benar-benar membutuhkannya**
+- ★ Mekanisme yang sama berlaku untuk **semua** layanan TCC (cukup ganti `service`);
+  tetapi **perekaman layar / aksesibilitas** pada sebagian sistem masih memerlukan penanganan tambahan ⇒ **gunakan §6 butir 1 untuk memastikan apakah masalahnya "tidak ada entri" atau "ditolak"**
 
-## 8. 出处
+## 8. Sumber
 
-- `GeekAudio/tcc-helper` → `README.md`（GUI/CLI 用法、自动授权思路、五个坑）+ `Sources/TCCAuto.swift`（`usageMap`）+ Release `v1.0.0`。
-- OCLP / `tccplus` 文档：AMFI 关闭 ⇒ 不弹窗 + 不生成隐私条目（原文见 §1）。
-- 相关：`nvidia-driver.md` §8（驱动的安全边界）· `broadcom-wifi.md`（OCLP 根补丁侧）。
+- `GeekAudio/tcc-helper` → `README.md` (penggunaan GUI/CLI, ide otorisasi otomatis, lima jebakan) + `Sources/TCCAuto.swift` (`usageMap`) + Release `v1.0.0`.
+- Dokumentasi OCLP / `tccplus`: AMFI dinonaktifkan ⇒ tidak ada popup + tidak ada entri privasi (teks asli ada di §1).
+- Terkait: `nvidia-driver.md` §8 (batas keamanan driver) · `broadcom-wifi.md` (sisi root patch OCLP).
 
 ---
 
-## 附录：Gatekeeper /「任何来源」/「无法验证开发者」（**与 TCC 无关，但常一起排查**）
+## Lampiran: Gatekeeper /"Any Source"/"Developer Cannot Be Verified" (**tidak terkait TCC, tapi sering ditelusuri bersama**)
 
-### A.1 先分清是两个问题
+### A.1 Pertama-tama bedakan: ini dua masalah
 
-| 现象 | 根因 | 去哪 |
+| Gejala | Akar masalah | Ke mana |
 |---|---|---|
-| 双击 App 弹「**无法打开，因为无法验证开发者**」/「**已损坏，应移到废纸篓**」/「来自身份不明的开发者」 | **Gatekeeper**（系统策略评估，`spctl`） | 本附录 |
-| App **能打开**，但麦克风 / 摄像头 / 屏幕录制拿不到权限、也不弹窗 | **AMFI 关闭 ⇒ TCC 不记录** | §0–§7 |
+| Klik ganda App memunculkan "**cannot be opened because the developer cannot be verified**" / "**is damaged and should be moved to the Trash**" / "from an unidentified developer" | **Gatekeeper** (evaluasi kebijakan sistem, `spctl`) | Lampiran ini |
+| App **bisa dibuka**, tapi tidak mendapat izin mikrofon / kamera / perekaman layar, dan tidak ada popup | **AMFI dinonaktifkan ⇒ TCC tidak mencatat** | §0–§7 |
 
-★ 两者都表现为「App 用不了」，但**修法完全不通用** —— 先看 App 到底有没有启动。
+★ Keduanya bermanifestasi sebagai "App tidak bisa dipakai", tapi **perbaikannya sama sekali tidak sama** — lihat dulu apakah App benar-benar berjalan.
 
-### A.2 命令
+### A.2 Perintah
 
 ```bash
-spctl --status                  # assessments enabled / disabled（只读，不用 sudo）
-sudo spctl --global-disable     # 关闭 Gatekeeper 全局评估 = 旧版「任何来源」
-sudo spctl --global-enable      # 恢复
+spctl --status                  # assessments enabled / disabled (hanya baca, tidak perlu sudo)
+sudo spctl --global-disable     # menonaktifkan penilaian global Gatekeeper = "Any Source" versi lama
+sudo spctl --global-enable      # pulihkan
 ```
 
-| 项 | 说明 |
+| Item | Penjelasan |
 |---|---|
-| **`--master-disable`** | ★ **macOS 15+（Sequoia/Tahoe）已不是文档化的做法**，对应开关是 **`--global-disable`**。<br>二进制里仍留着 `master-disable` 兼容旧脚本，**但别写进新流程**（网上大量教程还是它） |
-| **GUI 路径** | 系统设置 → 隐私与安全性 → 安全性 → 「**允许来自任何来源**」。<br>部分版本该选项**默认不显示**，要先跑一次 `--global-disable` 才出现（Ventura 时代的经典现象） |
-| `spctl --disable-status` | 26.7.1 返回：*"The option to globally disable the assessment system is currently available in **System Settings**."*<br>⇒ **Apple 正在把入口收回 GUI**，CLI 仍可用但已非官方推荐路径 |
+| **`--master-disable`** | ★ **Pada macOS 15+ (Sequoia/Tahoe) ini sudah bukan cara yang terdokumentasi**, sakelar yang sesuai adalah **`--global-disable`**.<br>Binary masih menyimpan `master-disable` untuk kompatibilitas dengan skrip lama, **tetapi jangan menulisnya ke alur baru** (banyak tutorial di internet masih memakainya) |
+| **Jalur GUI** | System Settings → Privacy & Security → Security → "**Allow from any source**".<br>Pada sebagian versi opsi ini **tidak ditampilkan secara default**, harus menjalankan `--global-disable` sekali dulu agar muncul (gejala klasik era Ventura) |
+| `spctl --disable-status` | 26.7.1 mengembalikan: *"The option to globally disable the assessment system is currently available in **System Settings**."*<br>⇒ **Apple sedang menarik entry point ini ke GUI**, CLI masih bisa dipakai tetapi sudah bukan jalur yang direkomendasikan secara resmi |
 
-### A.3 本机实测（macOS 26.7.1 / Tahoe）
+### A.3 Hasil pengukuran di mesin ini (macOS 26.7.1 / Tahoe)
 
 ```bash
 spctl --status          # → assessments disabled
-spctl --help            # 列出的开关：--assess / --status / --global-disable / --disable-status
-strings /usr/sbin/spctl | grep global-   # → global-disable、global-enable 都在
+spctl --help            # sakelar yang tercantum: --assess / --status / --global-disable / --disable-status
+strings /usr/sbin/spctl | grep global-   # → global-disable, global-enable ada keduanya
 ```
 
-- ★ **`--global-enable` 只在二进制里，`--help` 不列** ⇒ 恢复时照用即可，别以为它被删了
-- 本机 `assessments disabled`，与「装第三方驱动 / 工具后一切正常」的现状一致
+- ★ **`--global-enable` hanya ada di dalam binary, `--help` tidak mencantumkannya** ⇒ saat memulihkan tetap pakai saja, jangan mengira itu sudah dihapus
+- Di mesin ini `assessments disabled`, sesuai dengan kondisi sekarang yaitu "setelah memasang driver pihak ketiga / alat, semuanya normal"
 
-### A.4 判据与边界
+### A.4 Kriteria dan Batasannya
 
-- ★ **「已损坏，应移到废纸篓」≠ 真损坏**：多半是 Gatekeeper 拦 + `quarantine` 属性。
-  先摘属性：`xattr -d com.apple.quarantine /Applications/xxx.app`，**不行再动 `spctl`**
-- ★ **关 Gatekeeper 不会让 kext 加载成功** —— kext 看的是 **`SecureBootModel` / SIP / 签名**（见 §1、
-  `nvidia-driver.md` §8），两套机制别混
-- ★ 关掉后系统**不再校验任何下载的 App** ⇒ 与 §7 同一条纪律：**只在明确知道要装什么的时候开，装完考虑 `--global-enable` 恢复**
+- ★ **"is damaged and should be moved to the Trash" ≠ benar-benar rusak**: kemungkinan besar Gatekeeper mencegat + atribut `quarantine`.
+  Pertama sekali cabut atributnya: `xattr -d com.apple.quarantine /Applications/xxx.app`, **jika tidak berhasil baru sentuh `spctl`**
+- ★ **Menonaktifkan Gatekeeper tidak akan membuat kext berhasil dimuat** — kext melihat **`SecureBootModel` / SIP / tanda tangan** (lihat §1,
+  `nvidia-driver.md` §8), jangan campur dua mekanisme ini
+- ★ Setelah dinonaktifkan, sistem **tidak lagi memvalidasi App hasil unduhan apa pun** ⇒ disiplin yang sama dengan §7: **haktifkan hanya saat Anda benar-benar tahu apa yang akan dipasang, dan setelah selesai pertimbangkan `--global-enable` untuk memulihkannya**

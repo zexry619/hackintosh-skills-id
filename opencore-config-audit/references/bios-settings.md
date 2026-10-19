@@ -1,64 +1,64 @@
-# BIOS / UEFI 设置审查
+# BIOS / UEFI pengaturan audit
 
-> ★ **更早一步**：**配机 / 换件之前**先看 `laobamac/SimpleBuyersGuide`《黑苹果硬件避坑指南》
-> —— 明确列出**不应购买**的 CPU / GPU / 主板芯片组 / SSD / 网卡 / 无线卡等。索引见 `laobamac-toolkit.md` §3。
+> ★ **Satu langkah lebih awal**: **sebelum merakit / mengganti komponen**, lihat dulu `laobamac/SimpleBuyersGuide` "Panduan Hardware untuk Hindari Jebakan Hackintosh"
+> —— daftar lengkap komponen **yang tidak boleh dibeli**: CPU / GPU / chipset motherboard / SSD / kartu jaringan / kartu nirkabel, dll. Indeks ada di `laobamac-toolkit.md` §3.
 
-> **三个来源，优先级从高到低：**
-> 1. **OpenCore 官方文档**（`Docs/Configuration.pdf` 的 troubleshooting 检查清单）—— 权威，但只列「会拦住引导」的项
-> 2. **Dortania OpenCore Install Guide**（社区事实标准）—— 官方没写的它也写了，分 Intel / AMD
-> 3. **社区实战补充**（VMD、Speed Shift 等）—— 官方**完全没提**，但踩到就装不上
+> **Tiga sumber, dari prioritas tertinggi ke terendah:**
+> 1. **Dokumentasi resmi OpenCore** (checklist troubleshooting di `Docs/Configuration.pdf`) — otoritatif, hanya mencantumkan item yang **menghambat boot**
+> 2. **Dortania OpenCore Install Guide** (de facto standar komunitas) — menuliskan yang tidak ditulis dokumen resmi, dipisahkan Intel / AMD
+> 3. **Tambahan dari pengalaman lapangan komunitas** (VMD, Speed Shift, dll.) — **sama sekali tidak disebut** dokumen resmi, tapi kalau kena, sistem tidak bisa diinstal
 >
-> ⚠️ 三份都不完整，**要合起来看**。本文第 3 节把它们合并成「必须关 / 必须开 / 看情况」三类。
+> ⚠️ Ketiganya tidak lengkap, **harus dibaca digabung**. Bagian 3 dokumen ini menggabungkannya menjadi tiga kategori: "wajib dimatikan / wajib diaktifkan / tergantung kondisi".
 
 ---
 
-## 0. 先说方法：BIOS 审查怎么做
+## 0. Awalnya: cara melakukan audit BIOS
 
-**不要**一上来就把 BIOS 所有选项翻一遍（几百项，且各厂商命名不同）。按这个顺序：
+**Jangan** langsung membalik-balik semua opsi BIOS (ratusan, dan tiap vendor memakai nama berbeda). Ikuti urutan ini:
 
-1. **先跑 Windows 审查脚本**（`scripts/bios-audit.ps1`）—— 它能在 Windows 里**直接判定**一批项，
-   把「肯定有问题」的先挑出来，剩下的才需要人工进 BIOS 核
-2. **进 BIOS 核「必须关/必须开」两类**（§3）—— 用 §7 的检查表逐条打勾
-3. **BIOS 里找不到某项**时，看 §8 的厂商命名对照表（同一设置各家叫法不同）
-4. **找不到、又确实需要**时 → 走 §5 的隐藏选项路线（UEFITool + IFR-Extractor），
-   或用 §3 表里「对应的 OpenCore 兜底」那一列绕过
+1. **Jalankan dulu skrip audit di Windows** (`scripts/bios-audit.ps1`) — skrip ini bisa **memastikan secara langsung** sekumpulan item di dalam Windows,
+   ambil dulu yang "pasti bermasalah", sisanya baru perlu diperiksa manual di BIOS
+2. **Masuk BIOS dan periksa dua kategori "wajib dimatikan/wajib diaktifkan"** (§3) — centang satu per satu memakai checklist di §7
+3. Kalau **suatu item tidak ditemukan di BIOS**, lihat tabel pemetaan nama vendor di §8 (setiap vendor punya nama berbeda untuk pengaturan yang sama)
+4. Kalau **tidak ditemukan padahal memang dibutuhkan** → gunakan jalur opsi tersembunyi di §5 (UEFITool + IFR-Extractor),
+   atau lewati lewat kolom "OpenCore sebagai cadangan" di tabel §3
 
-> ★ **判据优先级**：**BIOS 层能解决的一律在 BIOS 层解决**，别用 OpenCore 的 quirk 兜底。
-> 官方原话（关于 CFG Lock）：*"this option should be avoided whenever possible"*（指 `AppleXcpmCfgLock`）。
+> ★ **Prioritas kriteria**: **apa pun yang bisa diselesaikan di level BIOS, selesaikan di level BIOS**, jangan pakai quirk OpenCore sebagai cadangan.
+> Kutipan resmi (tentang CFG Lock): *"this option should be avoided whenever possible"* (merujuk `AppleXcpmCfgLock`).
 
 ---
 
-## 1. 官方清单（OpenCorePkg `Configuration.pdf` 原文）
+## 1. Checklist resmi (teks asli OpenCorePkg `Configuration.pdf`)
 
-官方把它放在 troubleshooting 的检查清单里，**9 条**：
+Secara resmi, ini diletakkan di checklist troubleshooting, **9 item**:
 
-| # | 官方原文要点 | 方向 |
+| # | Poin utama teks resmi | Arah |
 |---|---|---|
-| 1 | Most up-to-date UEFI firmware | **升级固件** |
-| 2 | `Fast Boot` and `Hardware Fast Boot` disabled | **关** |
-| 3 | `Above 4G Decoding` or similar enabled —— ★ 但 **ASUS WS-X299-PRO** 上该选项会**起反效果、必须关**；其它主板未见此问题，出现「莫名其妙引导失败」时**第一个查它** | **开**（例外：关） |
-| 4 | `DisableIoMapper` quirk enabled, **or** `VT-d` disabled in firmware, **or** ACPI DMAR deleted（三选一） | **关**（或 quirk 兜底） |
-| 5 | No `slide` boot argument present | **别加** |
-| 6 | `CFG Lock`（MSR `0xE2` write protection）disabled —— 详见 `ControlMsrE2` | **关** |
-| 7 | `CSM`（Compatibility Support Module）disabled —— NVIDIA 6xx / AMD 2xx 及更老需先刷 GOP ROM | **关** |
-| 8 | `EHCI/XHCI Hand-off` enabled —— **仅当**不拔 USB 设备就卡住引导时才需要 | **开**（条件） |
-| 9 | `VT-x`、`Hyper Threading`、`Execute Disable Bit` enabled | **开** |
-| 附 | 有时 `Thunderbolt`、`Intel SGX`、`Intel Platform Trust` 可能需要禁用 | **关**（按需） |
+| 1 | Most up-to-date UEFI firmware | **Upgrade firmware** |
+| 2 | `Fast Boot` and `Hardware Fast Boot` disabled | **Matikan** |
+| 3 | `Above 4G Decoding` or similar enabled —— ★ tapi di **ASUS WS-X299-PRO** opsi ini **berdampak buruk, wajib dimatikan**; motherboard lain tidak menunjukkan masalah ini, saat muncul "kegagalan boot yang tidak masuk akal" maka **periksa ini pertama** | **Aktifkan** (kecuali: matikan) |
+| 4 | `DisableIoMapper` quirk enabled, **or** `VT-d` disabled in firmware, **or** ACPI DMAR deleted (pilih salah satu) | **Matikan** (atau pakai quirk sebagai cadangan) |
+| 5 | No `slide` boot argument present | **Jangan tambahkan** |
+| 6 | `CFG Lock` (MSR `0xE2` write protection) disabled —— lihat detail di `ControlMsrE2` | **Matikan** |
+| 7 | `CSM` (Compatibility Support Module) disabled —— NVIDIA 6xx / AMD 2xx dan yang lebih tua perlu flash GOP ROM dulu | **Matikan** |
+| 8 | `EHCI/XHCI Hand-off` enabled —— **hanya perlu** jika boot macet saat perangkat USB dicabut | **Aktifkan** (bersyarat) |
+| 9 | `VT-x`, `Hyper Threading`, `Execute Disable Bit` enabled | **Aktifkan** |
+| Lampiran | Kadang `Thunderbolt`, `Intel SGX`, `Intel Platform Trust` mungkin perlu dinonaktifkan | **Matikan** (sesuai kebutuhan) |
 
-> 官方还提到：调试**睡眠**问题时，可临时关掉 Power Nap 与自动断电（`pmset` 三连），
-> 但那是 macOS 侧、不是 BIOS。
+> Secara resmi juga disebutkan: saat menelusuri masalah **sleep**, Power Nap dan auto-power-off bisa dimatikan sementara (`pmset` tiga paket),
+> tapi itu di sisi macOS, bukan BIOS.
 
 ---
 
-## 2. Dortania 清单（社区事实标准，分平台）
+## 2. Checklist Dortania (de facto standar komunitas, per platform)
 
-### 2.1 Intel（桌面 / 笔记本 / HEDT 通用）
+### 2.1 Intel (desktop / laptop / HEDT serbaguna)
 
-> 原文前置说明：*"Most of these options may not be present in your firmware, we recommend matching up as closely as possible but don't be too concerned if many of these options are not available in your BIOS"*
+> Catatan pendahuluan teks asli: *"Most of these options may not be present in your firmware, we recommend matching up as closely as possible but don't be too concerned if many of these options are not available in your BIOS"*
 
 **Disable**
 
-| 设置 | 备注（Dortania 原文） |
+| Pengaturan | Catatan (teks asli Dortania) |
 |---|---|
 | Fast Boot | |
 | Secure Boot | |
@@ -66,245 +66,245 @@
 | Parallel Port | |
 | VT-d | *"can be enabled if you set `DisableIoMapper` to YES"* |
 | Compatibility Support Module (CSM) | ★ **"Must be off in most cases, GPU errors/stalls like `gIO` are common when this option is enabled"** |
-| Thunderbolt | 安装期（未正确配置时 TB 会出问题） |
+| Thunderbolt | Saat instalasi (TB bermasalah bila belum dikonfigurasi benar) |
 | Intel SGX | |
 | Intel Platform Trust | |
 | **CFG Lock (MSR 0xE2 write protection)** | ★★ **"This must be off, if you can't find the option then enable `AppleXcpmCfgLock` under Kernel → Quirks. Your hack will not boot with CFG-Lock enabled"** |
 
 **Enable**
 
-| 设置 | 备注 |
+| Pengaturan | Catatan |
 |---|---|
 | VT-x | |
 | **Above 4G Decoding** | ★ *"2020+ BIOS Notes: When enabling Above4G, Resizable BAR Support may become available on some Z490 and newer motherboards. Please ensure that `Booter → Quirks → ResizeAppleGpuBars` is set to `0` if this is enabled."* |
 | Hyper-Threading | |
 | Execute Disable Bit | |
 | EHCI/XHCI Hand-off | |
-| OS type: **Windows 8.1/10 UEFI Mode**（部分主板要选 **Other OS**） | |
-| DVMT Pre-Allocated (iGPU Memory): **64MB 或更高** | 有核显时 |
+| OS type: **Windows 8.1/10 UEFI Mode** (sebagian motherboard harus memilih **Other OS**) | |
+| DVMT Pre-Allocated (iGPU Memory): **64MB atau lebih** | Saat ada iGPU |
 | SATA Mode: **AHCI** | |
 
-### 2.2 AMD（Zen）
+### 2.2 AMD (Zen)
 
-**Disable**：Fast Boot、Secure Boot、Serial/COM Port、Parallel Port、**CSM**、**IOMMU**
-> ★ 特殊：**3990X** 有 128 线程，macOS 内核只支持 64 ⇒ 必须**关超线程**（Dortania 明确建议）。
+**Disable**: Fast Boot, Secure Boot, Serial/COM Port, Parallel Port, **CSM**, **IOMMU**
+> ★ Khusus: **3990X** punya 128 thread, kernel macOS hanya mendukung 64 ⇒ **wajib mematikan hyper-threading** (Dortania secara eksplisit menyarankan).
 
-**Enable**：
+**Enable**:
 - **Above 4G Decoding** —— ★ **"This must be on, if you can't find the option then add `npci=0x3000` to boot-args. Do not have both this option and npci enabled at the same time."**
-  - ★ **Gigabyte/Aorus 或 ASRock 主板**：开它可能**弄坏某些驱动（如网卡）**或让**其它系统启动失败** ⇒ 那就关掉它、改用 `npci`
-  - 2020+ 备注同 Intel（ReBAR 出现后 `ResizeAppleGpuBars=0`）
+  - ★ **Motherboard Gigabyte/Aorus atau ASRock**: mengaktifkannya bisa **merusak sebagian driver (misalnya kartu jaringan)** atau membuat **sistem lain gagal boot** ⇒ matikan saja dan pakai `npci`
+  - Catatan 2020+ sama dengan Intel (setelah ReBAR muncul, `ResizeAppleGpuBars=0`)
 - EHCI/XHCI Hand-off
-- OS type: Windows 8.1/10 UEFI Mode（或 Other OS）
+- OS type: Windows 8.1/10 UEFI Mode (atau Other OS)
 - SATA Mode: AHCI
 
 ---
 
-## 3. ★★ 合并后的三类清单（**这张表是核心**）
+## 3. ★★ Tiga daftar gabungan (**tabel ini adalah inti**)
 
-### 3.1 必须关闭
+### 3.1 Wajib dimatikan
 
-| 设置 | 为什么必须关 | 不关的后果 | OpenCore 兜底 |
+| Pengaturan | Mengapa wajib dimatikan | Akibat jika tidak dimatikan | OpenCore sebagai cadangan |
 |---|---|---|---|
-| **Fast Boot / Ultra Fast Boot / MSI Fast Boot** | 跳过设备初始化 | **进不去选择器**、USB 键鼠没反应 | ❌ 无 |
-| **Secure Boot** | macOS 不认非 Apple 签名 | 第三方 kext 加载失败 | ⚠️ 部分靠 `SecureBootModel=Disabled`，但 BIOS 侧仍建议关 |
-| **CSM（Compatibility Support Module）** | 引入 legacy option ROM，GOP 走不通 | **GPU 报错 / 卡在 `gIO` / 分辨率异常** | ❌ 无 |
-| **CFG Lock（MSR 0xE2 write protection）** | macOS 原生电源管理要写 MSR `0xE2` | ★★ **"Your hack will not boot"**（Dortania 原文） | ⚠️ `Kernel → Quirks → AppleXcpmCfgLock = true`（**官方说尽量别用**） |
-| **★ Intel VMD / Volume Management Device** | **macOS 没有 VMD 驱动** | ★★ **装系统时「找不到任何驱动器」**；已装好的系统看不到盘 | ❌ 无（**官方与 Dortania 都没写，纯社区经验**） |
-| **Intel RST / SATA RAID Mode** | macOS 只认 AHCI / NVMe 原生，不认 RST 假 RAID | 看不到硬盘 | ❌ 无 |
-| **Serial / COM Port** | 占 I/O、老平台可能冲突 | 少数情况卡引导 | ❌ 无 |
-| **Parallel Port** | 同上 | | ❌ 无 |
-| **Intel SGX** | macOS 无驱动 | 一般无害，官方仍建议关 | ❌ 无 |
-| **Intel Platform Trust / PTT / fTPM** | macOS 不需要 TPM | 一般无害 | ❌ 无 |
-| **VT-d / IOMMU**（**可以开，但要知道代价**） | 与 XNU 的 IOMapper 冲突 | 网卡/无线反复 `link up/link down`、发现不了网络 | ✅ ★ **官方首选是开 `DisableIoMapper=true`**（*"a preferred alternative to … disabling VT-d in firmware preferences, which does not obstruct VT-d support in other systems"*） |
-| **Thunderbolt**（**仅安装期**） | 未配置时可能出问题 | 安装期异常 | — 装好后按需开 |
-| **ErP / EuP Ready** | 关机后切断待机供电 | 关机不断电、USB 唤醒异常（**看情况**，不是必须） | ❌ 无 |
-| **Wake on LAN / 网络唤醒** | 睡眠被网络事件唤醒 | 睡眠不稳 | ❌ 无 |
-| **Network Stack / PXE Boot** | POST 阶段要初始化网络 | 开机变慢 | ❌ 无 |
+| **Fast Boot / Ultra Fast Boot / MSI Fast Boot** | Melewati inisialisasi perangkat | **Tidak bisa masuk ke picker**, keyboard/mouse USB tidak merespons | ❌ Tidak ada |
+| **Secure Boot** | macOS tidak menerima tanda tangan non-Apple | Kext pihak ketiga gagal dimuat | ⚠️ Sebagian bergantung pada `SecureBootModel=Disabled`, tapi tetap disarankan dimatikan di sisi BIOS |
+| **CSM (Compatibility Support Module)** | Memasukkan legacy option ROM, GOP tidak berjalan | **GPU error / macet di `gIO` / resolusi tidak normal** | ❌ Tidak ada |
+| **CFG Lock (MSR 0xE2 write protection)** | Native power management macOS harus menulis MSR `0xE2` | ★★ **"Your hack will not boot"** (teks asli Dortania) | ⚠️ `Kernel → Quirks → AppleXcpmCfgLock = true` (**resmi menyatakan sebisa mungkin jangan dipakai**) |
+| **★ Intel VMD / Volume Management Device** | **macOS tidak punya driver VMD** | ★★ **Saat instalasi "tidak menemukan disk/drive apa pun"**; sistem yang sudah terpasang tidak melihat disk | ❌ Tidak ada (**resmi maupun Dortania tidak menyebut, murni pengalaman komunitas**) |
+| **Intel RST / SATA RAID Mode** | macOS hanya mengenali AHCI / NVMe native, tidak(fake) RAID RST | Tidak melihat disk | ❌ Tidak ada |
+| **Serial / COM Port** | Mengambil I/O, platform lama bisa konflik | Sedikit kasus macet saat boot | ❌ Tidak ada |
+| **Parallel Port** | Sama seperti di atas | | ❌ Tidak ada |
+| **Intel SGX** | macOS tidak punya driver | Umumnya tidak berbahaya, resmi tetap menyarankan dimatikan | ❌ Tidak ada |
+| **Intel Platform Trust / PTT / fTPM** | macOS tidak butuh TPM | Umumnya tidak berbahaya | ❌ Tidak ada |
+| **VT-d / IOMMU** (**boleh diaktifkan, tapi tahu konsekuensinya**) | Berkonflik dengan IOMapper XNU | Kartu jaringan/nirkabel berulang `link up/link down`, jaringan tidak terdeteksi | ✅ ★ **Pilihan resmi adalah mengaktifkan `DisableIoMapper=true`** (*"a preferred alternative to … disabling VT-d in firmware preferences, which does not obstruct VT-d support in other systems"*) |
+| **Thunderbolt** (**hanya saat instalasi**) | Bisa bermasalah bila belum dikonfigurasi | Abnormal saat instalasi | — Nyalakan sesuai kebutuhan setelah terpasang |
+| **ErP / EuP Ready** | Memotong daya siaga setelah shutdown | Mematikan daya tidak terputus, USB wake tidak normal (**tergantung kondisi**, bukan wajib) | ❌ Tidak ada |
+| **Wake on LAN / bangun via jaringan** | Tidur terbangun oleh peristiwa jaringan | Sleep tidak stabil | ❌ Tidak ada |
+| **Network Stack / PXE Boot** | Jaringan harus diinisialisasi pada tahap POST | Boot jadi lebih lambat | ❌ Tidak ada |
 
-### 3.2 必须开启
+### 3.2 Wajib diaktifkan
 
-| 设置 | 为什么必须开 | 不开的后果 | 备注 |
+| Pengaturan | Mengapa wajib diaktifkan | Akibat jika tidak diaktifkan | Catatan |
 |---|---|---|---|
-| **VT-x**（Intel）/ **SVM Mode**（AMD） | 虚拟化 | Docker/VM 用不了 | |
-| **Above 4G Decoding** | 让大 BAR 能被映射到 4G 以上 | 大 BAR 显卡驱动起不来 | ★ 官方点名例外：**ASUS WS-X299-PRO 必须关** |
-| **Hyper-Threading** | 性能 | 线程数减半 | ★ 例外：**3990X 必须关**（macOS 内核 64 线程上限） |
-| **Execute Disable Bit**（XD / NX） | macOS 要求 | 可能起不来 | |
-| **EHCI/XHCI Hand-off** | USB 控制权交接给 OS | 安装期 USB 键鼠 / 安装介质没反应 | 官方：**仅当不拔 USB 就卡引导时**才需要 |
-| **OS Type = Windows 8.1/10 UEFI Mode**（或 **Other OS**） | 让固件按 UEFI 方式初始化 | 可能退回 legacy 路径 | 部分主板必须选 "Other OS" |
-| **SATA Mode = AHCI** | macOS 只认 AHCI | 看不到 SATA 盘 | |
-| **DVMT Pre-Allocated ≥ 64MB** | 给核显足够显存 | 核显花屏 / 黑屏 | **有核显时**才需要 |
-| **★ Intel Speed Shift Technology** | macOS 用 HWP 调度 | ★★ **`wrmsr(0x770,1)` #GP panic**（本机实测硬前提） | **官方与 Dortania 都没写**，社区经验 |
-| **Resizable BAR / Re-Size BAR Support** | 大 BAR 驱动路线需要 | 大 BAR 驱动拿不到 BAR | **看情况**，见 §3.3 |
+| **VT-x** (Intel) / **SVM Mode** (AMD) | Virtualisasi | Docker/VM tidak bisa dipakai | |
+| **Above 4G Decoding** | Membuat BAR besar bisa dipetakan di atas 4G | Driver GPU dengan BAR besar tidak bisa berjalan | ★ pengecualian yang disebut resmi: **ASUS WS-X299-PRO wajib dimatikan** |
+| **Hyper-Threading** | Performa | Jumlah thread berkurang separuh | ★ pengecualian: **3990X wajib dimatikan** (kernel macOS dibatasi 64 thread) |
+| **Execute Disable Bit** (XD / NX) | Diperlukan macOS | Mungkin tidak bisa boot | |
+| **EHCI/XHCI Hand-off** | Kendali USB diserahkan ke OS | Keyboard/mouse USB dan media instalasi tidak merespons saat instalasi | Resmi: **hanya perlu jika boot macet saat perangkat USB tidak dicabut** |
+| **OS Type = Windows 8.1/10 UEFI Mode** (atau **Other OS**) | Membuat firmware melakukan inisialisasi dengan cara UEFI | Mungkin mundur ke jalur legacy | Sebagian motherboard wajib memilih "Other OS" |
+| **SATA Mode = AHCI** | macOS hanya mengenali AHCI | Tidak melihat disk SATA | |
+| **DVMT Pre-Allocated ≥ 64MB** | Memberi iGPU memori yang cukup | Artefak iGPU / layar hitam | **Hanya perlu saat ada iGPU** |
+| **★ Intel Speed Shift Technology** | macOS memakai scheduling HWP | ★★ **`wrmsr(0x770,1)` #GP panic** (prasyarat keras hasil uji di mesin ini) | **Resmi maupun Dortania tidak menyebut**, pengalaman komunitas |
+| **Resizable BAR / Re-Size BAR Support** | Diperlukan untuk jalur driver BAR besar | Driver BAR besar tidak mendapatkan BAR | **Tergantung kondisi**, lihat §3.3 |
 
-### 3.3 看情况（Conditional）——**这些不需要一律关/开**
+### 3.3 Tergantung kondisi (Conditional) —— **tidak perlu semuanya dimatikan/diaktifkan**
 
-| 设置 | 什么时候开 | 什么时候关 |
+| Pengaturan | Kapan diaktifkan | Kapan dimatikan |
 |---|---|---|
-| **Re-Size BAR Support** | 你的驱动/卡需要大 BAR（本机 NVIDIA 驱动就是），且 `ResizeGpuBars` 已配好 | 驱动版本或卡不支持大 BAR 时；出现黑屏/起不来时先试关 |
-| **XMP / DOCP / EXPO** | 内存超频档，**稳定就开着** | 出现内存相关不稳定、睡眠异常时关掉回 JEDEC |
-| **Internal Graphics / iGPU** | 核显有驱动、要用（如 `WhateverGreen` + 核显硬解） | 核显无驱动 ⇒ **关掉更干净**（或留开但加 `-wegnoigpu` 藏起来） |
-| **Thunderbolt** | 装好系统、TB 设备配置好之后 | 安装期（见 §3.1） |
-| **Legacy USB Support** | **装系统期间**（U 盘 / USB 键鼠） | 装好后可关，能省一点 POST 时间 |
-| **Above 4G Decoding** | 绝大多数主板 | **ASUS WS-X299-PRO**（官方点名）；AMD 的 Gigabyte/Aorus/ASRock 上若坏驱动 ⇒ 关它 + 改 `npci=0x3000` |
-| **CSM** | 只有「NVIDIA 6xx / AMD 2xx 及更老、且 GOP ROM 未刷」时才临时需要 | **其它一切情况都关**（默认答案就是关） |
-| **Global C-state Control**（AMD） | 一般开着 | 出现待机不稳定时试关 |
-| **Power Supply Idle Control**（AMD） | 一般 `Auto` | 某些 Ryzen 待机重启 ⇒ 试 `Typical Current Idle` |
-| **★ E 核（Efficient Core）数量**（Intel 12 代+） | **想让 macOS 用上 4 个小核** ⇒ `All`（**必须**同时 `ProvideCurrentCpuInfo=true` + `CpuTopologyRebuild.kext`） | **求稳** ⇒ 设 **`0`**（关小核，macOS 只见 P 核）⇒ 详见 `e-cores.md`。★ 无论开还是关，**`Active Performance Cores` 都留 `All`、HT 留 `Enabled`** |
-| **Multi-Monitor / Primary Display** | 取决于用哪块 GPU 输出 | — |
-| **DMA Protection / Kernel DMA Protection** | Win11 需要 | 与 macOS 无关，但**可能干扰**第三方驱动，出问题先试关 |
+| **Re-Size BAR Support** | Driver/kartu Anda butuh BAR besar (driver NVIDIA di mesin ini begitu), dan `ResizeGpuBars` sudah dikonfigurasi | Saat versi driver atau kartu tidak mendukung BAR besar; saat muncul layar hitam/tidak bisa boot, coba matikan dulu |
+| **XMP / DOCP / EXPO** | Profil overclock memori, **kalau stabil biarkan aktif** | Saat muncul ketidakstabilan terkait memori atau sleep tidak normal, matikan dan kembali ke JEDEC |
+| **Internal Graphics / iGPU** | iGPU punya driver dan mau dipakai (misalnya `WhateverGreen` + hard decode iGPU) | iGPU tanpa driver ⇒ **mematikannya lebih bersih** (atau biarkan aktif tapi sembunyikan dengan `-wegnoigpu`) |
+| **Thunderbolt** | Setelah sistem terpasang dan perangkat TB dikonfigurasi | Saat instalasi (lihat §3.1) |
+| **Legacy USB Support** | **Selama instalasi** (U disk / keyboard/mouse USB) | Setelah terpasang boleh dimatikan, menghemat sedikit waktu POST |
+| **Above 4G Decoding** | Hampir semua motherboard | **ASUS WS-X299-PRO** (resmi menyebutnya); pada Gigabyte/Aorus/ASRock AMD, jika driver rusak ⇒ matikan dan ganti `npci=0x3000` |
+| **CSM** | Hanya saat "NVIDIA 6xx / AMD 2xx dan yang lebih tua, serta GOP ROM belum di-flash" | **Semua kondisi lain dimatikan** (jawaban defaultnya adalah dimatikan) |
+| **Global C-state Control** (AMD) | Umumnya aktif | Saat standby tidak stabil, coba matikan |
+| **Power Supply Idle Control** (AMD) | Umumnya `Auto` | Beberapa Ryzen restart saat standby ⇒ coba `Typical Current Idle` |
+| **★ Jumlah E core (Efficient Core)** (Intel gen 12+) | **Ingin macOS memakai 4 core kecil** ⇒ `All` (**wajib** sekaligus `ProvideCurrentCpuInfo=true` + `CpuTopologyRebuild.kext`) | **Ingin aman** ⇒ set **`0`** (matikan core kecil, macOS hanya melihat P core) ⇒ lihat detail di `e-cores.md`. ★ Baik dinyalakan maupun dimatikan, **`Active Performance Cores` biarkan `All`, HT biarkan `Enabled`** |
+| **Multi-Monitor / Primary Display** | Bergantung pada GPU mana yang dipakai untuk output | — |
+| **DMA Protection / Kernel DMA Protection** | Dibutuhkan Win11 | Tidak terkait macOS, tapi **bisa mengganggu** driver pihak ketiga, kalau ada masalah coba matikan dulu |
 
 ---
 
-## 4. 官方与 Dortania **都没写**、但实际很关键的项
+## 4. Item yang **tidak ditulis** resmi maupun Dortania, tapi sebenarnya sangat penting
 
-| 项 | 为什么关键 | 怎么知道要不要动 |
+| Item | Mengapa penting | Cara tahu apakah perlu diubah |
 |---|---|---|
-| **★ VMD（Intel Volume Management Device）** | 11 代 Intel 起很多主板**默认开启**。它把 NVMe 挂在一个虚拟控制器后面，**macOS 没有对应驱动** ⇒ 装系统时「找不到驱动器」、系统内看不到盘 | BIOS 里搜 `VMD` / `Volume Management Device` / `VMD Setup Menu`；Windows 侧见 §6 脚本的存储控制器检查 |
-| **★ Intel Speed Shift Technology** | macOS 走 HWP 需要它。**关掉会 `wrmsr(0x770,1)` #GP panic**（本机实测） | BIOS 里搜 `Speed Shift`；Windows 侧看 `CPUID.06H:EAX` bit6–11（需工具） |
-| **Re-Size BAR + Above 4G 的组合** | ReBAR 依赖 Above 4G。只开 ReBAR 不开 Above 4G 会出怪问题 | 两个一起看；配 `ResizeGpuBars` / `ResizeAppleGpuBars` |
-| **XMP 与内存稳定性** | XMP 档位在 macOS 下不一定稳（尤其 4 条满插） | Windows 里对比 `Speed` vs `ConfiguredClockSpeed`（§6 脚本） |
-| **ErP / EuP** | 关机行为、USB 供电 | 只在你关心关机/唤醒行为时动 |
-| **TPM / PTT / fTPM** | macOS 用不到；有些主板开 PTT 会多出设备 | Windows 里 `Get-Tpm` 看 `TpmPresent`（§6 脚本） |
-| **固件版本** | 官方清单第 1 条就是「用最新 UEFI」 | 记下当前版本，去主板官网比对 |
+| **★ VMD (Intel Volume Management Device)** | Mulai Intel gen 11 banyak motherboard **aktif secara default**. Ini memasang NVMe di belakang pengendali virtual, **macOS tidak punya driver yang sesuai** ⇒ saat instalasi "tidak menemukan drive", di dalam sistem tidak melihat disk | Cari `VMD` / `Volume Management Device` / `VMD Setup Menu` di BIOS; di sisi Windows lihat pemeriksaan storage controller di skrip §6 |
+| **★ Intel Speed Shift Technology** | macOS membutuhkan ini untuk memakai HWP. **Mematikannya memicu `wrmsr(0x770,1)` #GP panic** (teruji di mesin ini) | Cari `Speed Shift` di BIOS; di sisi Windows lihat `CPUID.06H:EAX` bit6–11 (perlu alat) |
+| **Kombinasi Re-Size BAR + Above 4G** | ReBAR bergantung pada Above 4G. Hanya menyalakan ReBAR tanpa Above 4G menimbulkan masalah aneh | Periksa keduanya sekaligus; konfigurasi `ResizeGpuBars` / `ResizeAppleGpuBars` |
+| **XMP dan kestabilan memori** | Profil XMP belum tentu stabil di macOS (terutama 4 slot terisi penuh) | Bandingkan `Speed` vs `ConfiguredClockSpeed` di Windows (skrip §6) |
+| **ErP / EuP** | Perilaku shutdown, daya USB | Ubah hanya bila Anda peduli pada perilaku shutdown/wake |
+| **TPM / PTT / fTPM** | Tidak dipakai macOS; sebagian motherboard dengan PTT aktif menambah perangkat | Di Windows, `Get-Tpm` untuk melihat `TpmPresent` (skrip §6) |
+| **Versi firmware** | Item pertama checklist resmi adalah "gunakan UEFI terbaru" | Catat versi saat ini, bandingkan di situs resmi motherboard |
 
 ---
 
-## 5. CFG Lock 专题（官方展开最细的一项）
+## 5. Topik CFG Lock (item yang paling detail di-expand secara resmi)
 
-**CFG Lock = `PKG_CST_CONFIG_CONTROL (0xE2)` MSR 的写保护。** 开着 ⇒ macOS 原生电源管理写不进 MSR ⇒ **不开机**。
+**CFG Lock = write protection pada MSR `PKG_CST_CONFIG_CONTROL (0xE2)`.** Jika aktif ⇒ native power management macOS tidak bisa menulis ke MSR ⇒ **tidak bisa boot**.
 
-### 5.1 三种查法
+### 5.1 Tiga cara untuk memeriksanya
 
-| 环境 | 怎么做 | 判据 |
+| Lingkungan | Cara | Kriteria |
 |---|---|---|
-| **OpenCore 引导界面** | 官方自带 **`ControlMsrE2.efi`**（在 `EFI/OC/Tools/`，选择器里按空格显示工具）。也可用社区的 `VerifyMsrE2` / `CFGLOCK` | 输出 `MSR 0xE2 is LOCKED` / `This firmware has UNLOCKED MSR` |
-| **macOS** | `sudo wrmsr 0xE2 0x0`（需 `msr-tools`） | 报 `cannot set MSR 0x000000e2` ⇒ **是锁着的** |
-| **Windows** | ⚠️ 读 MSR 需要特权工具（RWEverything / HWiNFO 等），**PowerShell 读不了** | 见 §6「无法直接读取」一节 |
+| **Layar boot OpenCore** | OpenCore menyediakan **`ControlMsrE2.efi`** (di `EFI/OC/Tools/`, tekan spasi di picker untuk menampilkan tools). Bisa juga memakai `VerifyMsrE2` / `CFGLOCK` versi komunitas | Keluaran `MSR 0xE2 is LOCKED` / `This firmware has UNLOCKED MSR` |
+| **macOS** | `sudo wrmsr 0xE2 0x0` (perlu `msr-tools`) | Muncul `cannot set MSR 0x000000e2` ⇒ **terkunci** |
+| **Windows** | ⚠️ Pembacaan MSR butuh alat dengan hak istimewa (RWEverything / HWiNFO, dll.), **PowerShell tidak bisa membacanya** | Lihat bagian "tidak bisa dibaca langsung" di §6 |
 
-> ★ 官方提醒：**某些固件只在部分核心上锁这个寄存器** —— 所以只看一个核的结果可能不准。
+> ★ Pengingat resmi: **sebagian firmware hanya mengunci register ini pada core tertentu** —— jadi hasil dari satu core saja bisa tidak akurat.
 
-### 5.2 BIOS 里找不到 CFG Lock？走隐藏选项（官方给的方法）
+### 5.2 Tidak menemukan CFG Lock di BIOS? Gunakan opsi tersembunyi (metode dari resmi)
 
-适用于 **APTIO 固件**（AMI）：
+Berlaku untuk firmware **APTIO** (AMI):
 
-1. 下载 **UEFITool**（`LongSoft/UEFITool`）与 **IFR-Extractor**（`LongSoft/Universal-IFR-Extractor`）
-2. 用 UEFITool 打开固件镜像，搜 **`CFG Lock`** unicode 字符串。
-   **找不到 ⇒ 该固件可能没有这个选项，流程到此为止**
-3. 用 UEFITool 的 **Extract Body** 导出它所在的 `Setup.bin`（PE32 Image Section）
-4. 对导出的文件跑 IFR-Extractor：`./ifrextract Setup.bin Setup.txt`
-5. 在 `Setup.txt` 里找 **`CFG Lock, VarStoreInfo (VarOffset/VarName)`** —— 拿到 **VarStore GUID** 与 **offset**
-6. 用该 GUID + offset 直接改这个 UEFI 变量（或在 OpenCore 里用 `NVRAM > Add` 写），再重启验证
+1. Unduh **UEFITool** (`LongSoft/UEFITool`) dan **IFR-Extractor** (`LongSoft/Universal-IFR-Extractor`)
+2. Buka citra firmware dengan UEFITool, cari string unicode **`CFG Lock`**.
+   **Tidak ditemukan ⇒ firmware ini mungkin tidak punya opsi tersebut, proses berhenti di sini**
+3. Pakai **Extract Body** milik UEFITool untuk mengekspor `Setup.bin` tempat ia berada (PE32 Image Section)
+4. Jalankan IFR-Extractor pada file hasil ekspor: `./ifrextract Setup.bin Setup.txt`
+5. Cari di dalam `Setup.txt` **`CFG Lock, VarStoreInfo (VarOffset/VarName)`** — dapatkan **VarStore GUID** dan **offset**
+6. Ubah UEFI variable tersebut langsung memakai GUID + offset itu (atau tulis lewat `NVRAM > Add` di OpenCore), lalu restart untuk verifikasi
 
-### 5.3 兜底（不推荐，但能用）
+### 5.3 Cadangan (tidak disarankan, tapi bisa dipakai)
 
-`Kernel → Quirks → AppleXcpmCfgLock = true`（新系统）/ `AppleCpuPmCfgLock = true`（老系统，`AppleIntelCPUPowerManagement` 在 macOS 13 起已移除）。
+`Kernel → Quirks → AppleXcpmCfgLock = true` (sistem baru) / `AppleCpuPmCfgLock = true` (sistem lama, `AppleIntelCPUPowerManagement` sudah dihapus sejak macOS 13).
 
-> 官方原话：*"As modern firmware provide a CFG Lock setting … this option should be avoided whenever possible."*
-> 即 **BIOS 能关就关，别用 quirk**。
+> Kutipan resmi: *"As modern firmware provide a CFG Lock setting … this option should be avoided whenever possible."*
+> Artinya **kalau bisa dimatikan di BIOS, matikan di BIOS, jangan pakai quirk**.
 
 ---
 
-## 6. Windows 侧审查工具：`scripts/bios-audit.ps1`
+## 6. Alat audit di sisi Windows: `scripts/bios-audit.ps1`
 
-**为什么要脚本**：BIOS 界面里选项几百个、各厂商命名还不一样，人工核对容易漏。
-这个脚本在 Windows 里**只读**采集，把能判定的直接判定，把不能判定的标出来让你去 BIOS 核。
+**Mengapa perlu skrip**: di antarmuka BIOS ada ratusan opsi, nama tiap vendor juga berbeda, sehingga pemeriksaan manual gampang terlewat.
+Skrip ini hanya **membaca** data di dalam Windows, langsung memastikan yang bisa dipastikan, dan menandai yang tidak bisa dipastikan agar Anda periksa sendiri di BIOS.
 
-### 6.1 怎么跑
+### 6.1 Cara menjalankannya
 
 ```powershell
-# 以【管理员】身份打开 PowerShell（部分项需要提权），然后：
+# Buka PowerShell sebagai [Administrator] (sebagian item butuh elevasi), lalu:
 powershell -ExecutionPolicy Bypass -File .\bios-audit.ps1
 
-# 想同时存报告：
+# Ingin sekaligus menyimpan laporan:
 powershell -ExecutionPolicy Bypass -File .\bios-audit.ps1 -OutFile C:\bios-audit.txt
 ```
 
-> 脚本**纯 ASCII 输出**（避免 PowerShell 5.1 的编码坑），报告里是英文键名 + 判定，对照本文看即可。
+> Skrip menghasilkan output **murni ASCII** (menghindari masalah encoding PowerShell 5.1), di laporan berisi nama key bahasa Inggris + hasil penilaian, cukup dibandingkan dengan dokumen ini.
 
-### 6.2 它**能**判定什么（A 类）
+### 6.2 Apa yang **bisa** dipastikan (kelas A)
 
-| 检查项 | 方法 | 判据 |
+| Item pemeriksaan | Metode | Kriteria |
 |---|---|---|
-| 固件类型（UEFI / Legacy） | `$env:firmware_type` | 必须是 **UEFI** |
-| 启动模式 | `bcdedit` 的 `winload.efi` | 必须是 `.efi` |
-| 系统盘分区样式 | `Get-Disk.PartitionStyle` | **GPT**（配合 UEFI） |
-| **Secure Boot** | `Confirm-SecureBootUEFI` | 期望 **False**（= 已关） |
-| **TPM / PTT / fTPM** | `Get-Tpm.TpmPresent` | 期望 **False**（= BIOS 里已关） |
-| **VT-x / SVM** | `Win32_Processor.VirtualizationFirmwareEnabled` | 期望 **True**（若 Hyper-V 在跑会误报，脚本会一并报 `HypervisorPresent`） |
-| **超线程** | `Cores` vs `LogicalProcessors` | 逻辑 = 2×物理 ⇒ HT 已开 |
-| **XMP / DOCP** | `Speed` vs `ConfiguredClockSpeed` | Configured > JEDEC 默认 ⇒ 超频档生效 |
-| **★ VMD / RST** | `Get-Disk.BusType` + 存储控制器设备名 | 出现 **`RAID`** 总线类型、或控制器名含 `VMD` / `Volume Management Device` / `RST` ⇒ **VMD 开着，必须关** |
-| 存储控制器清单 | `Get-PnpDevice` + PCI 硬件 ID | 列出所有 SCSIAdapter/HDC，便于人工认 |
-| Serial/COM 端口 | `Get-CimInstance Win32_SerialPort` | 有 COM 口 ⇒ BIOS 里串口可能没关 |
-| BIOS 版本 / 日期 / 主板 | `Win32_BIOS` / `Win32_BaseBoard` | 拿去官网比对是否最新 |
-| 内存条与插槽 | `Win32_PhysicalMemory` | 顺便核对内存注入的槽位（见 `memory-injection.md`） |
+| Tipe firmware (UEFI / Legacy) | `$env:firmware_type` | Harus **UEFI** |
+| Mode boot | `winload.efi` dari `bcdedit` | Harus `.efi` |
+| Gaya partisi disk sistem | `Get-Disk.PartitionStyle` | **GPT** (sesuai UEFI) |
+| **Secure Boot** | `Confirm-SecureBootUEFI` | Diharapkan **False** (= sudah dimatikan) |
+| **TPM / PTT / fTPM** | `Get-Tpm.TpmPresent` | Diharapkan **False** (= sudah dimatikan di BIOS) |
+| **VT-x / SVM** | `Win32_Processor.VirtualizationFirmwareEnabled` | Diharapkan **True** (jika Hyper-V aktif akan salah deteksi, skrip juga melaporkan `HypervisorPresent`) |
+| **Hyper-threading** | `Cores` vs `LogicalProcessors` | Logical = 2× fisikal ⇒ HT sudah aktif |
+| **XMP / DOCP** | `Speed` vs `ConfiguredClockSpeed` | Configured > default JEDEC ⇒ profil overclock aktif |
+| **★ VMD / RST** | `Get-Disk.BusType` + nama device storage controller | Muncul tipe bus **`RAID`**, atau nama controller mengandung `VMD` / `Volume Management Device` / `RST` ⇒ **VMD aktif, wajib dimatikan** |
+| Daftar storage controller | `Get-PnpDevice` + PCI hardware ID | Mendaftarkan semua SCSIAdapter/HDC, memudahkan identifikasi manual |
+| Port Serial/COM | `Get-CimInstance Win32_SerialPort` | Ada port COM ⇒ port serial di BIOS mungkin belum dimatikan |
+| Versi / tanggal BIOS / motherboard | `Win32_BIOS` / `Win32_BaseBoard` | Ambil ke situs resmi untuk perbandingan apakah terbaru |
+| Modul memori dan slot | `Win32_PhysicalMemory` | Sekalian verifikasi slot yang dipakai injeksi memori (lihat `memory-injection.md`) |
 
-### 6.3 它只能**给线索**、要人工确认的（B 类）
+### 6.3 Yang **hanya memberi petunjuk** dan perlu konfirmasi manual (kelas B)
 
-| 项 | 脚本能给什么 | 还要看什么 |
+| Item | Yang bisa diberikan skrip | Yang perlu dilihat lagi |
 |---|---|---|
-| Above 4G Decoding | 显卡 PCI 硬件 ID + 已分配的大内存资源线索 | 用 **GPU-Z** 看 "Above 4G Decoding" / "Resizable BAR"；或 NVIDIA 控制面板 → 系统信息 |
-| Re-Size BAR | 同上 | 同上；本机以 `nvrm-bars` / 驱动日志为准 |
-| Execute Disable Bit | `DataExecutionPrevention_Available` | 为 True 一般说明 XD 开着（推断，非直接读） |
-| CSM | 只能看「当前是否 UEFI 启动」 | CSM 状态**无法从 Windows 直读** ⇒ 进 BIOS 看 |
-| Fast Boot | 无 | 进 BIOS 看（Fast Boot / Ultra Fast Boot） |
-| iGPU / DVMT | `Get-PnpDevice -Class Display` 看核显在不在 | DVMT 值读不到 ⇒ 进 BIOS 看 |
+| Above 4G Decoding | Hardware ID PCI GPU + petunjuk resource memori besar yang dialokasikan | Pakai **GPU-Z** untuk melihat "Above 4G Decoding" / "Resizable BAR"; atau NVIDIA control panel → system information |
+| Re-Size BAR | Sama seperti di atas | Sama seperti di atas; di mesin ini jadi acuan `nvrm-bars` / log driver |
+| Execute Disable Bit | `DataExecutionPrevention_Available` | Bernilai True umumnya berarti XD aktif (inferensi, bukan pembacaan langsung) |
+| CSM | Hanya bisa melihat "saat ini boot lewat UEFI atau tidak" | Status CSM **tidak bisa dibaca langsung dari Windows** ⇒ masuk BIOS |
+| Fast Boot | Tidak ada | Masuk BIOS (Fast Boot / Ultra Fast Boot) |
+| iGPU / DVMT | `Get-PnpDevice -Class Display` untuk melihat apakah iGPU ada | Nilai DVMT tidak terbaca ⇒ masuk BIOS |
 
-### 6.4 它**读不了**、必须另找工具的（C 类）
+### 6.4 Yang **tidak bisa dibaca**, wajib cari alat lain (kelas C)
 
-| 项 | 为什么读不了 | 正确工具 |
+| Item | Mengapa tidak bisa dibaca | Alat yang benar |
 |---|---|---|
-| **CFG Lock / MSR 0xE2** | 读 MSR 需要内核态特权 | **OpenCore 的 `ControlMsrE2.efi`**（最准）· Windows 上用 RWEverything · macOS 上 `wrmsr` 测试 |
-| ACPI 表（DSDT / DMAR …） | Windows 不暴露 ACPI 表给用户态 | RWEverything / `acpidump`；或 OpenCore 的 `SysReport`（DEBUG 构建） |
-| SATA Mode 实际值 | 只看到结果看不到设置 | 进 BIOS |
-| BIOS 隐藏选项 | 界面里就没有 | UEFITool + IFR-Extractor（§5.2） |
+| **CFG Lock / MSR 0xE2** | Pembacaan MSR butuh hak istimewa mode kernel | **`ControlMsrE2.efi` OpenCore** (paling akurat) · di Windows pakai RWEverything · di macOS uji `wrmsr` |
+| Tabel ACPI (DSDT / DMAR …) | Windows tidak mengekspos tabel ACPI ke user mode | RWEverything / `acpidump`; atau `SysReport` OpenCore (build DEBUG) |
+| Nilai sebenarnya SATA Mode | Hanya terlihat hasilnya, bukan pengaturannya | Masuk BIOS |
+| Opsi tersembunyi BIOS | Tidak ada di antarmuka | UEFITool + IFR-Extractor (§5.2) |
 
 ---
 
-## 7. 检查表（进 BIOS 时逐条打勾）
+## 7. Checklist (centang satu per satu saat masuk BIOS)
 
 ```
-【必须关】
+[WAJIB DIMATIKAN]
 [ ] Fast Boot / Ultra Fast Boot / MSI Fast Boot
 [ ] Secure Boot
 [ ] CSM (Compatibility Support Module)
 [ ] CFG Lock (MSR 0xE2)
-[ ] VMD / Intel Volume Management Device        ← ★ 官方没写，但必关
-[ ] Intel RST / SATA RAID Mode  → 改成 AHCI
+[ ] VMD / Intel Volume Management Device        ← ★ tidak ditulis resmi, tapi wajib dimatikan
+[ ] Intel RST / SATA RAID Mode  → ubah ke AHCI
 [ ] Serial / COM Port
 [ ] Parallel Port
 [ ] Intel SGX
 [ ] Intel Platform Trust / PTT / fTPM
-[ ] Network Stack / PXE（可选，为了快）
-[ ] Wake on LAN（可选）
-[ ] VT-d / IOMMU（★ 也可改开 + 用 DisableIoMapper=true 兜底）
+[ ] Network Stack / PXE (opsional, untuk lebih cepat)
+[ ] Wake on LAN (opsional)
+[ ] VT-d / IOMMU (★ boleh diubah menjadi aktif + pakai DisableIoMapper=true sebagai cadangan)
 
-【必须开】
-[ ] VT-x（Intel）/ SVM Mode（AMD）
+[WAJIB DIKANJANKAN]
+[ ] VT-x (Intel) / SVM Mode (AMD)
 [ ] Above 4G Decoding
-[ ] Hyper-Threading（3990X 例外：关）
+[ ] Hyper-Threading (kecuali 3990X: matikan)
 [ ] Execute Disable Bit (XD / NX)
 [ ] EHCI/XHCI Hand-off
-[ ] OS Type = Windows 8.1/10 UEFI Mode（或 Other OS）
+[ ] OS Type = Windows 8.1/10 UEFI Mode (atau Other OS)
 [ ] SATA Mode = AHCI
-[ ] DVMT Pre-Allocated ≥ 64MB（有核显时）
-[ ] Intel Speed Shift Technology                ← ★ 官方没写，但本机硬前提
-[ ] Resizable BAR（按驱动需要，配 ResizeGpuBars）
+[ ] DVMT Pre-Allocated ≥ 64MB (bila ada iGPU)
+[ ] Intel Speed Shift Technology                ← ★ tidak ditulis resmi, tapi prasyarat keras di mesin ini
+[ ] Resizable BAR (sesuai kebutuhan driver, konfigurasi ResizeGpuBars)
 
-【看情况，别一律动】
-[ ] XMP / DOCP          → 稳定就开
-[ ] Internal Graphics   → 核显有驱动才开
-[ ] Legacy USB Support  → 装系统期开，之后可关
-[ ] Thunderbolt         → 装好后按需
-[ ] ErP / EuP           → 只在关心关机/唤醒时动
-[ ] E 核数量（12 代+）  → 开=All / 关=0（见 e-cores.md）
+[TERGANTUNG KONDISI, JANGAN DIUBAH SEMUA]
+[ ] XMP / DOCP          → aktifkan kalau stabil
+[ ] Internal Graphics   → aktifkan hanya bila iGPU punya driver
+[ ] Legacy USB Support  → aktifkan saat instalasi, setelah itu boleh dimatikan
+[ ] Thunderbolt         → setelah terpasang, sesuai kebutuhan
+[ ] ErP / EuP           → ubah hanya bila peduli shutdown/wake
+[ ] Jumlah E core (gen 12+)  → aktif=All / mati=0 (lihat e-cores.md)
 ```
 
 ---
 
-## 8. 各厂商命名对照（同一设置，各家叫法不同）
+## 8. Pemetaan nama antar vendor (pengaturan sama, nama berbeda tiap vendor)
 
-| 通用名 | ASUS | MSI | Gigabyte / AORUS | ASRock |
+| Nama umum | ASUS | MSI | Gigabyte / AORUS | ASRock |
 |---|---|---|---|---|
 | CSM | `Boot → CSM (Compatibility Support Module)` | `Settings → Advanced → Windows OS Configuration → CSM` | `BIOS → CSM Support` | `Boot → CSM` |
 | Secure Boot | `Boot → Secure Boot → OS Type = Other OS` | `Security → Secure Boot` | `BIOS → Secure Boot` | `Security → Secure Boot` |
@@ -315,32 +315,32 @@ powershell -ExecutionPolicy Bypass -File .\bios-audit.ps1 -OutFile C:\bios-audit
 | VT-d / IOMMU | `Advanced → System Agent → VT-d` | `OC → CPU Features → VT-d` | `Settings → Miscellaneous → VT-d` | `Advanced → Chipset → VT-d` |
 | VMD | `Advanced → VMD Setup Menu → Enable VMD controller = Disabled` | `Settings → Advanced → VMD Setup Menu` | `Settings → IO Ports → VMD Configuration` | `Advanced → VMD Configuration` |
 | Speed Shift | `Advanced → CPU Configuration → Intel Speed Shift Technology` | `OC → CPU Features → Intel Speed Shift` | `Settings → Advanced CPU Settings` | `Advanced → CPU Configuration` |
-| **E 核数量**（12 代+） | `Advanced → CPU Configuration → Active Efficient Cores` | `OC → Advanced CPU Configuration → E-Core Count` | `Settings → Advanced CPU Settings → E-Core Count` | `Advanced → CPU Configuration → Active E Cores` |
+| **Jumlah E core** (gen 12+) | `Advanced → CPU Configuration → Active Efficient Cores` | `OC → Advanced CPU Configuration → E-Core Count` | `Settings → Advanced CPU Settings → E-Core Count` | `Advanced → CPU Configuration → Active E Cores` |
 | SATA Mode | `Advanced → SATA Configuration → SATA Mode = AHCI` | `Settings → Advanced → SATA Mode = AHCI` | `Settings → SATA Mode = AHCI` | `Advanced → Storage Configuration → SATA Mode = AHCI` |
 
-> 各家菜单名会随版本变，**用「搜设置」功能最快**（现代 BIOS 基本都有搜索框）：
-> 直接搜 `VMD` / `CFG` / `CSM` / `Above 4G` / `Speed Shift` / `Efficient Core`。
+> Nama menu tiap vendor berubah sesuai versi, **paling cepat pakai fitur "cari pengaturan"** (BIOS modern hampir semua punya kotak pencarian):
+> Cari langsung `VMD` / `CFG` / `CSM` / `Above 4G` / `Speed Shift` / `Efficient Core`.
 
 ---
 
-## 9. BIOS 设置 ↔ OpenCore quirk 的对应关系
+## 9. Hubungan BIOS ↔ quirk OpenCore
 
-| BIOS 里做不到 / 不想动 | OpenCore 侧对应 | 说明 |
+| Yang tidak bisa / tidak mau diubah di BIOS | Pasangan di sisi OpenCore | Penjelasan |
 |---|---|---|
-| 关不掉 VT-d | `Booter → Quirks → DisableIoMapper = true` | ★ **官方首选**（不影响其它系统用 VT-d） |
-| 关不掉 CFG Lock | `Kernel → Quirks → AppleXcpmCfgLock = true` | ⚠️ 官方说尽量避免 |
-| 关不掉 CSM（老卡） | 无 —— 需先刷 GOP ROM | |
-| Above 4G 关掉（ASUS WS-X299-PRO / AMD 某些板） | boot-args 加 `npci=0x3000` | ★ **两者不能同时** |
-| ReBAR 开着但驱动不认 | `Booter → ResizeAppleGpuBars` / `UEFI → ResizeGpuBars` | 见 `nvidia-driver.md` |
-| iGPU 没驱动 | boot-args `-wegnoigpu`（或 BIOS 里直接关核显） | 本机实测能省 ~60 s 开机时间 |
-| BIOS 有 Fast Boot 但不想关 | ❌ 无替代 | 必须关 |
+| VT-d tidak bisa dimatikan | `Booter → Quirks → DisableIoMapper = true` | ★ **Pilihan resmi** (tidak mengganggu VT-d di sistem lain) |
+| CFG Lock tidak bisa dimatikan | `Kernel → Quirks → AppleXcpmCfgLock = true` | ⚠️ Resmi menyatakan sebisa mungkin dihindari |
+| CSM tidak bisa dimatikan (kartu tua) | Tidak ada —— perlu flash GOP ROM dulu | |
+| Above 4G dimatikan (ASUS WS-X299-PRO / sebagian papan AMD) | Tambahkan `npci=0x3000` ke boot-args | ★ **Keduanya tidak boleh aktif bersamaan** |
+| ReBAR aktif tapi driver tidak mengenali | `Booter → ResizeAppleGpuBars` / `UEFI → ResizeGpuBars` | Lihat `nvidia-driver.md` |
+| iGPU tidak punya driver | boot-args `-wegnoigpu` (atau matikan iGPU langsung di BIOS) | Terbukti di mesin ini menghemat ~60 s waktu boot |
+| BIOS punya Fast Boot tapi tidak mau dimatikan | ❌ Tidak ada pengganti | Wajib dimatikan |
 
 ---
 
-## 10. 与其它 reference 的关系
+## 10. Hubungan dengan reference lain
 
-- **引导失败 / 卡住** → `logs-and-debug.md`（先看 OC 日志）；**耗时** → `boot-timeline.md`
-- **NVIDIA 大 BAR 与 ReBAR** → `nvidia-driver.md`
-- **核显 / iGPU** → 见 §3.3 与 `boot-timeline.md` 的 `-wegnoigpu`
-- **内存条与插槽核对** → `memory-injection.md`（脚本的 §6.2 顺带输出槽位）
-- **改 ESP 的安全流程** → `SKILL.md` 铁律 1–16 + `scripts/oc-edit-safe.sh`
+- **Kegagalan boot / macet** → `logs-and-debug.md` (lihat log OC dulu); **waktu lama** → `boot-timeline.md`
+- **BAR besar dan ReBAR pada NVIDIA** → `nvidia-driver.md`
+- **iGPU** → lihat §3.3 dan `-wegnoigpu` di `boot-timeline.md`
+- **Verifikasi modul memori dan slot** → `memory-injection.md` (skrip §6.2 sekaligus mengeluarkan slot)
+- **Prosedur aman mengubah ESP** → aturan 1–16 di `SKILL.md` + `scripts/oc-edit-safe.sh`

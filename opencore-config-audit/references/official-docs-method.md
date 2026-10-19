@@ -1,35 +1,35 @@
-# 官方文档取用与逐键判定法
+# Penggunaan dokumen resmi dan metode penilaian per kunci
 
-> ★★ **「该信谁」的总索引** ⇒ **`ecosystem-sources.md`**（Acidanthera / Dortania 权威来源 ·
-> corpnewt 工具链 · 驱动作者 · 中文资源 · 论坛）。
-> **权威性排序：官方文档 > 驱动作者 README > 论坛帖子。**
+> ★★ **Indeks utama "siapa yang harus dipercaya"** ⇒ **`ecosystem-sources.md`** (sumber otoritatif Acidanthera / Dortania ·
+> rantai alat corpnewt · penulis driver · sumber daya Mandarin · forum).
+> **Urutan otoritivitas: dokumen resmi > README penulis driver > posting forum.**
 
-## 1. 先确定「用哪一版文档」
+## 1. Tentukan dulu "versi dokumen mana yang dipakai"
 
 ```bash
 nvram 4D1FDA02-38C7-4A6A-9CC6-4BCCA8B30102:opencore-version
-# DBG-108-2026-09-27 → OpenCore 1.0.8 的 DEBUG 构建（DBG- 前缀 = DEBUG）
-# 形如 1.0.8-2026-09-27 → RELEASE
+# DBG-108-2026-09-27 → build DEBUG OpenCore 1.0.8 (prefiks DBG- = DEBUG)
+# Bentuk seperti 1.0.8-2026-09-27 → RELEASE
 ```
 
-**必须用同版本**：`ocvalidate` 会拒绝校验不同版本的 config；文档里键的 Failsafe 也可能随版本变。
+**Wajib memakai versi yang sama**: `ocvalidate` menolak memvalidasi config versi berbeda; Failsafe kunci di dalam dokumen juga bisa berubah antar versi.
 
-判断本机 OpenCore.efi 到底是 DEBUG 还是 RELEASE（逐字节）：
+Cara memastikan OpenCore.efi di mesin ini DEBUG atau RELEASE (byte per byte):
 
 ```bash
 shasum -a 256 /Volumes/EFI/EFI/OC/OpenCore.efi
-# 与官方包同名文件比：RELEASE 与 DEBUG 大小差别明显（1.0.8：626,688 B vs 868,352 B）
+# Bandingkan dengan berkas bernama sama di paket resmi: perbedaan ukuran RELEASE dan DEBUG jelas (1.0.8: 626,688 B vs 868,352 B)
 ```
 
-## 2. 取包与建键库
+## 2. Ambil paket dan bangun pustaka kunci
 
-跑 `scripts/fetch-opencore-docs.sh`，它做三件事：
+Jalankan `scripts/fetch-opencore-docs.sh`, yang melakukan tiga hal:
 
-1. 下载官方 `<ver>` 的 **RELEASE** 包并解压（含 `Utilities/ocvalidate/`、`Docs/`、`X64/`）
-2. 另取该版本的 `Docs/Configuration.tex`（LaTeX 源，比 PDF 好检索）
-3. 从 `Configuration.tex` 抽取**每个键**的 `Type / Failsafe / Description` → `oc-doc-keys.json`
+1. Mengunduh paket **RELEASE** resmi `<ver>` dan mengekstraknya (berisi `Utilities/ocvalidate/`, `Docs/`, `X64/`)
+2. Mengambil `Docs/Configuration.tex` versi tersebut (sumber LaTeX, lebih mudah ditelusuri daripada PDF)
+3. Mengekstrak `Type / Failsafe / Description` dari **setiap kunci** pada `Configuration.tex` → `oc-doc-keys.json`
 
-`Configuration.tex` 里每个键长这样，抽取就是按这个模式切块：
+Tiap kunci di dalam `Configuration.tex` berbentuk seperti ini, dan ekstraksi cukup memotong blok mengikuti pola tersebut:
 
 ```latex
 \item
@@ -39,52 +39,52 @@ shasum -a 256 /Volumes/EFI/EFI/OC/OpenCore.efi
   \textbf{Description}: Reset \texttt{BGRT} table \texttt{Displayed} status field ...
 ```
 
-用 `\section{}/\subsection{}` 跟踪键所属的段（ACPI / Booter / Kernel / Misc / NVRAM / PlatformInfo / UEFI）。
+Gunakan `\section{}/\subsection{}` untuk melacak bagian milik tiap kunci (ACPI / Booter / Kernel / Misc / NVRAM / PlatformInfo / UEFI).
 
-## 3. 三份输入做三角对照
+## 3. Tiga input untuk perbandingan silang
 
-| 输入 | 作用 |
+| Input | Peran |
 |---|---|
-| 官方 `Sample.plist` | 官方默认值（Failsafe 的实例）；与 live config 做**语义 diff** |
-| `oc-doc-keys.json` | 每个键的**官方说明**，用来判定「这个偏离是有意为之还是错的」 |
-| live `config.plist` | 机器实际配置 |
+| `Sample.plist` resmi | Nilai default resmi (contoh Failsafe); buat **diff semantik** dengan config live |
+| `oc-doc-keys.json` | **Penjelasan resmi** tiap kunci, dipakai untuk menilai "apakah penyimpangan ini disengaja atau salah" |
+| `config.plist` live | Konfigurasi sebenarnya pada mesin |
 
-语义 diff 要按 plist 结构递归（dict 按 key、list 比长度/元素），不要按文本 diff —— `plutil`/手工编辑会重排格式。
+Diff semantik harus dilakukan secara rekursif mengikuti struktur plist (dict dibandingkan per key, list dibandingkan panjang/elemennya), bukan diff teks — `plutil`/pengeditan manual akan menata ulang format.
 
-## 4. 判定分类（把偏离分成三类）
+## 4. Kategori penilaian (bagi penyimpangan menjadi tiga jenis)
 
-1. **有依据的正确偏离** —— 文档里有明确适用条件，本机正好符合。例：
-   - `Kernel>Emulate>Cpuid1Data = 55 06 0A 00…`：文档原文给出的「Alder Lake (0x090672) → Comet Lake (0x0A0655)」推荐值
-   - `FixupAppleEfiImages=true`：文档说 `SecureBootModel=Disabled` 时对较新 macOS **必需**
-   - `ProvideCustomSlide=true`：文档说必要性由日志 `OCABC: Only N/256 slide values are usable!` 判定
-2. **与文档明确指引相反** —— 文档用了 "strongly discouraged" / "Please use X instead" / "required" 这类措辞。例：
-   - `UEFI>APFS>MinDate/MinVersion = -1`（文档：strongly discouraged）
-   - `Booter>Quirks>EnableWriteUnprotector=true` 而 `OCABC: MAT support is 1`（文档：MAT 支持时应改用 `RebuildAppleMemoryMap`）
-   - `Kernel>Quirks>PanicNoKextDump=true`（文档：会隐藏 panic 里的 kext 信息）
-3. **冗余/失效残留** —— 无害但不生效。例：
-   - `UEFI>Input>PointerSupportMode='ASUS'` 但 `PointerSupport=false`（文档：该值只对 Z87/Z97 ASUS 板有效）
-   - `PointerPollMin/Max` 显式写的就是实现默认值（写 `0` 等价）
-   - 同时开 `DisableLinkeditJettison` 与 `keepsyms=1`（文档说前者就是为免去后者）
+1. **Penyimpangan yang benar dan berdasar** — di dalam dokumen ada kondisi berlaku yang jelas, dan mesin ini kebetulan memenuhi. Contoh:
+   - `Kernel>Emulate>Cpuid1Data = 55 06 0A 00…`: nilai yang direkomendasikan dalam kalimat asli dokumen "Alder Lake (0x090672) → Comet Lake (0x0A0655)"
+   - `FixupAppleEfiImages=true`: dokumen menyatakan bahwa nilai ini **wajib** untuk macOS yang lebih baru saat `SecureBootModel=Disabled`
+   - `ProvideCustomSlide=true`: dokumen menyatakan necessity-nya ditentukan oleh log `OCABC: Only N/256 slide values are usable!`
+2. **Bertentangan dengan panduan eksplisit dokumen** — dokumen memakai kata-kata seperti "strongly discouraged" / "Please use X instead" / "required". Contoh:
+   - `UEFI>APFS>MinDate/MinVersion = -1` (dokumen: strongly discouraged)
+   - `Booter>Quirks>EnableWriteUnprotector=true` sementara `OCABC: MAT support is 1` (dokumen: saat MAT didukung, gunakan `RebuildAppleMemoryMap`)
+   - `Kernel>Quirks>PanicNoKextDump=true` (dokumen: menyembunyikan informasi kext di dalam panic)
+3. **Sisa yang redundant/tidak berlaku lagi** — tidak berbahaya tapi tidak efektif. Contoh:
+   - `UEFI>Input>PointerSupportMode='ASUS'` padahal `PointerSupport=false` (dokumen: nilai ini hanya berlaku untuk papan ASUS Z87/Z97)
+   - `PointerPollMin/Max` yang ditulis eksplisit justru sama dengan nilai default implementasi (menulis `0` setara)
+   - Mengaktifkan `DisableLinkeditJettison` dan `keepsyms=1` bersamaan (dokumen menyatakan yang pertama justru ada untuk menghindari yang kedua)
 
-## 5. ★ 文档里的「成对关系」—— 别拆散
+## 5. ★ "Hubungan berpasangan" dalam dokumen — jangan dipisah
 
-| 成对 | 文档依据 |
+| Pasangan | Dasar dokumen |
 |---|---|
-| `PlatformInfo>UpdateSMBIOSMode=Custom` ↔ `Kernel>Quirks>CustomSMBIOSGuid=true` | Custom「Requires patching AppleSmbios.kext and AppleACPIPlatform.kext… done automatically by CustomSMBIOSGuid quirk」 |
-| `Misc>Boot>LauncherOption=Full` ↔ `UEFI>Quirks>RequestBootVarRouting=true` | 「For this option to work, RequestBootVarRouting is required to be enabled」 |
-| `Misc>Security>SecureBootModel=Disabled` ↔ `Booter>Quirks>FixupAppleEfiImages=true` | 「required for all newer macOS when SecureBootModel is set to Disabled」 |
-| `UEFI>Output>TextRenderer=System*` ↔ `ClearScreenOnModeSwitch` / `IgnoreTextInGraphics` | 这两个开关「only applies to System renderer」—— 换 Builtin 就失效 |
-| `UEFI>Output>ProvideConsoleGop=true` ↔ `Resolution=Max` | Builtin 渲染器「necessary to enable ProvideConsoleGop and set Resolution to Max」 |
-| `Kernel>Block` 的 `com.apple.iokit.IONDRVSupport` | 否则固件 framebuffer 会抢走 display index 0 |
-| `NVRAM>Add` 的每个键 ↔ 同名 `NVRAM>Delete` 条目 | 「Variables will only be set if not present or deleted」 |
+| `PlatformInfo>UpdateSMBIOSMode=Custom` ↔ `Kernel>Quirks>CustomSMBIOSGuid=true` | Custom "Requires patching AppleSmbios.kext and AppleACPIPlatform.kext… done automatically by CustomSMBIOSGuid quirk" |
+| `Misc>Boot>LauncherOption=Full` ↔ `UEFI>Quirks>RequestBootVarRouting=true` | "For this option to work, RequestBootVarRouting is required to be enabled" |
+| `Misc>Security>SecureBootModel=Disabled` ↔ `Booter>Quirks>FixupAppleEfiImages=true` | "required for all newer macOS when SecureBootModel is set to Disabled" |
+| `UEFI>Output>TextRenderer=System*` ↔ `ClearScreenOnModeSwitch` / `IgnoreTextInGraphics` | Kedua sakelar ini "only applies to System renderer" — begitu diganti ke Builtin menjadi tidak berlaku |
+| `UEFI>Output>ProvideConsoleGop=true` ↔ `Resolution=Max` | Renderer Builtin "necessary to enable ProvideConsoleGop and set Resolution to Max" |
+| `com.apple.iokit.IONDRVSupport` pada `Kernel>Block` | Jika tidak, framebuffer firmware akan merebut display index 0 |
+| Tiap kunci pada `NVRAM>Add` ↔ entri `NVRAM>Delete` dengan nama sama | "Variables will only be set if not present or deleted" |
 
-> ★ **注意**：`LauncherOption` 的**官方 Failsafe 是 `Disabled`**，不是 `Full` —— 也就是说 `Full` 属于「偏离默认」。
-> 它并非越多越好：`Full` 会让 OpenCore 每次开机改写固件启动项，**从 U 盘引导时会把硬盘那条重指过去**
-> ⇒ 详见 `boot-entries.md`。
+> ★ **Perhatikan**: **Failsafe resmi `LauncherOption` adalah `Disabled`**, bukan `Full` — artinya `Full` termasuk "penyimpangan dari default".
+> Bukan berarti makin banyak makin baik: `Full` membuat OpenCore menulis ulang entri boot firmware setiap kali boot, **saat boot dari flash disk entri hard disk akan diarahkan ke sana**
+> ⇒ lihat `boot-entries.md`.
 
-## 6. 报告格式建议
+## 6. Format laporan yang disarankan
 
-- 开头给「**ocvalidate 结论**」+「**与 Failsafe 的偏离总数/分类计数**」
-- 逐键表：`键 | 本机值 | 文档 Failsafe | 判定 | 文档原话(截断)`
-- 「建议修改」按风险排序，每条注明**依据 + 回滚方式**
-- 附一节「**明确不动**」并写理由 —— 避免下次有人把这些"改回默认"改坏
+- Di bagian awal berikan "**kesimpulan ocvalidate**" + "**jumlah/klasifikasi simpangan terhadap Failsafe**"
+- Tabel per kunci: `kunci | nilai di mesin ini | Failsafe dokumen | penilaian | kalimat asli dokumen (dipotong)`
+- "Usulan perubahan" diurutkan berdasarkan risiko, setiap butir mencantumkan **dasar + cara rollback**
+- Sertakan seksi "**tidak diubah secara sengaja**" beserta alasannya — agar lain kali tidak ada yang rusak karena "mengembalikan ke default"

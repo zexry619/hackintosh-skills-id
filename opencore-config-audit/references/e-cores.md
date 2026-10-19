@@ -1,180 +1,180 @@
-# 开小核 / 关小核（Intel 混合架构：P 核 / E 核）
+# Mengaktifkan / Menonaktifkan E-core (Arsitektur hybrid Intel: P-core / E-core)
 
-> 依据：**`CpuTopologyRebuild` 官方 README**（`b00t0x/CpuTopologyRebuild`，逐条引用，见 §8）
-> + **本机 10-15 实测**（`ProvideCurrentCpuInfo` 行为、BIOS 项名、Geekbench 7 官网同 CPU 榜对照）。
-> ★ **先说结论**：**「关小核」和「开小核」是两种取舍，不是谁对谁错** ——
-> **关掉最稳**（macOS 本来也调度不好 E 核，关掉几乎不损失）；**开着多 4 核 4 线程**（但要靠 `CpuTopologyRebuild`
-> 收拾拓扑，且官方明写**与 `-v` 有冲突**，见 §4.3）。
+> Dasar: **`CpuTopologyRebuild` README resmi** (`b00t0x/CpuTopologyRebuild`, dikutip per butir, lihat §8)
+> + **Pengukuran lokal 10-15** (perilaku `ProvideCurrentCpuInfo`, nama item BIOS, perbandingan papan Geekbench 7 resmi untuk CPU yang sama).
+> ★ **Kesimpulan terlebih dahulu**: **"Menonaktifkan E-core" dan "mengaktifkan E-core" adalah dua pilihan yang berbeda, bukan salah satu lebih benar** ——
+> **Mematikan adalah yang paling stabil** (macOS memang tidak mampu menjadwalkan E-core dengan baik, mematikannya hampir tidak menimbulkan kerugian); **membiarkannya menambah 4 core 4 thread** (tapi harus bergantung pada `CpuTopologyRebuild`
+> untuk merapikan topologi, dan README resmi secara eksplisit menyatakan **konflik dengan `-v`**, lihat §4.3).
 
-## 0. 术语与机制
+## 0. Terminologi dan mekanisme
 
-- **小核 = E-core（Efficient Core）**，大核 = **P-core（Performance Core）**。Intel 12 代（Alder Lake）起引入。
-- 本机 **i7-12700K = 8 P + 4 E**，P 核带超线程 ⇒ 满配 **12 核 20 线程**。
-- **macOS 对混合架构支持不完整**，三步走：
-  1. 靠 **`Kernel > Quirks > ProvideCurrentCpuInfo = true`** 才能把 E 核「喂」给内核
-     （官方 README 原话：*"OpenCore's `ProvideCurrentCpuInfo` quirk enables Alder Lake's both P-Cores and E-Cores,
-     but all cores and threads are recognized as equivalent"*）；
-  2. 但喂进来后 **P 核和 E 核被当成等价的** ⇒ 可能拖累单线程 / 实际性能；
-  3. 想区分 ⇒ 加 **`CpuTopologyRebuild.kext`** 重建拓扑（§4）。
-- 不喂（`ProvideCurrentCpuInfo=false`）**或** BIOS 里关掉 E 核 ⇒ macOS 只见 **8 核 16 线程**。
+- **E-core = E-core (Efficient Core)**, P-core = **P-core (Performance Core)**. Diperkenalkan sejak Intel generasi ke-12 (Alder Lake).
+- Lokal **i7-12700K = 8 P + 4 E**, P-core punya hyper-threading ⇒ konfigurasi penuh **12 core 20 thread**.
+- **macOS tidak mendukung arsitektur hybrid secara lengkap**, tiga langkah:
+  1. Harus mengandalkan **`Kernel > Quirks > ProvideCurrentCpuInfo = true`** agar E-core bisa "diberi makan" ke kernel
+     (kalimat asli README resmi: *"OpenCore's `ProvideCurrentCpuInfo` quirk enables Alder Lake's both P-Cores and E-Cores,
+     but all cores and threads are recognized as equivalent"*);
+  2. Namun setelah masuk, **P-core dan E-core dianggap setara** ⇒ bisa menghambat single-thread / performa aktual;
+  3. Jika ingin membedakan ⇒ tambahkan **`CpuTopologyRebuild.kext`** untuk membangun ulang topologi (§4).
+- Tidak diberi makan (`ProvideCurrentCpuInfo=false`) **atau** E-core dimatikan di BIOS ⇒ macOS hanya melihat **8 core 16 thread**.
 
-> ★ **别误判成「CPU 缺核」**：`CPUID.1FH`（混合拓扑）在**开着小核**时会报 **20 个逻辑处理器**，
-> 而 macOS 侧只报 8 核 16 线程是**正常现象**，不是硬件缺核、也不是驱动没加载。
+> ★ **Jangan salah tafsir sebagai "CPU kekurangan core"**: `CPUID.1FH` (topologi hybrid) melaporkan **20 logical processor** saat **E-core diaktifkan**,
+> sedangkan sisi macOS hanya melaporkan 8 core 16 thread itu **normal**, bukan hardware kekurangan core, dan bukan juga driver gagal dimuat.
 
-## 1. 先判现状（先量再动）
+## 1. Tentukan kondisi saat ini (ukur dulu, baru ubah)
 
 ```bash
-sysctl -n hw.ncpu hw.physicalcpu hw.logicalcpu        # 16 = 只有 P 核；20 = P+E 都暴露
-sysctl -n hw.nperflevels                              # 1 = 只有一种核；2 = P/E 两级都识别
-sysctl -n hw.perflevel0.physicalcpu                   # P 核数（本机 8）
-sysctl -n hw.perflevel1.physicalcpu                   # E 核数（本机 4；关小核时该键不存在）
-sysctl -n machdep.cpu.core_count                      # 见 §4.2 的 -ctrfixcnt
+sysctl -n hw.ncpu hw.physicalcpu hw.logicalcpu        # 16 = hanya P-core; 20 = P+E sama-sama diekspos
+sysctl -n hw.nperflevels                              # 1 = hanya satu jenis core; 2 = dua tingkat P/E dikenali
+sysctl -n hw.perflevel0.physicalcpu                   # jumlah P-core (lokal 8)
+sysctl -n hw.perflevel1.physicalcpu                   # jumlah E-core (lokal 4; kunci ini tidak ada saat E-core dimatikan)
+sysctl -n machdep.cpu.core_count                      # lihat -ctrfixcnt di §4.2
 ```
 
-`scripts/e-cores-check.sh` 一次跑完上面全部，并给判读。
+`scripts/e-cores-check.sh` menjalankan semuanya sekaligus dan memberikan interpretasi.
 
-| `hw.nperflevels` | `hw.ncpu` | 含义 |
+| `hw.nperflevels` | `hw.ncpu` | Arti |
 |---|---|---|
-| **1** | 16 | macOS 只看到一种核 ⇒ **E 核没暴露**（BIOS 关着，或 `ProvideCurrentCpuInfo=false`） |
-| 2 | 20 | P / E 两级都识别 ⇒ **小核已开**（再往下看拓扑重建成什么样） |
+| **1** | 16 | macOS hanya melihat satu jenis core ⇒ **E-core tidak diekspos** (BIOS dalam keadaan mati, atau `ProvideCurrentCpuInfo=false`) |
+| 2 | 20 | Dua tingkat P / E dikenali ⇒ **E-core sudah aktif** (lihat ke bawah untuk hasil pembangunan ulang topologi) |
 
-★ **`hw.nperflevels=1` 时不要去「修」** —— 见 §7，那可能是本机刻意选的稳定态。
+★ **Jangan "memperbaiki" saat `hw.nperflevels=1`** —— lihat §7, itu mungkin kondisi stabil yang memang sengaja dipilih pada mesin ini.
 
-## 2. 关小核（推荐给「求稳 / 不想折腾」）
+## 2. Menonaktifkan E-core (direkomendasikan untuk "mencari stabilitas / tidak mau repot")
 
-**唯一可靠的做法是在 BIOS 层关**（macOS 侧没有「隐藏 E 核」的开关）：
+**Satu-satunya cara yang andal adalahعله di level BIOS** (tidak ada sakelar "menyembunyikan E-core" di sisi macOS):
 
-| 厂商 | 位置 / 名字 |
+| Produsen | Lokasi / Nama |
 |---|---|
-| **ASUS**（本机） | `Advanced > CPU Configuration > **Active Efficient Cores**` → 设 **`0`** |
-| MSI | `OC → Advanced CPU Configuration → **E-Core Count**`（或 `Active E-Cores`）→ `0` |
+| **ASUS** (lokal) | `Advanced > CPU Configuration > **Active Efficient Cores**` → setel **`0`** |
+| MSI | `OC → Advanced CPU Configuration → **E-Core Count**` (atau `Active E-Cores`) → `0` |
 | Gigabyte | `Settings > Advanced CPU Settings → **E-Core Count**` → `0` |
 | ASRock | `Advanced → CPU Configuration → **Active E Cores**` → `0` |
 
-- **配置侧不用动**：`ProvideCurrentCpuInfo` 保持原样即可；`CpuTopologyRebuild` 留 `Enabled=false`（或删条目）。
-- **收益**：Alder Lake 在 macOS 上调度 E 核本就是雷区（§7.2），关掉**几乎不损失性能**（macOS 本来也用不满）。
-- **代价**：少 4 核 / 少 4 线程 —— 但**如果原本就没被用上，关掉等于零代价**。
-- ★ **硬前提不动**：`Active Performance Cores` = `All`、`Hyper-Threading` = `Enabled`、
-  **`Intel Speed Shift Technology` 保持 `Enabled`**（关它会 `wrmsr(0x770,1)` #GP panic，见 `intel-turbo.md` §7）。
+- **Sisi konfigurasi tidak perlu diubah**: `ProvideCurrentCpuInfo` biarkan apa adanya; `CpuTopologyRebuild` tetapkan `Enabled=false` (atau hapus entri).
+- **Manfaat**: di macOS, scheduling E-core pada Alder Lake memang merupakan wilayah berbahaya (§7.2), mematikannya **hampir tidak menimbulkan kerugian performa** (macOS memang tidak bisa memanfaatkannya sepenuhnya).
+- **Biaya**: berkurangnya 4 core / 4 thread —— tetapi **jika memang tidak pernah terpakai, mematikan sama sekali tanpa biaya**.
+- ★ **Prasyarat wajib tidak boleh diubah**: `Active Performance Cores` = `All`, `Hyper-Threading` = `Enabled`,
+  **`Intel Speed Shift Technology` tetap `Enabled`** (mematikannya memicu `wrmsr(0x770,1)` #GP panic, lihat `intel-turbo.md` §7).
 
-## 3. 开小核（求性能 / 愿意收拾拓扑）
+## 3. Mengaktifkan E-core (mencari performa / siap merapikan topologi)
 
-三件事，按顺序：
+Tiga hal, berurutan:
 
-1. **BIOS**：`Active Efficient Cores` → **`All`**（厂商命名见 §2 表）。
-2. **config**：`Kernel > Quirks > **ProvideCurrentCpuInfo = true**`（**必需** —— 官方 README 明写
-   Alder Lake / Raptor Lake 要配合这个 quirk；Arrow Lake 才不需要）。
-3. **可选但推荐**：`Kernel > Add` 加 **`CpuTopologyRebuild.kext`**，**紧跟 `Lilu` 之后**
-   （它是 Lilu 插件，`OSBundleLibraries` 要求 `as.vit9696.Lilu ≥ 1.2.0`）⇒ 顺序 `Lilu → CpuTopologyRebuild → …`。
+1. **BIOS**: `Active Efficient Cores` → **`All`** (nama per produsen ada di tabel §2).
+2. **config**: `Kernel > Quirks > **ProvideCurrentCpuInfo = true**` (**wajib** — README resmi secara eksplisit menyatakan
+   Alder Lake / Raptor Lake membutuhkan quirk ini; hanya Arrow Lake yang tidak).
+3. **Opsional tetapi direkomendasikan**: tambahkan **`CpuTopologyRebuild.kext`** di `Kernel > Add`, **tepat setelah `Lilu`**
+   (ini plugin Lilu, `OSBundleLibraries` mensyaratkan `as.vit9696.Lilu ≥ 1.2.0`) ⇒ urutan `Lilu → CpuTopologyRebuild → …`.
 
-重启后应看到 `hw.nperflevels=2`、`hw.ncpu=20`、`perflevel1.physicalcpu=4`（§1）。
+Setelah restart seharusnya terlihat `hw.nperflevels=2`, `hw.ncpu=20`, `perflevel1.physicalcpu=4` (§1).
 
-★ **`ProvideCurrentCpuInfo` 与 `-ctrfixcnt` 的例外**：若用了 `-ctrfixcnt`，**必须**同时装
-`AppleMCEReporterDisabler.kext`，否则**起不来**（§4.2）。
+★ **`ProvideCurrentCpuInfo` dan pengecualian `-ctrfixcnt`**: jika memakai `-ctrfixcnt`, **wajib** memasang
+`AppleMCEReporterDisabler.kext` juga, jika tidak **tidak bisa boot** (§4.2).
 
-## 4. `CpuTopologyRebuild` —— 把「20 个等价核」重建成「8P + 4E」
+## 4. `CpuTopologyRebuild` —— membangun ulang "20 core setara" menjadi "8P + 4E"
 
-### 4.1 它做什么
+### 4.1 Apa yang dilakukannya
 
-- 支持 **Alder Lake / Raptor Lake / Arrow Lake（实验性）**。
-- 默认行为 = **把 E 核伪装成 P 核的「第 N 路 SMT 逻辑线程」**，得到更好的调度；
-  **「系统信息」里显示真实核数（P+E）**。
-- ★ 官方自述边界：*"The effect of this kext is not yet clear"* —— 有实测收益，但**官方不承诺**。
+- Mendukung **Alder Lake / Raptor Lake / Arrow Lake (eksperimental)**.
+- Perilaku default = **menyamar E-core sebagai "logical thread SMT jalur ke-N" dari P-core**, menghasilkan scheduling yang lebih baik;
+  **"System Information" menampilkan jumlah core sebenarnya (P+E)**.
+- ★ Batas yang diakui resmi: *"The effect of this kext is not yet clear"* —— ada manfaat terukur, tetapi **resmi tidak menjamin**.
 
-### 4.2 四个取值（boot-arg 或 NVRAM 二选一）
+### 4.2 Empat nilai (boot-arg atau NVRAM, pilih salah satu)
 
-NVRAM 域 = **`4D1FDA02-38C7-4A6A-9CC6-4BCCA8B30102`**（OpenCore 的 `NVRAM > Add`）。
+Domain NVRAM = **`4D1FDA02-38C7-4A6A-9CC6-4BCCA8B30102`** (`NVRAM > Add` OpenCore).
 
-| NVRAM 键 | boot-arg | 效果 |
+| Kunci NVRAM | boot-arg | Efek |
 |---|---|---|
-| （都不写） | （都不写） | **默认**：拓扑伪装成 SMT，E 核识别为 P 核的 N 路逻辑线程；系统信息显示真实核数（P+E） |
-| `ctrsmt` = `"off"` | **`ctrsmt=off`** | 不伪装，拓扑 = 真实结构，**性能会下降**；仅对**开了 HT** 的 Alder/Raptor 有效；等同 v1.x.x 默认行为 |
-| `ctrsmt` = `"full"` | **`ctrsmt=full`** | 系统信息只显示 **P 核数**；性能影响不确定；等同 v1.x.x 加 **`-ctrsmt`** 的行为 |
-| `ctrfixcnt` = `true` | **`-ctrfixcnt`** | 启用 `machdep.cpu.core_count` 修正；★ **必须同时装 `AppleMCEReporterDisabler.kext`，否则起不来** |
+| (tidak diisi) | (tidak diisi) | **Default**: topologi disamarkan sebagai SMT, E-core dikenali sebagai logical thread jalur-N dari P-core; System Information menampilkan jumlah core sebenarnya (P+E) |
+| `ctrsmt` = `"off"` | **`ctrsmt=off`** | Tidak menyamar, topologi = struktur sebenarnya, **performa menurun**; hanya efektif untuk Alder/Raptor **dengan HT aktif**; setara perilaku default v1.x.x |
+| `ctrsmt` = `"full"` | **`ctrsmt=full`** | System Information hanya menampilkan **jumlah P-core**; dampak performa tidak pasti; setara perilaku v1.x.x dengan **`-ctrsmt`** |
+| `ctrfixcnt` = `true` | **`-ctrfixcnt`** | Mengaktifkan koreksi `machdep.cpu.core_count`; ★ **wajib memasang `AppleMCEReporterDisabler.kext` juga, jika tidak tidak bisa boot** |
 
-> ★★ **语法坑**：**v2.x 是 `ctrsmt=off` / `ctrsmt=full`（等号形式）**，
-> 而 **v1.x 的 `-ctrsmt` 是另一回事**（等价于 v2.x 的 `ctrsmt=full`）。抄旧帖的 `-ctrsmt` 到 v2.x 上不会报错，但**不生效**。
-> ⇒ **先看自己装的 kext 版本号**（`CFBundleVersion`，本机 = **2.0.2**）。
+> ★★ **Jebakan sintaks**: **v2.x memakai `ctrsmt=off` / `ctrsmt=full` (bentuk dengan tanda sama dengan)**,
+> sedangkan **`-ctrsmt` pada v1.x adalah hal lain** (setara `ctrsmt=full` pada v2.x). Menyalin `-ctrsmt` dari posting lama ke v2.x tidak akan error, tetapi **tidak berlaku**.
+> ⇒ **Lihat dulu nomor versi kext yang Anda pasang** (`CFBundleVersion`, lokal = **2.0.2**).
 
-### 4.3 ★★ 已知冲突：与 `-v` 冲突
+### 4.3 ★★ Konflik yang diketahui: konflik dengan `-v`
 
-官方 README 的 *Current problems* 明写：
+Bagian *Current problems* di README resmi menyatakan:
 
 > *"May cause random boot failure with verbose (`-v`) boot"*
 
-⇒ **开小核 + `-v` 有概率随机启动失败**。本机 debug 流程是**必须开 `-v`** 的（铁律 13）
-⇒ **排查阶段要么先关小核，要么临时去掉 `-v`**，别把随机失败误判成配置坏了。
-（另注：`ProvideCurrentCpuInfo` 本身在 High Sierra 及更早无效，那时用官方的 `patches_legacy.plist` 替代。）
+⇒ **E-core aktif + `-v` berpotensi menyebabkan boot gagal secara acak**. Alur debug pada mesin ini **mewajibkan `-v`** (aturan besi 13)
+⇒ **Saat troubleshoot, matikan E-core dulu, atau hapus sementara `-v`**, jangan salah tafsir kegagalan acak sebagai konfigurasi rusak.
+(Catatan tambahan: `ProvideCurrentCpuInfo` sendiri tidak berlaku di High Sierra dan sebelumnya; saat itu gunakan `patches_legacy.plist` resmi.)
 
-### 4.4 拓扑对照（官方 README 原表，摘 12700K）
+### 4.4 Perbandingan topologi (tabel asli README resmi, cuplikan 12700K)
 
-| CPU | 配置 | 原始 | `ctrsmt=off` | **默认（不写）** |
+| CPU | Konfigurasi | Asli | `ctrsmt=off` | **Default (tidak diisi)** |
 |---|---|---|---|---|
 | **i7-12700K** | **8P+4E+HT** | 20c20t | 12c20t | **8c20t** |
-| i7-12700K | 8P+4E（关 HT） | 12c12t | 8c12t | 8c12t |
+| i7-12700K | 8P+4E (HT mati) | 12c12t | 8c12t | 8c12t |
 | i9-12900K | 8P+8E+HT | 24c24t | 16c24t | 8c24t |
 | i9-13900K | 8P+16E+HT | 32c32t | 24c32t | 8c32t |
 
-★ **读法**：默认那一列把 20 线程**全挂在 8 个 P 核上**（「8c20t」），E 核不单独出现 ——
-这就是「伪装成 SMT」的意思；`ctrsmt=off` 才是「12 核 20 线程」的真实结构。
+★ **Cara membaca**: kolom default menggabungkan seluruh 20 thread **pada 8 P-core** ("8c20t"), E-core tidak muncul sendiri ——
+inilah arti "disamarkan sebagai SMT"; `ctrsmt=off` itulah struktur sebenarnya "12 core 20 thread".
 
-## 5. 验证（改完重启后）
+## 5. Verifikasi (setelah diubah dan restart)
 
-1. `scripts/e-cores-check.sh` —— 拓扑 + 频率 + 判读（**重点看 `hw.nperflevels` 是否变 2**）。
-2. **`kextstat` / `kmutil showloaded`** 里应有 `org.b00t0x.CpuTopologyRebuild`，且**在 Lilu 之后**。
-3. **`ocvalidate` = No issues found**（改过 `Kernel>Add` 必跑）。
-4. **跑分对照**：Geekbench 单核 / 多核，与「关小核」时的基线**同机对比**（别跨机器比，见 §7.3）。
-5. ★ **频率别掉**：`scripts/cpu-freq-probe.sh` —— 基线单线程 ≈ 4.28、8 线程 ≈ 4.29–4.35 GHz；
-   若开小核后频率掉了，说明拓扑重建与 XCPM 打架，回滚。
+1. `scripts/e-cores-check.sh` —— topologi + frekuensi + interpretasi (**fokus pada apakah `hw.nperflevels` berubah jadi 2**).
+2. **`kextstat` / `kmutil showloaded`** harus memuat `org.b00t0x.CpuTopologyRebuild`, dan **setelah Lilu**.
+3. **`ocvalidate` = No issues found** (wajib dijalankan setelah mengubah `Kernel>Add`).
+4. **Perbandingan benchmark**: Geekbench single-core / multi-core, **perbandingan pada mesin yang sama** dengan baseline "E-core dimatikan" (jangan membandingkan antar mesin, lihat §7.3).
+5. ★ **Jangan sampai frekuensi turun**: `scripts/cpu-freq-probe.sh` —— baseline single-thread ≈ 4,28, 8 thread ≈ 4,29–4,35 GHz;
+   bila frekuensi turun setelah E-core diaktifkan, artinya pembangunan ulang topologi bentrok dengan XCPM, lakukan rollback.
 
-## 6. 回滚（三条，任选一条即可）
+## 6. Rollback (tiga pilihan, cukup pilih salah satu)
 
-1. **最快**：BIOS 把 `Active Efficient Cores` 设回 **`0`** —— **配置一行都不用改**。
-2. **只想去掉 kext**：`CpuTopologyRebuild` 条目设 **`Enabled=false`**（或删条目 + 移走 kext，见铁律 6）。
-3. **起不来**：拷回备份的 config（`scripts/oc-edit-safe.sh` 的存档）+ U 盘 EFI 救援。
+1. **Tercepat**: setel `Active Efficient Cores` kembali ke **`0`** di BIOS —— **konfigurasi tidak perlu diubah satu baris pun**.
+2. **Hanya ingin melepas kext**: setel entri `CpuTopologyRebuild` ke **`Enabled=false`** (atau hapus entri + pindahkan kext, lihat aturan besi 6).
+3. **Tidak bisa boot**: kembalikan config dari cadangan (`scripts/oc-edit-safe.sh`) + rescue EFI lewat U disk.
 
-## 7. 本机实测与取舍（10-15）
+## 7. Pengukuran lokal dan trade-off (10-15)
 
-### 7.1 关小核时的现状（实测）
+### 7.1 Kondisi saat E-core dimatikan (terukur)
 
-- macOS 只见 **8 核 16 线程**：`hw.ncpu=16`、`hw.nperflevels=1`、`hw.perflevel0.physicalcpu=8`；
-  而 `CPUID.1FH` 报**逻辑处理器 20**（sub0 SMT=2 / sub1 Core 级=20，无 Module/Tile 级）⇒ **E 核在硅片上存在，只是没喂给 macOS**。
-- `CpuTopologyRebuild` 当时在 `Kernel>Add` 里但 **`Enabled=false`** ⇒ 官方所说「配合 `ProvideCurrentCpuInfo`」的收益拿不到。
+- macOS hanya melihat **8 core 16 thread**: `hw.ncpu=16`, `hw.nperflevels=1`, `hw.perflevel0.physicalcpu=8`;
+  sedangkan `CPUID.1FH` melaporkan **20 logical processor** (sub0 SMT=2 / level Core sub1=20, tanpa level Module/Tile) ⇒ **E-core ada secara fisik, hanya tidak diberi makan ke macOS**.
+- `CpuTopologyRebuild` saat itu ada di `Kernel>Add` tetapi **`Enabled=false`** ⇒ manfaat yang disebut resmi, yaitu "bekerja sama dengan `ProvideCurrentCpuInfo`", tidak bisa diperoleh.
 
-### 7.2 ★ 为什么「关掉」也可能是对的
+### 7.2 ★ Mengapa "mematikan" juga bisa jadi pilihan yang benar
 
-- Alder Lake 在 macOS 上**调度 E 核本就是雷区**（内核没有完整的混合调度支持）；
-- 「多 4 个核」不等于「快 4 核」—— 若内核把 E 核当 P 核派活，单线程 / 时延敏感任务反而变慢；
-- ⇒ **关掉是「低风险默认」**；要开就必须连 `CpuTopologyRebuild` 一起上，并且接受 §4.3 的 `-v` 冲突。
+- Scheduling E-core di macOS pada Alder Lake **memang wilayah berbahaya** (kernel tidak punya dukungan scheduling hybrid yang lengkap);
+- "Menambah 4 core" tidak sama dengan "lebih cepat 4 core" — jika kernel menganggap E-core sebagai P-core saat memberikan tugas, tugas single-thread / sensitif latensi justru melambat;
+- ⇒ **Mematikan adalah "default berisiko rendah"**; jika ingin mengaktifkan, `CpuTopologyRebuild` harus ikut digunakan, dan Anda harus menerima konflik `-v` di §4.3.
 
-### 7.3 榜上对照（**有局限，别当铁证**）
+### 7.3 Perbandingan dengan papan (**ada keterbatasan, jangan dipakai sebagai bukti kuat**)
 
-Geekbench 7 官网同 CPU（i7-12700K，`Family 6 Model 151 Stepping 2`）榜：
+Papan Geekbench 7 resmi untuk CPU yang sama (i7-12700K, `Family 6 Model 151 Stepping 2`):
 
-| 平台 | 线程 | 单核 | 多核 |
+| Platform | Thread | Single-core | Multi-core |
 |---|---|---|---|
-| macOS（**关小核**）4 条 | 16 | 941–980 | 5132–5714 |
-| macOS（**开小核**）1 条 | 20 | **1393** | **7672** |
-| Windows 12 条 | — | 2007–2351 | 7761–17781 |
-| Linux 4 条 | — | 2162–2540 | 10330–19535 |
+| macOS (**E-core dimatikan**) 4 entri | 16 | 941–980 | 5132–5714 |
+| macOS (**E-core aktif**) 1 entri | 20 | **1393** | **7672** |
+| Windows 12 entri | — | 2007–2351 | 7761–17781 |
+| Linux 4 entri | — | 2162–2540 | 10330–19535 |
 
-- 开小核那条比关小核高 **+47% 单核 / +37% 多核**；逐项对比里 **`HTML5 Browser` 与 `PDF Viewer` 恰好 2.0x**
-  —— 这两项框架密集、会派生辅助线程，**与「多 4 个 E 核可用」一致**。
-- ★ **局限**：只有 **1 条**开小核样本、且**不是本机**；跨平台比「分数」会被内存 / OS / 版本污染
-  （Windows 那条是 DDR5 四通道，本机 DDR4 双通道）⇒ **只作方向性参考，最终以本机 A/B 为准**。
-- ★ 这条数据**推翻了早先「小核已关 ⇒ `CpuTopologyRebuild` 是 no-op」的推论**（当时无实测）。
+- Entri dengan E-core aktif **+47% single-core / +37% multi-core** dibanding E-core dimatikan; pada perbandingan per item, **`HTML5 Browser` dan `PDF Viewer` persis 2,0x**
+  — kedua item ini memang framework-intensive dan menurunkan thread pembantu, **konsisten dengan "4 E-core tambahan tersedia"**.
+- ★ **Keterbatasan**: hanya **1** sampel dengan E-core aktif, dan **bukan mesin ini**; membandingkan "skor" lintas platform terkontaminasi memori / OS / versi
+  (entri Windows memakai DDR5 quad-channel, mesin ini DDR4 dual-channel) ⇒ **hanya sebagai acuan arah, akhirnya A/B pada mesin ini yang menentukan**.
+- ★ Data ini **membantah kesimpulan lama** bahwa "E-core dimatikan ⇒ `CpuTopologyRebuild` adalah no-op" (belum ada pengukuran saat itu).
 
-### 7.4 本机「开小核」的落地状态（10-15 05:06）
+### 7.4 Status penerapan "E-core aktif" pada mesin ini (10-15 05:06)
 
-- 已做：从 `_kexts-removed-20261014/` 拷回 `CpuTopologyRebuild.kext`（v2.0.2）到 `EFI/OC/Kexts/`；
-  `Kernel>Add` 插入条目 `Enabled=true`、**紧跟 Lilu**（index 1）；`ProvideCurrentCpuInfo` 保持 `true`。
-  校验：`plutil` OK · **`ocvalidate` 1.0.8 = No issues found** · 语义 diff 仅 1 处（Add 19→20）· 卸载重挂 sha 一致。
-- **待做（BIOS，只能人工）**：`Active Efficient Cores = All` → F10。
-- **可选的下一步**：默认拓扑不理想时再加 **`ctrsmt=full`**（**一次只加一个变量**，见铁律 5）。
+- Sudah dilakukan: salin kembali `CpuTopologyRebuild.kext` (v2.0.2) dari `_kexts-removed-20261014/` ke `EFI/OC/Kexts/`;
+  sisipkan entri `Enabled=true` di `Kernel>Add`, **tepat setelah Lilu** (index 1); `ProvideCurrentCpuInfo` tetap `true`.
+  Verifikasi: `plutil` OK · **`ocvalidate` 1.0.8 = No issues found** · diff semantik hanya 1 tempat (Add 19→20) · sha unload/remount konsisten.
+- **Belum dilakukan (BIOS, hanya manual)**: `Active Efficient Cores = All` → F10.
+- **Langkah berikutnya yang opsional**: tambah **`ctrsmt=full`** bila topologi default tidak ideal (**hanya satu variabel per waktu**, lihat aturan besi 5).
 
-## 8. 官方出处
+## 8. Sumber resmi
 
-- `b00t0x/CpuTopologyRebuild` → `README.md`（Usage / Options 表 / Internal topology examples / Current problems）。
-- OpenCore `Configuration.pdf` → `Kernel > Quirks > ProvideCurrentCpuInfo`。
-- ★ 生态与工具索引另见 `ecosystem-sources.md`；CPU 限频 / 睿频另见 `intel-turbo.md`；
-  BIOS 项命名对照另见 `bios-settings.md` §8。
+- `b00t0x/CpuTopologyRebuild` → `README.md` (Usage / tabel Options / Internal topology examples / Current problems).
+- OpenCore `Configuration.pdf` → `Kernel > Quirks > ProvideCurrentCpuInfo`.
+- ★ Indeks ekosistem dan alat lain ada di `ecosystem-sources.md`; pembatas frekuensi CPU / turbo ada di `intel-turbo.md`;
+  perbandingan nama item BIOS ada di `bios-settings.md` §8.

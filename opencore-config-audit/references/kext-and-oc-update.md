@@ -1,17 +1,16 @@
-# 更新 kext 与 OpenCore —— 什么时候该更新、什么时候**千万别动**
+# Pembaruan kext dan OpenCore —— kapan harus diperbarui, kapan **sangat jangan disentuh**
 
-> 依据：本机 10-16 的一次**完整踩坑与回滚**（把 Dortania 构建误判成「第三方重编译」→ 换成上游 release →
-> 逐字节核对后发现是**降级** → 全部回滚）+ OpenCore 官方文档 + 上游驱动安装脚本逐行核对。
-> ★★ **一句话**：**「更新」在黑苹果里不是好事** —— 先证明「该更新」，再动手；
-> **判「这个文件是不是官方件」的最后一步，是去 grep 厂商自己的安装脚本，而不是查上游 tag。**
+> Dasar: satu kali **pengalaman jatuh dan rollback lengkap** di mesin ini pada 10-16 (mengira build Dortania sebagai "rebuild pihak ketiga" → menggantinya dengan release upstream → setelah dibandingkan byte demi byte ternyata itu **penurunan versi** → rollback semuanya) + dokumentasi resmi OpenCore + pemeriksaan baris demi baris skrip instalasi driver upstream.
+> ★★ **Satu kalimat**: **"pembaruan" bukan hal baik di Hackintosh** —— buktikan dulu bahwa "seharusnya diperbarui", baru mulai;
+> **langkah terakhir untuk menilai "apakah file ini produk resmi" adalah me-grep skrip instalasi milik vendor itu sendiri, bukan mengecek tag upstream.**
 
-## 0. ★★★ 先记住这条（本机付过学费）
+## 0. ★★★ Ingat ini dulu (mesin ini sudah bayar mahal)
 
-**上游 tag 查不到 ≠ 来路不明。**
+**Tag upstream tidak ditemukan ≠ asalnya tidak jelas.**
 
-本机 EFI 里有 8 个 kext 的版本号**比上游 release 高一个补丁号**，上游**逐个 404**：
+Di EFI mesin ini ada 8 kext dengan nomor versi **satu nomor patch lebih tinggi dari release upstream**, dan upstream **balas 404 satu per satu**:
 
-| kext | EFI 里的版本 | 上游最新 release | 上游有该 tag？ |
+| kext | Versi di EFI | Release terbaru upstream | Apakah upstream punya tag tersebut? |
 |---|---|---|---|
 | `Lilu` | **1.7.3** | 1.7.2 | ❌ 404 |
 | `VirtualSMC` / `SMCProcessor` / `SMCSuperIO` | **1.3.9** | 1.3.8 | ❌ 404 |
@@ -20,62 +19,62 @@
 | `NVMeFix` | **1.1.4** | 1.1.3 | ❌ |
 | `BlueToolFixup` | **2.7.3** | 2.7.2 | ❌ |
 
-**它们全都是 Dortania `build-repo` 的构建产物** —— 该仓库**按具体 commit 构建**，
-上游在最后一次 release 之后又有提交时，就把**补丁号自己 +1**。
+**Semuanya adalah hasil build dari Dortania `build-repo`** —— repositori itu **membangun berdasarkan commit tertentu**,
+dan ketika upstream punya commit baru setelah release terakhir, ia **menambah nomor patch sendiri +1**.
 
-⇒ **把它们「更新」成上游 release = 降级**（本机做过一次，已回滚）。
+⇒ **"Memperbarui" mereka ke release upstream = menurunkan versi** (sudah pernah dicoba di mesin ini dan sudah di-rollback).
 
-### 0.1 谁是「官方源」？—— **厂商自己的安装器说了算**
+### 0.1 Siapa yang "sumber resmi"? —— **Installer milik vendor yang menentukan**
 
-本机（NullMoth NVIDIA 驱动）的安装脚本 `app/Resources/nullmoth-setup.sh` 第 100–105 行有一张 `kurl()` 表，
-把驱动需要的 kext **固定到具体文件并校验 SHA-256**：
+Skrip instalasi (driver NVIDIA NullMoth) `app/Resources/nullmoth-setup.sh` baris 100–105 memuat tabel `kurl()`
+yang **menetapkan kext yang dibutuhkan driver ke file tertentu dan memverifikasi SHA-256**:
 
-| kext | 安装器钉的源 | 包内版本 |
+| kext | Sumber yang dipin installer | Versi di dalam paket |
 |---|---|---|
 | `Lilu.kext` | `dortania/build-repo/releases/download/**Lilu-0515f40**/` | **1.7.3** |
 | `RestrictEvents.kext` | `dortania/build-repo/releases/download/**RestrictEvents-9265e78**/` | **1.1.7** |
 | `AMFIPass.kext` | `dortania/OpenCore-Legacy-Patcher/raw/main/payloads/Kexts/Acidanthera/` | 1.4.1 |
 | `USBToolBox.kext` | `USBToolBox/kext/releases/download/1.2.0/` | 1.2.0 |
 
-注释原话：
+Komentar aslinya:
 
 > *"Kexts the driver's OpenCore setup needs, **pinned to the same files 1401 builds with** (p1401/mirror.json)."*
 
-**其余映射（已逐个下载比对，逐字节一致）**：
+**Pemetaan lainnya (sudah diunduh dan dibandingkan satu per satu, identik byte demi byte)**:
 
-| EFI 里的版本 | Dortania tag |
+| Versi di EFI | Tag Dortania |
 |---|---|
 | `VirtualSMC` / `SMCProcessor` / `SMCSuperIO` **1.3.9** | `VirtualSMC-b5c62c2` |
 | `WhateverGreen` **1.7.2** | `WhateverGreen-093e76f` |
 | `BlueToolFixup` **2.7.3** | `BrcmPatchRAM-6538902` |
-| `NVMeFix` **1.1.4** | （同族构建） |
+| `NVMeFix` **1.1.4** | (build satu keluarga) |
 
-Lilu 那支的 zip SHA = `261aebb9dc83adb6515c96405653f53c3c50b09c89babdb91fb41f7b33a1cd2a`，
-**与安装器里钉的值一字不差**。
+SHA zip untuk cabang Lilu = `261aebb9dc83adb6515c96405653f53c3c50b09c89babdb91fb41f7b33a1cd2a`,
+**identik persis dengan nilai yang dipin di installer**.
 
-⇒ ★★ **纪律**：判定「该不该更新某个 kext」之前，**先 grep 厂商的安装脚本 / 文档 / `mirror.json`**：
-它们才是「官方源」的定义。**厂商钉死的东西一律不动。**
+⇒ ★★ **Disiplin**: sebelum memutuskan "apakah sebuah kext seharusnya diperbarui", **pertama grep skrip instalasi / dokumentasi / `mirror.json` milik vendor**:
+itulah yang mendefinisikan "sumber resmi". **Semua yang dipin vendor tidak boleh disentuh.**
 
-## 1. 判「这个 kext 是不是官方件」的四条判据（**必须一起看**）
+## 1. Empat kriteria untuk menilai "apakah kext ini produk resmi" (**harus dilihat bersama-sama**)
 
-| # | 判据 | 能证明什么 | 会怎么误判 |
+| # | Kriteria | Apa yang bisa dibuktikan | Bagaimana bisa salah menilai |
 |---|---|---|---|
-| 1 | **上游有没有这个 tag**（`git/ref/tags/<v>`） | 是否来自上游 release | ★ **会误判** —— Dortania build-repo 的 tag 在上游查不到 |
-| 2 | **构建元数据**（`DTXcode` / `DTSDKName` / `BuildMachineOSBuild`） | 是不是同一批、同一工具链 | ★ **会误判** —— Dortania 的构建机就是**老工具链**（本机这批是 `DTXcode 1420 / macosx13.1 / 21G320`，2022 年） |
-| 3 | **二进制 sha256** | 与官方是否同一份 | 只能证明「不同」，**不能证明「不可信」** |
-| 4 | ★★★ **厂商安装器 / 文档 / `mirror.json` 有没有钉它** | **权威答案** | —— |
+| 1 | **Apakah upstream punya tag ini** (`git/ref/tags/<v>`) | Apakah berasal dari release upstream | ★ **bisa salah menilai** —— tag Dortania build-repo tidak ditemukan di upstream |
+| 2 | **Metadata build** (`DTXcode` / `DTSDKName` / `BuildMachineOSBuild`) | Apakah dari batch dan toolchain yang sama | ★ **bisa salah menilai** —— mesin build Dortania memang memakai **toolchain lama** (batch di mesin ini `DTXcode 1420 / macosx13.1 / 21G320`, tahun 2022) |
+| 3 | **sha256 biner** | Apakah sama dengan yang resmi | Hanya bisa membuktikan "berbeda", **tidak bisa membuktikan "tidak tepercaya"** |
+| 4 | ★★★ **Apakah installer / dokumentasi / `mirror.json` milik vendor meng-pin-nya** | **Jawaban otoritatif** | —— |
 
-**结论**：1–3 只能给出「可疑」，**只有第 4 条能定性**。
-★ 反之：**若第 4 条钉了，即使 1–3 全「异常」，也不要动**。
+**Kesimpulan**: 1–3 hanya bisa menghasilkan "mencurigakan", **hanya butir 4 yang bisa menentukan sifat**.
+★ Sebaliknya: **jika butir 4 meng-pin-nya, bahkan kalau 1–3 semuanya "abnormal", jangan disentuh**.
 
-> ★ **`DTXcode` 老 ≠ 可疑**；**版本号比官方高 ≠ 可疑**。
-> 反例记牢：本机这批「可疑件」全部是**厂商指定的 Dortania 构建**，对应的是**比官方 release 更新的 commit**。
+> ★ **`DTXcode` lama ≠ mencurigakan**; **nomor versi lebih tinggi dari resmi ≠ mencurigakan**.
+> Ingat contoh kebalikannya: seluruh "berkas mencurigakan" di mesin ini adalah **build Dortania yang ditentukan vendor**, dan berkorespondensi dengan **commit yang lebih baru dari release resmi**.
 
-## 2. 判 DEBUG / RELEASE —— 用**体积对照**，别找字符串
+## 2. Menentukan DEBUG / RELEASE —— pakai **perbandingan ukuran**, jangan cari string
 
-下载**同版本**官方 RELEASE + DEBUG 双包，逐个比体积（**DEBUG 通常 1.2–1.9×**）：
+Unduh paket resmi RELEASE + DEBUG **dengan versi yang sama**, bandingkan ukuran satu per satu (**DEBUG biasanya 1.2–1.9×**):
 
-| kext | 本机 | 官方 REL | 官方 DBG | 判定 |
+| kext | Mesin ini | REL resmi | DBG resmi | Putusan |
 |---|---|---|---|---|
 | `Lilu` | 543,840 | 527,456 | **978,324** | REL |
 | `WhateverGreen` | 531,800 | 527,896 | 752,368 | REL |
@@ -83,80 +82,80 @@ Lilu 那支的 zip SHA = `261aebb9dc83adb6515c96405653f53c3c50b09c89babdb91fb41f
 | `NVMeFix` | 51,312 | **51,312** | 91,320 | REL |
 | `BlueToolFixup` | 41,336 | 41,296 | 42,592 | REL |
 
-★ 比「在二进制里找 `DEBUG` 字符串」可靠得多（Release 构建里也可能残留字样）。
-★ **OpenCore 本体**的 DEBUG/RELEASE 是**另一回事**（看 `opencore-version` 前缀 `DBG-` / `REL-`，见 §4）。
+★ Jauh lebih andal daripada "mencari string `DEBUG` di dalam biner" (kalimat ini bisa saja tertinggal pada build Release).
+★ DEBUG/RELEASE pada **bodi OpenCore** adalah **hal yang berbeda** (lihat awalan `DBG-` / `REL-` pada `opencore-version`, lihat §4).
 
-## 3. ★ 什么情况下**才**该更新
+## 3. ★ Kapan **baru** seharusnya diperbarui
 
-| 情况 | 该更新吗 |
+| Situasi | Harus diperbarui? |
 |---|---|
-| 上游发了新 release，**且厂商安装器没钉死这个 kext** | ✅ 可以（走 §5 流程） |
-| 升级 macOS 大版本，需要 `MinKernel` / `MaxKernel` 版本分流的新构建 | ✅ **必须**（见 `os-upgrade-15-to-26.md`） |
-| 有明确 bug fix / CVE **正对着你的症状** | ✅ 可以 |
-| **厂商安装器钉死了** | ❌ **不要动**（§0.1） |
-| 只是「版本号看着旧」/「习惯性全部更新」 | ❌ **不要动** |
-| 驱动本体（如 NullMoth）由 App 自己管版本 | ❌ 交给 App（`/Library/NullMoth/driver-version`），**别手工换 kext** |
+| Upstream menerbitkan release baru, **dan installer vendor tidak meng-pin kext ini** | ✅ Boleh (ikuti alur §5) |
+| Menaikkan versi besar macOS, butuh build baru dengan pemisahan versi `MinKernel` / `MaxKernel` | ✅ **Wajib** (lihat `os-upgrade-15-to-26.md`) |
+| Ada bug fix / CVE yang **tepat cocok dengan gejala Anda** | ✅ Boleh |
+| **Installer vendor meng-pin-nya** | ❌ **Jangan disentuh** (§0.1) |
+| Hanya "nomor versinya kelihatan lama" / "kebiasaan memperbarui semuanya" | ❌ **Jangan disentuh** |
+| Bodi driver (seperti NullMoth) versinya dikelola App itu sendiri | ❌ Serahkan ke App (`/Library/NullMoth/driver-version`), **jangan mengganti kext secara manual** |
 
-> ★ 本机的教训：**「统一更新一遍」这种想法本身就是错的** ——
-> 黑苹果的 kext 生态里，「厂商钉死的组合」比「最新版」重要得多。
+> ★ Pelajaran dari mesin ini: **pikir "memperbarui semuanya sekaligus" itu memang salah** ——
+> Di ekosistem kext Hackintosh, "kombinasi yang dipin vendor" jauh lebih penting daripada "versi terbaru".
 
-## 4. OpenCore 本体的更新
+## 4. Pembaruan bodi OpenCore
 
-### 4.1 先看现在是什么
+### 4.1 Lihat dulu kondisi sekarang
 
 ```bash
 nvram 4D1FDA02-38C7-4A6A-9CC6-4BCCA8B30102:opencore-version
-# 例：DBG-108-2026-09-27  ⇒ 1.0.8 的 DEBUG 构建
+# contoh: DBG-108-2026-09-27  ⇒ build 1.0.8 DEBUG
 ```
 
-`DBG-` = DEBUG / `REL-` = RELEASE；数字是版本（`108` = 1.0.8）；后面是构建日期。
+`DBG-` = DEBUG / `REL-` = RELEASE; angkanya adalah versi (`108` = 1.0.8); bagian berikutnya adalah tanggal build.
 
-### 4.2 ★★ 换构建必须**连官方同名 Drivers 一起换**（铁律 14）
+### 4.2 ★★ Mengganti build **wajib mengganti Drivers resmi dengan nama yang sama** (aturan besi 14)
 
-同版本下 **RELEASE 与 DEBUG 的所有 Drivers 内容都不同**（例 1.0.8：`OpenRuntime.efi` 24,576 → 36,864）。
-只换 `OpenCore.efi` = **构建混搭的引导器**。
-★ **第三方驱动**（如 `NullMothLogo.efi`）**保持不动**。
+Pada versi yang sama, **seluruh isi Drivers RELEASE dan DEBUG berbeda** (contoh 1.0.8: `OpenRuntime.efi` 24,576 → 36,864).
+Hanya mengganti `OpenCore.efi` = **bootloader dengan build campuran**.
+★ **Driver pihak ketiga** (seperti `NullMothLogo.efi`) **dibiarkan apa adanya**.
 
-用 `scripts/oc-swap-build.sh`（它连 Drivers 一起换、保留第三方驱动、自动备份/校验/落盘）。
+Gunakan `scripts/oc-swap-build.sh` (skrip ini mengganti Drivers sekaligus, mempertahankan driver pihak ketiga, serta melakukan backup/verifikasi/penulisan otomatis).
 
-### 4.3 升级到**新版本** OpenCore 时还要做
+### 4.3 Saat menaikkan ke **versi baru** OpenCore, ada langkah tambahan
 
-1. **先取同版本的官方包**：`scripts/fetch-opencore-docs.sh`（拿 `ocvalidate` / `Configuration.tex` / `Sample.plist` / `AcpiSamples`）
-2. ★ **`ocvalidate` 必须与机器上的 OpenCore 同版本** —— 否则校验结论无效（铁律 10）
-3. **读官方 `Differences.pdf` / Release notes** 看有没有 breaking change（`Sample.plist` 的语义 diff 是最快的检查）
-4. 换完跑 `scripts/oc-verify.sh`（`plutil` + `ocvalidate` + 引用完整性 + sha）
-5. ★ **别忘 BIOS 侧**：新版本可能对 `ResizeGpuBars` / `ResizeAppleGpuBars` / `Kernel>Block` 有不同要求
+1. **Ambil dulu paket resmi versi yang sama**: `scripts/fetch-opencore-docs.sh` (mengambil `ocvalidate` / `Configuration.tex` / `Sample.plist` / `AcpiSamples`)
+2. ★ **`ocvalidate` harus versi sama dengan OpenCore di mesin** —— jika tidak, hasil validasi tidak sah (aturan besi 10)
+3. **Baca `Differences.pdf` / Release notes resmi** untuk melihat apakah ada breaking change (diff semantik pada `Sample.plist` adalah pemeriksaan tercepat)
+4. Setelah selesai, jalankan `scripts/oc-verify.sh` (`plutil` + `ocvalidate` + integritas referensi + sha)
+5. ★ **Jangan lupa sisi BIOS**: versi baru mungkin punya requirement berbeda untuk `ResizeGpuBars` / `ResizeAppleGpuBars` / `Kernel>Block`
 
-## 5. 更新流程（安全版，一次只动一类）
+## 5. Alur pembaruan (versi aman, satu jenis per satu kali)
 
-1. **备份**：整个 EFI（`tgz`）+ kext 目录（**含一份版本清单 `VERSIONS-before.txt`**）
-2. **记录现状**：`scripts/kext-inventory.sh` 导出每个 kext 的 `CFBundleVersion` / `DTXcode` / sha256
-3. **判断该不该动**：§1 四条判据 + §3 该更新表
-4. ★ **一次只动一类**：**先 kext 或先 OpenCore 本体，不要同时**
-5. **改**：`rsync -a --delete` 同步 kext 目录（★ 注意它会删掉目标里不在源里的文件）
-6. **自检三条**：
+1. **Backup**: seluruh EFI (`tgz`) + direktori kext (**termasuk salinan daftar versi `VERSIONS-before.txt`**)
+2. **Catat kondisi saat ini**: `scripts/kext-inventory.sh` mengekspor `CFBundleVersion` / `DTXcode` / sha256 tiap kext
+3. **Putuskan apakah perlu disentuh**: 4 kriteria di §1 + tabel pembaruan di §3
+4. ★ **Satu jenis per satu kali**: **kext dulu atau bodi OpenCore dulu, jangan bersamaan**
+5. **Ubah**: sinkronkan direktori kext dengan `rsync -a --delete` (★ perhatikan, ini menghapus file di tujuan yang tidak ada di sumber)
+6. **Tiga pemeriksaan mandiri**:
    - `ocvalidate` = No issues found
-   - **config 里所有 `BundlePath` 都能在 `Kexts/` 找到**（引用 0 缺失）
-   - **只有被改动的 kext** 的 `Info.plist` + 二进制发生变化
-7. **落盘**：`sync` → **卸载** → **重挂** → 复验版本/sha 一致（FAT 有写缓存）
-8. **重启后验证**：`kmutil showloaded --list-only` 对照版本；跑 `scripts/oc-verify.sh`
-9. **写清回滚路径**（备份在哪、怎么还原）
+   - **semua `BundlePath` di dalam config dapat ditemukan di `Kexts/`** (0 referensi hilang)
+   - **hanya kext yang diubah** yang berubah pada `Info.plist` + binernya
+7. **Tulis ke disk**: `sync` → **unmount** → **mount ulang** → verifikasi ulang versi/sha konsisten (FAT punya write cache)
+8. **Verifikasi setelah restart**: bandingkan versi dengan `kmutil showloaded --list-only`; jalankan `scripts/oc-verify.sh`
+9. **Tuliskan jalur rollback dengan jelas** (di mana cadangannya, bagaimana cara memulihkannya)
 
-## 6. 自检与坑
+## 6. Pemeriksaan mandiri dan jebakan
 
-| 项 | 做法 |
+| Item | Cara |
 |---|---|
-| **kext 版本清单** | `scripts/kext-inventory.sh <EFI 挂载点或 Kexts 目录>` —— 版本 / `DTXcode` / 大小 / sha256 / config 引用核对 |
-| ★ **shell `PATH` 会被沙箱搞坏** | 脚本里先 `export PATH=/usr/bin:/bin:/usr/sbin:/sbin`（否则 `stat` / `strings` / `grep` 会莫名 `command not found`） |
-| ★ **盘号会漂** | 一律 `diskutil list \| grep "EFI EFI"` 认盘（铁律 1） |
-| ★ **卸载重挂才算落盘** | FAT 写缓存（铁律 4） |
-| ★ **`rsync --delete` 是双刃剑** | 它会让目标与源**完全一致** —— 别拿它同步「只应该多几个文件」的场景 |
-| ★ **别在没备份时试** | 尤其 OC 本体：混搭构建 = 可能进不去选择器 |
+| **Daftar versi kext** | `scripts/kext-inventory.sh <titik mount EFI atau direktori Kexts>` — versi / `DTXcode` / ukuran / sha256 / pencocokan referensi config |
+| ★ **`PATH` shell bisa rusak oleh sandbox** | di dalam skrip, jalankan dulu `export PATH=/usr/bin:/bin:/usr/sbin:/sbin` (jika tidak, `stat` / `strings` / `grep` akan muncul `command not found` secara inexplicable) |
+| ★ **Nomor disk bisa bergeser** | selalu kenali disk dengan `diskutil list \| grep "EFI EFI"` (aturan besi 1) |
+| ★ **Unmount lalu mount ulang baru berarti tertulis ke disk** | write cache FAT (aturan besi 4) |
+| ★ **`rsync --delete` adalah pedang bermata dua** | ia membuat target **identik penuh** dengan sumber —— jangan dipakai untuk menyinkronkan skenario "hanya seharusnya ada beberapa file tambahan" |
+| ★ **Jangan mencoba tanpa cadangan** | terutama bodi OC: build campuran = mungkin tidak bisa masuk ke picker |
 
-## 7. 出处
+## 7. Sumber rujukan
 
-- Dortania `build-repo`（<https://github.com/dortania/build-repo>）—— 按 commit 构建、补丁号 +1 的机制。
-- 厂商安装脚本 `nullmoth-setup.sh` 的 `kurl()` 表 + `p1401/mirror.json` —— **「官方源」的实际定义**。
-- OpenCore `Configuration.pdf`（`Misc>Debug` 版本号语义）+ 官方 `Differences.pdf`。
-- 相关：`official-docs-method.md`（逐键对照）· `os-upgrade-15-to-26.md`（版本分流）·
-  `nvidia-driver.md`（驱动本体版本由 App 管）· `disks-and-kexts.md`（kext 精简与「不能删」清单）。
+- Dortania `build-repo` (<https://github.com/dortania/build-repo>) —— mekanisme build berdasarkan commit dengan nomor patch +1.
+- Tabel `kurl()` pada skrip instalasi vendor `nullmoth-setup.sh` + `p1401/mirror.json` —— **definisi sebenarnya dari "sumber resmi"**.
+- OpenCore `Configuration.pdf` (semantik nomor versi `Misc>Debug`) + `Differences.pdf` resmi.
+- Terkait: `official-docs-method.md` (perbandingan per kunci) · `os-upgrade-15-to-26.md` (pemisahan versi) ·
+  `nvidia-driver.md` (versi bodi driver dikelola App) · `disks-and-kexts.md` (pemangkasan kext dan daftar "tidak boleh dihapus").

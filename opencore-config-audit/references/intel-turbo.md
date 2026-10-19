@@ -1,207 +1,207 @@
-# Intel 睿频（Turbo Boost）—— 从「被压在低频」到最佳定案
+# Intel Turbo (Turbo Boost)—— dari "tertekan di frekuensi rendah" sampai konfigurasi terbaik
 
-> 依据：本机 10-13 起的完整实战闭环（**诊断 → 排除 → CPUFriend 修复 → 76 份机型 profile 全量对比 →
-> iMac19,1 实验翻车回滚 → 最终定案**）+ CPUFriend 官方 `Instructions.md` / `Tools/ResourceConverter.sh`
-> + `X86PlatformPlugin` 全部 76 份 `Mac-*.plist` 的实测解码。
-> ★ **验证工具用 CPU-S**（用户指定），配合 Intel Power Gadget 与自写探针交叉印证。
+> Dasar: loop praktis lengkap di mesin ini sejak 10-13 (**diagnosis → eliminasi → perbaikan CPUFriend → perbandingan penuh 76 profile model →
+> rollback percobaan gagal iMac19,1 → konfigurasi final**) + `Instructions.md` resmi CPUFriend / `Tools/ResourceConverter.sh`
+> + hasil dekode seluruh 76 `Mac-*.plist` di `X86PlatformPlugin`.
+> ★ **Alat verifikasi pakai CPU-S** (ditentukan pengguna), dikuatkan silang dengan Intel Power Gadget dan probe buatan sendiri.
 
-## 0. ★★★ 最佳方法（本机已定案 —— 先看这个）
+## 0. ★★★ Metode terbaik (sudah final di mesin ini — baca ini dulu)
 
-**不要试图「换个机型 profile 来抬频率上限」** —— 这条路本机**已实测走不通**。
-**正确做法 = 注入「本机自己那份 profile，只把 `hwp` 删掉」**，强制 macOS 走传统 XCPM P-state。
+**Jangan coba "ganti profile model untuk menaikkan batas frekuensi"** — jalur ini **sudah terbukti tidak berhasil** di mesin ini.
+**Cara yang benar = inject "profile milik mesin ini sendiri, hanya hapus `hwp`"**, paksa macOS memakai XCPM P-state tradisional.
 
-| 项 | 定案值 |
+| Item | Nilai final |
 |---|---|
-| 注入的数据 | **本机机型自己的 profile**（`iMac20,1` ⇒ `Mac-CFF7D910A743CAAF.plist`），**只把 `hwp` 一项删掉** |
-| `FrequencyVectors` 段数 | **1 段**（每段恒 7668 B） |
-| `Frequencies` 上限 | `4500`（**1 段族的天花板**） |
-| `CPUFloor` | `1300`（与本机 CPU 匹配） |
-| **`hwp`** | **已删除** ← ★★ **最关键的一项** |
-| 实测频率 | 单线程 **4.28–4.35 GHz**；8 线程 **4.29–4.35 GHz**，八核一致、无振荡 |
+| Data yang di-inject | **profile model mesin ini sendiri** (`iMac20,1` ⇒ `Mac-CFF7D910A743CAAF.plist`), **hapus hanya item `hwp`** |
+| Jumlah segmen `FrequencyVectors` | **1 segmen** (tiap segmen konstan 7668 B) |
+| Batas atas `Frequencies` | `4500` (**plafon keluarga 1 segmen**) |
+| `CPUFloor` | `1300` (cocok dengan CPU mesin ini) |
+| **`hwp`** | **sudah dihapus** ← ★★ **item paling penting** |
+| Frekuensi terukur | 1 thread **4.28–4.35 GHz**; 8 thread **4.29–4.35 GHz**, delapan core konsisten, tanpa osilasi |
 
-⇒ **四点全中才算「最佳」，缺一项就退步或翻车**（§5 给判据）。
+⇒ **Keempatnya harus kena semua agar disebut "terbaik", kurang satu saja berarti mundur atau gagal** (kriteria di §5).
 
-### 0.1 ★★ 反面结论（别再试，已付过学费）
+### 0.1 ★★ Kesimpulan negatif (sudah dicoba, sudah bayar mahal)
 
-**注入任何别的机型的 profile 都会把睿频压垮**：
+**Inject profile model lain apa pun akan menekan turbo sampai rusak**:
 
-| 试过的 | 结果 |
+| Yang dicoba | Hasil |
 |---|---|
-| `iMac19,1`（上限 5000，看着诱人） | **1.97 GHz**（暴跌 ~54%，比历史最低还低）⇒ 已回滚 |
-| `MacPro7,1`（原生 `hwp='on'`） | **2.3 GHz**（约一半性能） |
+| `iMac19,1` (batas atas 5000, terlihat menggoda) | **1.97 GHz** (turun ~54%, bahkan lebih rendah dari rekor terendah) ⇒ sudah di-rollback |
+| `MacPro7,1` (native `hwp='on'`) | **2.3 GHz** (sekitar separuh performa) |
 
-⇒ **本机凡是涉及电源管理 profile 的改动，一律默认不动。**
+⇒ **Semua perubahan yang menyangkut profile manajemen daya di mesin ini, secara default tidak boleh disentuh.**
 
-官方 `Instructions.md` 的警告是对的（**原话**）：
+Peringatan resmi di `Instructions.md` memang benar (**kutipan asli**):
 
 > *"most likely NOT required"*
 > *"Do not use CPUFriend for data customization until one knows clearly what power management data really is"*
 > *"If possible, changing SMBIOS … can be more reasonable"*
 
-## 1. 先确认现象（三种工具互相印证）
+## 1. Pastikan gejalanya dulu (tiga alat saling menguatkan)
 
-| 工具 | 看什么 | 本机实测（修复前） |
+| Alat | Yang dilihat | Hasil di mesin ini (sebelum diperbaiki) |
 |---|---|---|
-| **★ CPU-S**（社区工具，本机用 v4.3.2） | `设备型号` / `处理器型号` / **`当前睿频状态`** / 频档数量 / 测得频率列表 | `MacPro7,1` / `12thGen i7-12700K` / **`未睿频`** / 10 档 / 只测到 `100 / 700–1500 MHz` |
-| Intel Power Gadget | CORE `MAX/AVG/MIN/REQ`、PKG 功耗、温度 | `MAX 3.9 / AVG 2.25 / MIN 0.7 / REQ 2.97 GHz`；PKG 58 W；50 ℃ |
-| 自写探针（`scripts/cpu-freq-probe.sh`） | 单线程 / 8 线程实测频率 | 单线程 2.24–2.54、8 线程 2.2–2.3 GHz |
+| **★ CPU-S** (alat komunitas, di sini pakai v4.3.2) | `Device Model` / `Processor Model` / **`Current Turbo State`** / jumlah step frekuensi / daftar frekuensi terukur | `MacPro7,1` / `12thGen i7-12700K` / **`No Turbo`** / 10 step / hanya terukur `100 / 700–1500 MHz` |
+| Intel Power Gadget | CORE `MAX/AVG/MIN/REQ`, daya PKG, suhu | `MAX 3.9 / AVG 2.25 / MIN 0.7 / REQ 2.97 GHz`; PKG 58 W; 50 ℃ |
+| Probe buatan sendiri (`scripts/cpu-freq-probe.sh`) | Frekuensi terukur 1 thread / 8 thread | 1 thread 2.24–2.54, 8 thread 2.2–2.3 GHz |
 
-**CPU-S 的读法**：最关键是 **「当前睿频状态」** —— 显示 **未睿频**、且频率列表只到 1.5 GHz 就是被限频；
-修好后应显示**已睿频**，且频率列表覆盖到高倍频档。
+**Cara baca CPU-S**: yang paling penting adalah **"Current Turbo State"** — menampilkan **No Turbo** dan daftar frekuensi hanya sampai 1.5 GHz berarti frekuensi dibatasi;
+setelah diperbaiki harus menampilkan **Turbo**, dan daftar frekuensi mencakup step multiplier tinggi.
 
-**参考基线（i7-12700K）**：单核睿频 **5.0 GHz** / 全核约 **4.7 GHz** / 基础频率 **3.6 GHz**
-⇒ 测到 2.3 GHz 意味着**连基础频率都没跑到**，约一半性能。
+**Baseline acuan (i7-12700K)**: turbo 1 core **5.0 GHz** / semua core sekitar **4.7 GHz** / frekuensi dasar **3.6 GHz**
+⇒ 2.3 GHz terukur berarti **bahkan frekuensi dasar pun tidak tercapai**, hanya sekitar separuh performa.
 
-> ★ **自写基准的坑**：clang `-O2` 会把展开的依赖加法律**折叠**（曾算出 8.34 / 11.03 GHz 的荒谬值）。
-> 要测频率必须用**内联汇编钉住**（`cpu-freq-probe.sh` 用的就是 `mulsd` 固定 4 周期延迟的依赖链）。
+> ★ **Jebakan pada benchmark buatan sendiri**: clang `-O2` akan **meng-fold** hukum dependensi yang sudah di-unroll (pernah menghasilkan nilai absurd 8.34 / 11.03 GHz).
+> Untuk mengukur frekuensi harus memakai **inline assembly yang mem-pin** (`cpu-freq-probe.sh` memakai rantai dependensi dengan `mulsd` dan delay 4 siklus tetap).
 
-## 2. 先排除，别急着动 profile
+## 2. Eliminasi dulu, jangan buru-buru menyentuh profile
 
-| 项 | 判据 |
+| Item | Kriteria |
 |---|---|
-| 热降频 | `sysctl machdep.xcpm.cpu_thermal_level` 应为 **0**（本机 cpu/gpu/io 全 0，温度 39–55 ℃ 很凉） |
-| XCPM 上限被限 | `machdep.xcpm.hard_plimit_max_100mhz_ratio` / `soft_...` / `bootpst`（本机 = **49** ⇒ 4.9 GHz，正常） |
-| 日志风暴 / 后台负载 | `uptime`、`iostat`、`vm_stat`（★ 本机 `ps` / `top` 被策略禁用，只能换这些） |
-| 只是刚开机 | 先看是否只发生在前 10–15 分钟 |
-| ★★ **改了 profile 但没重启** | 见 §7 —— **最常见的「修了没好」** |
+| Thermal throttling | `sysctl machdep.xcpm.cpu_thermal_level` harus **0** (di mesin ini cpu/gpu/io semua 0, suhu 39–55 ℃ sangat dingin) |
+| Batas atas XCPM dikunci | `machdep.xcpm.hard_plimit_max_100mhz_ratio` / `soft_...` / `bootpst` (di mesin ini = **49** ⇒ 4.9 GHz, normal) |
+| Badai log / beban latar belakang | `uptime`, `iostat`, `vm_stat` (★ `ps` / `top` di mesin ini diblokir kebijakan, jadi pakai ini) |
+| Baru saja dinyalakan | Cek dulu apakah hanya terjadi di 10–15 menit pertama |
+| ★★ **Profile diubah tapi tidak reboot** | Lihat §7 — **penyebab "sudah diperbaiki tapi kok begitu" yang paling umum** |
 
-## 3. 定位根因：机型 profile 的 `FrequencyVectors` + `hwp`
+## 3. Cari akar masalah: `FrequencyVectors` + `hwp` pada profile model
 
-profile 来自 **`X86PlatformPlugin.kext/Contents/Resources/Mac-<board-id>.plist`**（本机共 **76 份**，
-去重后 **62 份不同数据**）。
+Profile berasal dari **`X86PlatformPlugin.kext/Contents/Resources/Mac-<board-id>.plist`** (di mesin ini total **76**,
+setelah dedup **62 data berbeda**).
 
-**★ 全部差异只有 5 个维度**：
+**★ Semua perbedaan hanya ada di 5 dimensi**:
 
-| 维度 | 说明 |
+| Dimensi | Penjelasan |
 |---|---|
-| `pmspFile` | 1–16，插件内部的索引 |
-| `CPUFloor` | 1300 / 1200 / 1000 / 800 / 无 |
-| `Frequencies` | 档位表，**值 = 段索引**（不是 MHz 表本身） |
-| `FrequencyVectors` | **每段恒 7668 B**；**段数 = 复杂度** |
-| **`hwp`** | ★★ **打包在向量二进制内部**，**不是 plist 键** ⇒ `plutil` / `PlistBuddy` 搜不到（见 §4） |
+| `pmspFile` | 1–16, indeks internal plugin |
+| `CPUFloor` | 1300 / 1200 / 1000 / 800 / tidak ada |
+| `Frequencies` | tabel step, **nilai = indeks segmen** (bukan tabel MHz itu sendiri) |
+| `FrequencyVectors` | **tiap segmen konstan 7668 B**; **jumlah segmen = kompleksitas** |
+| **`hwp`** | ★★ **dikemas di dalam biner vektor**, **bukan kunci plist** ⇒ `plutil` / `PlistBuddy` tidak menemukannya (lihat §4) |
 
-格式：`FrequencyVectors` 是 `xcpmio_vectors_t` 的**紧凑（packed）序列化**
-⇒ 可用「解回应为 **7668 B/段**」来**校验注入数据有没有被截断**。
+Format: `FrequencyVectors` adalah serialisasi **packed (rapat)** dari `xcpmio_vectors_t`
+⇒ bisa dipakai untuk **memeriksa apakah data yang di-inject terpotong** lewat "hasil dekode harus **7668 B/segmen**".
 
-> ⚠️ **两个解析坑**（都踩过）：
-> ① `FrequencyVectors` 的值是 **bytes 对象的 list**（`[b'\x02\x00…']`），**不是单个 bytes**
-> ⇒ 判「没有 FrequencyVectors」多半是脚本写错了；
-> ② `hwp` **不是 plist 键**，在 76 份 plist 里 `grep hwp` **命中 0 处** —— 别因此以为它不存在。
+> ⚠️ **Dua jebakan parsing** (keduanya pernah dilewati):
+> ① Nilai `FrequencyVectors` adalah **list dari objek bytes** (`[b'\x02\x00…']`), **bukan satu bytes tunggal**
+> ⇒ Kesimpulan "tidak ada FrequencyVectors" biasanya berarti skripnya salah tulis;
+> ② `hwp` **bukan kunci plist**, di 76 plist tersebut `grep hwp` **nol hit** — jangan karena itu mengira `hwp` tidak ada.
 
-## 4. ★★★ `hwp` 的真实位置与删除方法（最关键的一步）
+## 4. ★★★ Posisi asli `hwp` dan cara menghapusnya (langkah paling penting)
 
-`hwp` **不在 plist 里**，而在 **7668 B 向量二进制内偏移 ~7128 的「变量名表」里**，形如
+`hwp` **tidak ada di plist**, melainkan ada di dalam **tabel nama variabel pada biner vektor 7668 B di offset ~7128**, berbentuk
 
 ```
 … io_core_cst_lim … hwp "on" …
 ```
 
-- **禁用方法 = 删除这一项**（不是改名！改名会留字符串、长度也变）；删掉后**其后所有项前移**。
-- 本机现装那份：比原生段少 **7128–7544 共 165 字节**，段内 `hwp` 出现次数 **1 → 0**，
-  原生段从 `hwp` 开始、现装那份直接从 `io_core_cst_lim` 开始。
-- **这就是标准 CPUFriend 用法**：注入「删掉 `hwp` 的本机 profile」覆盖系统自带的那份，
-  **强制 macOS 走传统 XCPM P-state 而不是 HWP** ⇒ 本机 4.33 GHz 就是它带来的。
+- **Cara menonaktifkan = hapus item ini** (bukan diganti nama! mengganti nama akan meninggalkan string dan panjang pun berubah); setelah dihapus **semua item berikutnya maju satu posisi**.
+- Yang terpasang di mesin ini sekarang: **165 byte lebih pendek** dari segmen native, yaitu **7128–7544**, jumlah kemunculan `hwp` di dalam segmen **1 → 0**,
+  segmen native mulai dari `hwp` sedangkan yang terpasang sekarang langsung mulai dari `io_core_cst_lim`.
+- **Ini adalah penggunaan CPUFriend standar**: inject "profile mesin ini dengan `hwp` dihapus" untuk menimpa yang bawaan sistem,
+  **memaksa macOS memakai XCPM P-state tradisional, bukan HWP** ⇒ 4.33 GHz di mesin ini adalah hasil dari sana.
 
-> ★★ **判「这份 DataProvider 有没有作用」必须逐字节比向量二进制** ——
-> 只比 `pmspFile` / `Frequencies` / 段数 / plist 键就下结论会**判错**
-> （本机因此误判成「no-op」，后来逐字节比对才订正）。
+> ★★ **Menilai "apakah DataProvider ini berguna" wajib dengan membandingkan biner vektor byte per byte** —
+> hanya membandingkan `pmspFile` / `Frequencies` / jumlah segmen / kunci plist lalu menyimpulkan akan **salah penilaian**
+> (di mesin ini sempat salah menilai sebagai "no-op", baru dikoreksi setelah perbandingan byte per byte).
 
-## 5. ★ 选型决策：76 份 profile 的五族（换机器时照此挑）
+## 5. ★ Keputusan pemilihan: lima keluarga dari 76 profile (pakai panduan ini saat ganti mesin)
 
-**第一分水岭 = 段数**：
+**Pembatas utama = jumlah segmen**:
 
-| 族 | 特征 | 份数 | 实测结果 |
+| Keluarga | Ciri | Jumlah | Hasil terukur |
 |---|---|---|---|
-| **A** | 无档位 + **1 段** + 无 `hwp` | 25（`iMacPro1,1`） | **4.28–4.35 GHz ✓** |
-| **B** | 无档位 + **1 段** + **有 `hwp`** | 2（`MacPro7,1`） | **2.3 GHz ✗** |
-| **C** | 有档位 + **1 段** | 5（`iMac20,1` / `20,2`，上限 4500） | **4.33 GHz ✓ 本机现用** |
-| **D** | 有档位 + **多段（2–5）** | 32（`iMac19,1` 4 段、MBP 全系） | **1.97 GHz ✗ 实测翻车** |
-| **E** | **0 段** | 12 | 无向量，不可用 |
+| **A** | tanpa step + **1 segmen** + tanpa `hwp` | 25 (`iMacPro1,1`) | **4.28–4.35 GHz ✓** |
+| **B** | tanpa step + **1 segmen** + **ada `hwp`** | 2 (`MacPro7,1`) | **2.3 GHz ✗** |
+| **C** | ada step + **1 segmen** | 5 (`iMac20,1` / `20,2`, batas atas 4500) | **4.33 GHz ✓ sedang dipakai mesin ini** |
+| **D** | ada step + **multi segmen (2–5)** | 32 (`iMac19,1` 4 segmen, semua MBP) | **1.97 GHz ✗ gagal saat diuji** |
+| **E** | **0 segmen** | 12 | tanpa vektor, tidak usable |
 
-**★ 两条由天然对照得出的因果**（不是推测）：
+**★ Dua kausalitas yang berasal dari perbandingan alami** (bukan dugaan):
 
-- **`iMacPro1,1` vs `MacPro7,1` 只差 `hwp` 一项**（其余键 / 段数 / `pmspFile` / `CPUFloor` 全同）
-  ⇒ 无 `hwp` = 4.3 GHz，有 `hwp` = 2.3 GHz —— **`hwp` 的作用被单独孤立出来**。
-- **`iMac19,1` vs `iMac20,1` 只差「4 段 vs 1 段」**（键集 / `CPUFloor` / `hwp` 全同）
-  ⇒ **崩溃真因 = 多段 CFL 向量表，不是 `hwp`**（订正：此前把锅往 `hwp` 上引是错的）。
+- **`iMacPro1,1` vs `MacPro7,1` hanya berbeda satu item `hwp`** (kunci lain / jumlah segmen / `pmspFile` / `CPUFloor` identik)
+  ⇒ tanpa `hwp` = 4.3 GHz, ada `hwp` = 2.3 GHz — **efek `hwp` terisolasi satu per satu**.
+- **`iMac19,1` vs `iMac20,1` hanya berbeda "4 segmen vs 1 segmen"** (himpunan kunci / `CPUFloor` / `hwp` identik)
+  ⇒ **akar masalah crash = tabel vektor CFL multi segmen, bukan `hwp`** (koreksi: sebelumnya menyalahkan `hwp` adalah keliru).
 
-**★★ 结构性死路**：**所有上限 5000 的 profile 都是 3–5 段，没有 1 段的**
-⇒ **「抬上限到 5000」与「结构兼容」在这类机器上不可兼得**。
-⇒ **1 段族的天花板就是 4500**，本机现装已到顶；**想再榨，没有 profile 可用**。
+**★★ Jalan buntu struktural**: **semua profile dengan batas atas 5000 punya 3–5 segmen, tidak ada yang 1 segmen**
+⇒ **"menaikkan batas atas ke 5000" dan "kompatibel secara struktural" saling bertentangan pada mesin seperti ini**.
+⇒ **Plafon keluarga 1 segmen adalah 4500**, yang terpasang di mesin ini sudah puncak; **mau lebih optimal lagi, tidak ada profile yang bisa dipakai**.
 
-## 6. 修法：CPUFriend + CPUFriendDataProvider（官方机制）
+## 6. Cara memperbaiki: CPUFriend + CPUFriendDataProvider (mekanisme resmi)
 
-1. **取 profile plist**：默认应取**本机机型自己的那份**（`Mac-<本机 board-id>.plist`），
-   再用官方 `Tools/ResourceConverter.sh` 生成 `CPUFriendDataProvider.kext`：
-   - 把**整个机型 plist 做 base64** 塞进 `IOKitPersonalities/CPUFriendDataProvider/cf-frequency-data`
-   - 另需：`IOClass=AppleACPICPU`、`IONameMatch=processor`、`IOProbeScore=1100`、`OSBundleRequired=Root`
-   - ★ **`ExecutablePath` 必须为空**
-   - ★ 官方 `Instructions.md`：`cf-frequency-data` 里放的是 **complete plist**（不是裸 `FrequencyVectors`）
-2. **★ 删掉 `hwp`**（§4）—— 这是一台机器有别于「什么都不做」的关键一步
-3. `Kernel → Add` 加两条，**顺序：Lilu → CPUFriend → CPUFriendDataProvider → VirtualSMC**
-   - ★ **`CPUFriend.kext` 必须排在 `Lilu.kext` 之后**（它是 Lilu 插件）
-4. ★ **`ocvalidate` 对 `Kernel>Add>Comment` 有字符限制**：
-   `iMacPro1,1 ... (no HWP) ~2.3GHz` 会被判 `illegal character`（逗号 / 括号 / 波浪号至少其一）
-   ⇒ 注释只留 **字母数字、空格、连字符、点号**
-5. 校验：`FrequencyVectors` 解回应为 **7668 B/段**；`ocvalidate` = No issues found；卸载重挂后 sha 一致
+1. **Ambil plist profile**: secara default ambil **milik model mesin ini sendiri** (`Mac-<board-id mesin ini>.plist`),
+   lalu gunakan `Tools/ResourceConverter.sh` resmi untuk membuat `CPUFriendDataProvider.kext`:
+   - Masukkan **seluruh plist model sebagai base64** ke `IOKitPersonalities/CPUFriendDataProvider/cf-frequency-data`
+   - Selain itu perlu: `IOClass=AppleACPICPU`, `IONameMatch=processor`, `IOProbeScore=1100`, `OSBundleRequired=Root`
+   - ★ **`ExecutablePath` harus kosong**
+   - ★ `Instructions.md` resmi: yang diletakkan di `cf-frequency-data` adalah **complete plist** (bukan `FrequencyVectors` telanjang)
+2. **★ Hapus `hwp`** (§4) — inilah langkah pembeda antara mesin ini dan "tidak melakukan apa-apa"
+3. Tambahkan dua entri di `Kernel → Add`, **urutan: Lilu → CPUFriend → CPUFriendDataProvider → VirtualSMC**
+   - ★ **`CPUFriend.kext` harus berada setelah `Lilu.kext`** (ini plugin Lilu)
+4. ★ **`ocvalidate` memberi batasan karakter pada `Kernel>Add>Comment`**:
+   `iMacPro1,1 ... (no HWP) ~2.3GHz` akan dianggap `illegal character` (koma / kurung / tanda tilde, minimal salah satu)
+   ⇒ Komentar hanya boleh berisi **huruf dan angka, spasi, tanda hubung, titik**
+5. Validasi: hasil dekode `FrequencyVectors` harus **7668 B/segmen**; `ocvalidate` = No issues found; sha identik setelah unload lalu mount ulang
 
-> **最小改动技巧**：想试另一份 profile 时，**复制现用的 `Info.plist`，只替换 `cf-frequency-data`**
-> ⇒ diff 只有一处，回滚直接拷回文件即可。
+> **Teknik perubahan minimum**: saat ingin mencoba profile lain, **salin `Info.plist` yang sedang dipakai, ganti hanya `cf-frequency-data`**
+> ⇒ diff hanya satu bagian, rollback cukup menyalin kembali filenya.
 
-## 7. ★★ 改完必须重启（「修了没好」的头号原因）
+## 7. ★★ Harus reboot setelah perubahan (penyebab nomor satu "sudah diperbaiki tapi kok begitu")
 
-- profile 是**开机时读进内存**的 ⇒ **不重启，内存里跑的仍是旧的那份**。
-- 本机踩过：回滚到正确值之后用户一直没重启，实测单线程仍是 **2.22 GHz**（应 4.28–4.33）
-  ⇒ **ESP 上早就是正确值，修法只是「重启」**。
-- **判据**：`sysctl -n kern.boottime` —— **比你的改动时间还早 ⇒ 没重启**。
-- ★ 顺带一条实证：**即使「卸载重挂复验 sha」失败，ESP 写入仍会落盘**
-  （有害 profile 那次 sha 确为候选值，证明写进去了）⇒ **别拿「没复验成功」当「没写进去」**。
+- Profile dibaca ke memori **saat boot** ⇒ **tanpa reboot, yang jalan di memori masih versi lama**.
+- Pengalaman di mesin ini: setelah rollback ke nilai yang benar, pengguna tidak pernah reboot, hasil uji 1 thread masih **2.22 GHz** (harusnya 4.28–4.33)
+  ⇒ **Di ESP nilainya sudah benar sejak awal, perbaikannya hanya "reboot"**.
+- **Kriteria**: `sysctl -n kern.boottime` — **lebih awal dari waktu perubahanmu ⇒ belum reboot**.
+- ★ Bukti tambahan: **bahkan kalau "unload lalu mount ulang untuk verifikasi sha" gagal, penulisan ke ESP tetap tersimpan**
+  (saat profile berbahaya, sha memang bernilai kandidat, membuktikan bahwa tulisannya masuk) ⇒ **jangan menyamakan "verifikasi ulang gagal" dengan "tidak tertulis"**.
 
-## 8. 验证（重启后）
+## 8. Verifikasi (setelah reboot)
 
-- **★ CPU-S**：`当前睿频状态` 应从「未睿频」变成**已睿频**，频率列表覆盖到高倍频
-- **探针**：`scripts/cpu-freq-probe.sh` —— 本机基线 **单线程 4.28 / 8 线程 4.29–4.35 GHz**，
-  且**八核高度一致、无振荡**
-- **比数值更重要的改善**：修复前 8 个核频率**忽高忽低（低频档 ↔ 满频振荡）**；
-  修复后 **8 核一致**，振荡消失 —— **这才是「卡顿 / 掉帧」的直接来源**
-- 同时复查：机型没变、`Processor Name` 正确、`CPUFriend (1.3.0)` 已加载且在 Lilu 之后、**无新 panic**、
-  `machdep.xcpm.mode=1`、`hard_plimit_max=49`
-- **换了机型 ⇒ 必须重做 DataProvider**（`Frequencies` / 段数 / `CPUFloor` 都随机型变）
+- **★ CPU-S**: `Current Turbo State` harus berubah dari "No Turbo" menjadi **Turbo**, daftar frekuensi mencakup step multiplier tinggi
+- **Probe**: `scripts/cpu-freq-probe.sh` — baseline mesin ini **1 thread 4.28 / 8 thread 4.29–4.35 GHz**,
+  dan **delapan core sangat konsisten, tanpa osilasi**
+- **Perbaikan yang lebih penting dari angkanya**: sebelum diperbaiki, frekuensi 8 core **naik-turun tidak stabil (step frekuensi rendah ↔ osilasi frekuensi penuh)**;
+  setelah diperbaiki **8 core konsisten**, osilasi hilang — **inilah sumber langsung dari "lag / frame drop"**
+- Periksa juga: model tidak berubah, `Processor Name` benar, `CPUFriend (1.3.0)` sudah dimuat dan berada setelah Lilu, **tidak ada panic baru**,
+  `machdep.xcpm.mode=1`, `hard_plimit_max=49`
+- **Ganti model ⇒ wajib ulang DataProvider** (`Frequencies` / jumlah segmen / `CPUFloor` berubah mengikuti model)
 
-## 9. 还想追满频（4.3 → 5.0 GHz）？
+## 9. Masih ingin mengejar frekuensi penuh (4.3 → 5.0 GHz)?
 
-**此路不通，别再花时间**（§0.1 + §5）：
+**Jalan ini buntu, jangan habiskan waktu lagi** (§0.1 + §5):
 
-- 剩余差距不是 profile 上限能解释的 —— `hard_plimit_max = 49`（4.9 GHz）本就没锁，
-  说明 **`Frequencies` 未必是真正的频率天花板**；换 profile 的收益**未被证实**且**风险已实测**。
-- 真正的原因更可能是 **功耗墙 PL1/PL2** 或 **OS 侧差异**：
-  同 CPU 在 macOS 上普遍比 Windows / Linux 低约 **2.4×**（Geekbench 7 官网榜同 `Family 6 Model 151` 对照）
-  ⇒ **差距在 OS 侧，不在硅片，也不在 CPUFriend**。
-- ★ 官方立场明确：**「不确定就别用 CPUFriend」**，本机已无卡顿 ⇒ **不建议继续叠加风险**。
+- Sisa selisih tidak bisa dijelaskan oleh batas atas profile — `hard_plimit_max = 49` (4.9 GHz) memang tidak dikunci,
+  artinya **`Frequencies` belum tentu menjadi plafon frekuensi yang sebenarnya**; keuntungan ganti profile **belum terbukti** dan **risikonya sudah terukur**.
+- Alasan sebenarnya kemungkinan besar adalah **power wall PL1/PL2** atau **perbedaan sisi OS**:
+  CPU yang sama di macOS umumnya sekitar **2.4× lebih rendah** dari Windows / Linux (acuan daftar peringkat Geekbench 7 resmi untuk `Family 6 Model 151`)
+  ⇒ **Selisihnya ada di sisi OS, bukan di silikon, juga bukan di CPUFriend**.
+- ★ Sikap resmi jelas: **"kalau tidak yakin, jangan pakai CPUFriend"**, di mesin ini sudah tidak ada lag ⇒ **tidak disarankan menambah risiko lagi**.
 
-## 10. ★ 硬前提：BIOS 的 Speed Shift 必须开
+## 10. ★ Prasyarat mutlak: Speed Shift di BIOS harus aktif
 
-`Intel(R) Speed Shift Technology` **必须 `Enabled`**（**`Auto` 也可能等效关闭**）：
+`Intel(R) Speed Shift Technology` **harus `Enabled`** (**`Auto` juga bisa berarti nonaktif secara efektif**):
 
 ```
-HWP 不可用 ⇒ wrmsr(0x770,1) 触发 #GP ⇒ xcpm_hwp_enable 崩（panic type 13）
+HWP tidak tersedia ⇒ wrmsr(0x770,1) memicu #GP ⇒ xcpm_hwp_enable crash (panic type 13)
 ```
 
-本机 10-13 有过两次「SpeedShift 又被关过」导致的 panic
-⇒ **遇到 `X86PlatformShim` / `xcpm_hwp_enable` 相关 panic，第一件事查 BIOS 这一项**。
+Di mesin ini sudah dua kali terjadi panic akibat "SpeedShift dinonaktifkan lagi" sejak 10-13
+⇒ **Saat menemukan panic terkait `X86PlatformShim` / `xcpm_hwp_enable`, hal pertama yang dicek adalah item BIOS ini**.
 
-> ★ **别混淆**：BIOS 里的 HWP（Speed Shift）**要开着**（否则 panic），
-> 而 macOS 侧则**刻意不走 HWP**（走传统 XCPM P-state）
-> ⇒ 组合 = **固件开 HWP + macOS 走传统 XCPM**，这是验证过的正确解，**不要去「修」**。
+> ★ **Jangan tertukar**: HWP (Speed Shift) di BIOS **harus dinyalakan** (kalau tidak, panic),
+> sedangkan sisi macOS **sengaja tidak memakai HWP** (memakai XCPM P-state tradisional)
+> ⇒ Kombinasi = **firmware menyalakan HWP + macOS memakai XCPM tradisional**, ini solusi benar yang sudah diverifikasi, **jangan di"perbaiki"**.
 
-## 11. 本机现状与回退
+## 11. Status mesin ini dan cara mundur
 
-- **现行（最佳，不要换）**：`CPUFriend 1.3.0` + `CPUFriendDataProvider`
-  （数据 = **`iMac20,1` 自己的 profile 且已删 `hwp`**），**sha `5952ea56…`**；
-  现用备份 `_CPUFriendDataProvider-最佳-iMac20,1-已去hwp-20261015-172126/`
-- **备用（免手工编辑）**：`iMacPro1,1` **原生无 `hwp`**（A 族），实测同样 4.28–4.35 GHz，
-  可直接替换（`_CPUFriendDataProvider-iMacPro11-备用/`）
-- **回退** = 把备份的 `Info.plist` 拷回 `EFI/OC/Kexts/CPUFriendDataProvider.kext/Contents/`（或 U 盘 EFI 救援）
-- **探针脚本**：`scripts/cpu-freq-probe.sh`（本机 4.28–4.35 GHz 属正常）
-- 小核（E 核）那一档是**另一件事** ⇒ `e-cores.md`
-- ★ 排除 `CpuTopologyRebuild` 与 `-v` 的已知冲突后再判断「是不是 profile 改坏了」（`e-cores.md` §4.3）
+- **Sekarang (terbaik, jangan diganti)**: `CPUFriend 1.3.0` + `CPUFriendDataProvider`
+  (data = **profile milik `iMac20,1` itu sendiri dan `hwp` sudah dihapus**), **sha `5952ea56…`**;
+  backup yang dipakai `_CPUFriendDataProvider-terbaik-iMac20,1-hwp-dihapus-20261015-172126/`
+- **Cadangan (tanpa edit manual)**: `iMacPro1,1` **native tanpa `hwp`** (keluarga A), hasil uji juga 4.28–4.35 GHz,
+  bisa langsung menggantikan (`_CPUFriendDataProvider-iMacPro11-cadangan/`)
+- **Rollback** = salin `Info.plist` backup ke `EFI/OC/Kexts/CPUFriendDataProvider.kext/Contents/` (atau pakai EFI rescue dari flashdisk)
+- **Skrip probe**: `scripts/cpu-freq-probe.sh` (4.28–4.35 GHz di mesin ini normal)
+- Step E core adalah **hal lain** ⇒ `e-cores.md`
+- ★ Singkirkan dulu konflik yang diketahui antara `CpuTopologyRebuild` dan `-v`, baru nilai "apakah profile-nya yang rusak" (`e-cores.md` §4.3)

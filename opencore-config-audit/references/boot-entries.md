@@ -1,49 +1,49 @@
-# 固件启动项（`Boot####` / `BootOrder`）与 `Misc>Boot>LauncherOption`
+# Entri boot firmware (`Boot####` / `BootOrder`) dan `Misc>Boot>LauncherOption`
 
-> **症状导向**：BIOS 启动菜单里的 **OpenCore 项自己消失、只剩 Windows**；
-> 或者「**用 U 盘引导一次，硬盘上那条 OpenCore 项就没了**」⇒ 直接看 §1–§3。
+> **Berorientasi gejala**: entri **OpenCore sendiri menghilang dari menu boot BIOS, hanya tersisa Windows**;
+> atau "**boot sekali lewat U disk, entri OpenCore di hard drive langsung hilang**" ⇒ langsung lihat §1–§3.
 >
-> ★ **别和下面两件事混**：`ScanPolicy` / `HideAuxiliary` 管的是 **OpenCore 自己的选择器**显示什么；
-> 这里说的是 **固件（BIOS/UEFI）启动菜单**里的启动项（`Boot####` 变量）。
+> ★ **Jangan campur dengan dua hal berikut**: `ScanPolicy` / `HideAuxiliary` mengatur **apa yang ditampilkan selector OpenCore itu sendiri**;
+> yang dibahas di sini adalah entri boot di **menu boot firmware (BIOS/UEFI)** (variabel `Boot####`).
 
-## 0. 一句话结论
+## 0. Kesimpulan satu kalimat
 
-`Misc>Boot>LauncherOption` 决定 OpenCore 要不要在**固件 NVRAM 里维护一条「指向自己」的启动项**。
+`Misc>Boot>LauncherOption` menentukan apakah OpenCore perlu **memelihara satu entri boot "yang menunjuk ke dirinya sendiri" di NVRAM firmware**.
 
-它**认「自己那条项」的方式是：只比对启动项里的文件路径后缀**（`LauncherPath=Default` 时即 `OpenCore.efi`），
-**不看是哪个盘**（源码注释原话：*"Using OpenCore.efi … will overwrite any option with this path (e.g. `OC\OpenCore.efi` and `OC2\OpenCore.efi`)"*）。
+**Cara ia mengenali "entri miliknya sendiri" adalah: hanya membandingkan sufiks jalur file di dalam entri boot** (`OpenCore.efi` ketika `LauncherPath=Default`),
+**tidak melihat disk mana pun** (kutipan langsung dari komentar source: *"Using OpenCore.efi … will overwrite any option with this path (e.g. `OC\OpenCore.efi` and `OC2\OpenCore.efi`)"*).
 
-⇒ 于是**从 U 盘（或任何别的盘）引导一次，它就会把硬盘那条同后缀的项「就地重指」到引导介质**；
-介质一拔，那条项指向不存在的设备 ⇒ **固件把它清理掉** ⇒ 启动菜单里只剩 Windows。
+⇒ Maka **saat di-boot dari U disk (atau disk lain apa pun), ia akan "mengalihkan di tempat" entri di hard drive dengan sufiks yang sama ke media boot**;
+begitu media dicabut, entri itu menunjuk ke perangkat yang tidak ada ⇒ **firmware membersihkannya** ⇒ di menu boot hanya tersisa Windows.
 
-## 1. 症状与根因（本机 2026-10-15 实录）
+## 1. Gejala dan akar masalah (rekaman aktual mesin ini 2026-10-15)
 
-### 1.1 症状
+### 1.1 Gejala
 
-> 只要**用 U 盘引导一次**，硬盘上（EasyUEFI 加的）**OpenCore 启动项就从 BIOS 启动菜单消失，只剩 Windows Boot Manager**。
+> Begitu **di-boot sekali dari U disk**, **entri boot OpenCore di hard drive (yang ditambahkan EasyUEFI) langsung hilang dari menu boot BIOS, hanya tersisa Windows Boot Manager**.
 
-### 1.2 根因链（官方文档 + OpenCore 源码）
+### 1.2 Rantai akar masalah (dokumen resmi + source OpenCore)
 
-1. `LauncherOption=Full` ⇒ **每次开机** OpenCore 都「创建或更新固件里最高优先级的启动项」（官方原文）。
-2. 它**找「自己那条项」**用 `OcDevicePathHasFilePathSuffix (CurrDevicePath, MatchSuffix, …)`，
-   `MatchSuffix` 在 `LauncherPath=Default` 时 = **`OpenCore.efi`** ⇒ **只匹配路径后缀，不匹配设备**。
-3. 找到后再判 `CurrOptionValid = IsDevicePathEqual (ReferencePath, CurrDevicePath)`：
-   - **相等** ⇒ 认为是自己的，保留；
-   - **不相等**（设备不同，即「现在是另一块盘在引导」）⇒ 走 `!CurrOptionValid` 分支：
-     **用「当前设备路径」重建同一个 `Boot####`**，并把它**移到 `BootOrder` 最前面**。
-4. 而 U 盘那份 EFI 的 config **也是** `Full` + `LauncherPath=Default`（= `\EFI\OC\OpenCore.efi`）
-   ⇒ 从 U 盘启动时，OpenCore 把**硬盘那条同后缀项重指到了 U 盘**。
-5. 关机拔 U 盘 ⇒ 该项指向不存在的设备 ⇒ **固件清理** ⇒ 只剩 Windows。
+1. `LauncherOption=Full` ⇒ **setiap kali menyala**, OpenCore akan "membuat atau memperbarui entri boot dengan prioritas tertinggi di firmware" (kutipan asli resmi).
+2. Ia **mencari "entri miliknya sendiri"** dengan `OcDevicePathHasFilePathSuffix (CurrDevicePath, MatchSuffix, …)`,
+   `MatchSuffix` ketika `LauncherPath=Default` = **`OpenCore.efi`** ⇒ **hanya mencocokkan sufiks jalur, bukan perangkat**.
+3. Setelah ditemukan, ia memeriksa `CurrOptionValid = IsDevicePathEqual (ReferencePath, CurrDevicePath)`:
+   - **sama** ⇒ dianggap miliknya sendiri, dipertahankan;
+   - **tidak sama** (perangkat berbeda, yaitu "disk lain sekarang yang melakukan boot") ⇒ masuk ke cabang `!CurrOptionValid`:
+     **membangun ulang `Boot####` yang sama dengan "jalur perangkat saat ini"**, lalu **memindahkannya ke paling depan `BootOrder`**.
+4. Sementara itu, config EFI di U disk itu **juga** `Full` + `LauncherPath=Default` (= `\EFI\OC\OpenCore.efi`)
+   ⇒ ketika booting dari U disk, OpenCore **mengalihkan entri bersufiks sama di hard drive ke U disk**.
+5. Mematikan lalu mencabut U disk ⇒ entri itu menunjuk ke perangkat yang tidak ada ⇒ **firmware membersihkannya** ⇒ hanya tersisa Windows.
 
-> ★ **关键认识**：这不是「U 盘抢了硬盘的项」，而是 **OpenCore 自己按「路径后缀」把两项当成同一项**。
-> 只要两边都是 `Full` + 同一个 `LauncherPath`，**任何一次从另一块盘引导都会改写**。
+> ★ **Pemahaman kunci**: ini bukan "U disk merebut entri hard drive", melainkan **OpenCore sendiri menganggap kedua entri sebagai entri yang sama berdasarkan "sufiks jalur"**.
+> Selama keduanya `Full` + `LauncherPath` yang sama, **boot dari disk lain sekali saja sudah cukup untuk menimpa**.
 
-### 1.3 官方原文（`Docs/Configuration.tex`，1.0.8）
+### 1.3 Kutipan asli resmi (`Docs/Configuration.tex`, 1.0.8)
 
 ```
 LauncherOption
   Type: plist string
-  Failsafe: Disabled                     ← ★ 官方默认值就是 Disabled
+  Failsafe: Disabled                     ← ★ nilai default resmi adalah Disabled
   Description: Register the launcher option in the firmware preferences for persistence.
     Disabled --- do nothing.
     Full     --- create or update the top priority boot option in UEFI variable storage at
@@ -53,335 +53,335 @@ LauncherOption
     System   --- create no boot option but assume specified custom option is blessed.
 ```
 
-还有两条**直接相关**的官方说明：
+Ada dua penjelasan resmi yang **langsung relevan**:
 
 - *"This option allows integration with third-party operating system installation and upgrades
   (which may overwrite the `\EFI\BOOT\BOOTx64.efi` file). **The BOOTx64.efi file is no longer used
   for bootstrapping OpenCore if a custom option is created.**"*
-  ⇒ **`Full` 之后 `BOOTx64.efi` 就不参与引导了**；改回 `Disabled` 才重新靠它兜底。
+  ⇒ **setelah `Full`, `BOOTx64.efi` tidak lagi ikut serta dalam boot**; hanya kembali menjadi cadangan jika diubah ke `Disabled`.
 - *"When `LauncherOption` is not enabled, other operating systems may overwrite OpenCore settings
   and this property should therefore be enabled when planning to use other operating systems."*
-  ⇒ 这是 **`Disabled` 的代价**（见 §5）。
+  ⇒ inilah **biaya dari `Disabled`** (lihat §5).
 
-### 1.4 源码依据
+### 1.4 Dasar dari source code
 
-| 位置 | 关键代码 / 注释 |
+| Lokasi | Kode / komentar kunci |
 |---|---|
-| `Library/OcMainLib/OpenCoreMisc.c` · `BuildLauncherPath()` | *"MatchSuffix allows us to reduce option duplication … Using OpenCore.efi (OPEN_CORE_APP_PATH) will overwrite any option with this path (e.g. `OC\OpenCore.efi` and `OC2\OpenCore.efi`)."* ⇒ `LauncherPath=Default` 时 `MatchSuffix = "OpenCore.efi"` |
-| `Library/OcBootManagementLib/DefaultEntryChoice.c` · `InternalGetBoostrapOptionData()` | `IsBooptstrap = OcDevicePathHasFilePathSuffix (CurrDevicePath, MatchSuffix, MatchSuffixLen);` ⇒ **按后缀找项，忽略设备** |
-| 同上 · `InternalRegisterBootstrapBootOption()` | `CurrOptionValid = IsDevicePathEqual (ReferencePath, CurrDevicePath);`，`if (!CurrOptionValid) { … }` ⇒ **用当前设备路径重建同一个 `Boot####`**，随后把该索引挪到 `BootOrder` 首位 |
+| `Library/OcMainLib/OpenCoreMisc.c` · `BuildLauncherPath()` | *"MatchSuffix allows us to reduce option duplication … Using OpenCore.efi (OPEN_CORE_APP_PATH) will overwrite any option with this path (e.g. `OC\OpenCore.efi` and `OC2\OpenCore.efi`)."* ⇒ `MatchSuffix = "OpenCore.efi"` ketika `LauncherPath=Default` |
+| `Library/OcBootManagementLib/DefaultEntryChoice.c` · `InternalGetBoostrapOptionData()` | `IsBooptstrap = OcDevicePathHasFilePathSuffix (CurrDevicePath, MatchSuffix, MatchSuffixLen);` ⇒ **mencari entri berdasarkan sufiks, mengabaikan perangkat** |
+| Sama · `InternalRegisterBootstrapBootOption()` | `CurrOptionValid = IsDevicePathEqual (ReferencePath, CurrDevicePath);`, `if (!CurrOptionValid) { … }` ⇒ **membangun ulang `Boot####` yang sama dengan jalur perangkat saat ini**, lalu memindahkan indeks tersebut ke urutan pertama `BootOrder` |
 
-### 1.5 引导期日志判据
+### 1.5 Kriteria log saat boot
 
-OpenCore DEBUG 日志里会出现（`opencore-*.txt`，见 `logs-and-debug.md`）：
+Log DEBUG OpenCore akan memuat ( `opencore-*.txt`, lihat `logs-and-debug.md`):
 
 ```
-OCB: Have existing option at Boot0001, invalid     ← 找到了「自己那条」，但设备不对 ⇒ 会被改写
+OCB: Have existing option at Boot0001, invalid     ← "entri miliknya sendiri" ditemukan, tetapi perangkat salah ⇒ akan ditimpa
 OCB: Creating boot option OpenCore of NNN bytes
 OCB: Moving boot option to the front from N position
 ```
 
-★ 看到 `Have existing option at Boot####, invalid` 就等于**这次开机改写了那条项**。
+★ Melihat `Have existing option at Boot####, invalid` sama dengan **boot kali ini menimpa entri tersebut**.
 
-## 2. `LauncherOption` 取值对照（官方 4 档）
+## 2. Tabel nilai `LauncherOption` (4 tingkat resmi)
 
-| 值 | 行为 | 备注 |
+| Nilai | Perilaku | Catatan |
 |---|---|---|
-| **`Disabled`** | do nothing（什么都不做） | ★ **官方 Failsafe**；此时靠 `\EFI\BOOT\BOOTx64.efi` 兜底 |
-| `Full` | 每次开机**创建/更新**最高优先级启动项 | 需 `UEFI>Quirks>RequestBootVarRouting=true`（成对） |
-| `Short` | 建「短」启动项（只含硬盘节点） | 给 Insyde 等**处理不了完整设备路径**的老固件 |
-| `System` | **不建项**，假设自定义项已被 `bless` | 配合 `ForceBooterSignature`；靠 `bless` 工具管路径 |
+| **`Disabled`** | do nothing (tidak melakukan apa pun) | ★ **Failsafe resmi**; saat ini cadangan berasal dari `\EFI\BOOT\BOOTx64.efi` |
+| `Full` | Setiap kali menyala **membuat/memperbarui** entri boot prioritas tertinggi | Membutuhkan `UEFI>Quirks>RequestBootVarRouting=true` (berpasangan) |
+| `Short` | Membangun entri boot "pendek" (hanya berisi node hard drive) | Untuk firmware lama seperti Insyde yang **tidak mampu menangani jalur perangkat lengkap** |
+| `System` | **Tidak membuat entri**, dengan asumsi entri kustom sudah di-`bless` | Berpasangan dengan `ForceBooterSignature`; jalur dikelola oleh alat `bless` |
 
-> ★ **`Disabled` 是官方默认值** —— 也就是说本机原先的 `Full` 本身就是**偏离 Failsafe** 的一项。
-> ★ `LauncherPath` 只在 `Full`/`Short`/`System` 下有意义；`Disabled` 时源码会把它强制回 `Default`。
+> ★ **`Disabled` adalah nilai default resmi** — artinya `Full` yang sebelumnya dipakai di mesin ini memang **menyimpang dari Failsafe**.
+> ★ `LauncherPath` hanya bermakna di bawah `Full`/`Short`/`System`; pada `Disabled`, source memaksa mengembalikannya ke `Default`.
 
-## 3. 解决方法
+## 3. Solusi
 
-### 3.0 先定策略：三种组合的取舍
+### 3.0 Tentukan strategi dulu: trade-off tiga kombinasi
 
-| 组合 | 结果 | 评价 |
+| Kombinasi | Hasil | Penilaian |
 |---|---|---|
-| **硬盘 `Full` + U 盘 `Disabled`** | 从硬盘启动时 OpenCore 自建/置顶并**自愈**；U 盘只读不写 NVRAM | ★ **本机 10-15 02:41 定案** |
-| **两个都 `Disabled`** | OpenCore 不再碰 NVRAM —— **但也就没人建启动项了** | 只有「已经有能用的项、且不打算让 OpenCore 管」时才合适 |
-| 两个都 `Full` | 互相改写（见 §1） | ✗ 正是这个坑的成因 |
+| **Hard drive `Full` + U disk `Disabled`** | Saat boot dari hard drive, OpenCore membangun/meletakkan entri di depan dan **menyembuhkan dirinya sendiri**; U disk hanya membaca tanpa menulis NVRAM | ★ **Putusan final mesin ini 10-15 02:41** |
+| **Keduanya `Disabled`** | OpenCore tidak lagi menyentuh NVRAM — **tetapi berarti tidak ada yang membangun entri boot** | Hanya cocok jika "sudah ada entri yang bisa dipakai, dan kamu memang tidak bermaksud membiarkan OpenCore mengelolanya" |
+| Keduanya `Full` | Saling menimpa (lihat §1) | ✗ Inilah penyebab jebakan ini |
 
-> ★★ **关键认识：`Disabled` 不是「更安全」，它只是「不管」。**
-> 要让入口**存在且排第一**，就必须有人去写它 —— 要么让 OpenCore 写（`Full`，见 §3.1），
-> 要么人工写（§7）。**「都设 Disabled 就没事了」是错的。**
+> ★★ **Pemahaman kunci: `Disabled` bukan "lebih aman", itu hanya "tidak peduli".**
+> Agar entri **ada dan berada di posisi pertama**, harus ada yang menulisnya — biarkan OpenCore menulisnya (`Full`, lihat §3.1),
+> atau tulis manual (§7). **"Cukup set semua Disabled" itu salah.**
 
-### 3.1 本机定案：硬盘 `Full` / U 盘那份 `Disabled`
+### 3.1 Putusan final mesin ini: hard drive `Full` / U disk `Disabled`
 
 ```text
-硬盘 ESP 的 config：Misc > Boot > LauncherOption = Full        （LauncherPath = Default）
-U 盘 ESP 的 config：Misc > Boot > LauncherOption = Disabled
+config ESP hard drive: Misc > Boot > LauncherOption = Full        (LauncherPath = Default)
+config ESP U disk: Misc > Boot > LauncherOption = Disabled
 ```
 
-**理由**：只有**从硬盘启动**时 OpenCore 才会建/置顶硬盘那条项（且此后每次开机自愈）；
-U 盘那份设 `Disabled` 后**不再改写 NVRAM** ⇒ 不会再把硬盘项搬走。这就是收敛的组合。
+**Alasannya**: hanya ketika **di-boot dari hard drive** OpenCore akan membangun/meletakkan entri hard drive di depan (dan sejak itu menyembuhkan dirinya sendiri di setiap boot);
+setelah bagian di U disk di-set `Disabled`, ia **tidak lagi menimpa NVRAM** ⇒ tidak akan memindahkan entri hard drive lagi. Inilah kombinasi yang konvergen.
 
-- **执行记录（10-15 02:41）**：硬盘 `disk2s1` → `Full`，sha 精确回到 **`a08dfed3…`**（往返无损）；
-  U 盘 `disk9s1` → `Disabled`，sha `50889560…` → **`d01b859a…`**。
-  两边都 `plutil -lint` OK、官方 `ocvalidate`(1.0.8) *No issues found*、`sync` → 卸载 → 提权重挂 → 复验一致。
-- 备份：`_oc-backup-before-launcheropt-back-to-full-20261015-024132.plist`、
-  `_usbefi-backup-before-launcheropt-disabled-20261015-023959.plist`。
+- **Catatan eksekusi (10-15 02:41)**: hard drive `disk2s1` → `Full`, sha persis kembali ke **`a08dfed3…`** (bolak-balik tanpa kehilangan);
+  U disk `disk9s1` → `Disabled`, sha `50889560…` → **`d01b859a…`**.
+  Keduanya lolos `plutil -lint` OK, `ocvalidate` resmi (1.0.8) *No issues found*, `sync` → unmount → mount ulang dengan hak akses → verifikasi ulang konsisten.
+- Cadangan: `_oc-backup-before-launcheropt-back-to-full-20261015-024132.plist`,
+  `_usbefi-backup-before-launcheropt-disabled-20261015-023959.plist`.
 
-### 3.2 兜底：`\EFI\BOOT\BOOTx64.efi`
+### 3.2 Cadangan: `\EFI\BOOT\BOOTx64.efi`
 
-**两个 ESP 都保留 `\EFI\BOOT\BOOTx64.efi`**（本机 53,248 B，另有 `bootx64.efi.win` 备用）。
-`LauncherOption=Disabled` 时它**重新参与引导**（官方原文：*"The BOOTx64.efi file is no longer used for
-bootstrapping OpenCore **if a custom option is created**."*）
-⇒ 启动项真丢了，也能从 **BIOS 启动菜单直接选那块硬盘**启动，进去后再把项加回来（§7）。
+**Kedua ESP tetap mempertahankan `\EFI\BOOT\BOOTx64.efi`** (53.248 B di mesin ini, ada pula `bootx64.efi.win` sebagai cadangan).
+Ketika `LauncherOption=Disabled`, file itu **kembali ikut serta dalam boot** (kutipan asli resmi: *"The BOOTx64.efi file is no longer used for
+bootstrapping OpenCore **if a custom option is created**."*)
+⇒ meskipun entri boot benar-benar hilang, tetap bisa boot dengan **memilih hard drive itu langsung dari menu boot BIOS**, lalu setelah masuk menambahkan kembali entri (§7).
 
-### 3.3 入口真的丢了，怎么恢复
+### 3.3 Kalau entri benar-benar hilang, cara memulihkan
 
-1. **最省事**：开机按 `F8`（ASUS 弹启动菜单）→ 直接选那块硬盘 → 进系统后按 §7 重加。
-2. **Windows 侧**：`bcdedit /enum firmware` 能看到固件项；EasyUEFI 图形界面重加最直观。
-3. ★★ **要手工 `bcfg boot add/rm` 必须先解除 NVRAM 保护**（官方原文）：
+1. **Paling praktis**: saat menyala tekan `F8` (ASUS memunculkan menu boot) → pilih langsung hard drive itu → setelah masuk sistem, tambahkan kembali sesuai §7.
+2. **Sisi Windows**: `bcdedit /enum firmware` bisa melihat entri firmware; menambahkan ulang lewat GUI EasyUEFI paling intuitif.
+3. ★★ **Untuk `bcfg boot add/rm` manual, proteksi NVRAM harus dilepas lebih dulu** (kutipan asli resmi):
    *"if OpenCore has `RequestBootVarRouting` enabled, it will be necessary to run the command
    `\EFI\OC\Tools\OpenControl.efi disable` before using `bcfg`."*
-   （`OpenControl disable` 之后**必须 reboot 或 `OpenControl restore` 才能启动 OS**。）
-4. **或者**让 OpenCore 自己修：把该 ESP 的 `LauncherOption` 设 `Full`，从它启动一次（§3.1）。
+   (setelah `OpenControl disable`, **reboot atau `OpenControl restore` wajib dilakukan agar OS bisa boot**.)
+4. **Atau** biarkan OpenCore memperbaiki sendiri: set `LauncherOption` untuk ESP tersebut ke `Full`, lalu boot sekali dari sana (§3.1).
 
-## 4. 取证命令
+## 4. Perintah pengumpulan bukti
 
-### 4.1 读固件启动项（macOS 侧）
+### 4.1 Membaca entri boot firmware (sisi macOS)
 
 ```bash
 G=8BE4DF61-93CA-11D2-AA0D-00E098032B8C          # EFI_GLOBAL_VARIABLE_GUID
 
-# 启动顺序（UINT16 小端数组，每个 = 一条 Boot#### 的编号）
+# Urutan boot (larutan UINT16 little-endian, tiap satu = nomor dari satu Boot####)
 nvram $G:BootOrder
 
-# 逐条看内容（名字 + 设备路径 + 文件路径都在里面）
+# Lihat isi satu per satu (nama + jalur perangkat + jalur file semuanya ada di dalamnya)
 nvram $G:Boot0000
 nvram $G:Boot0080
 ```
 
-> ⚠️ **`nvram -p` 不会列出 `Boot####`**（本机实测只出 19 个变量，全是 Apple/工具侧变量）。
-> **必须按 `GUID:名字` 单独读**。读不到的编号会报 `(iokit/common) data was not found`。
-> ★ 想让输出可读，用 `scripts/oc-nvram-bootentry.sh dump`（会解析出名字 / 设备路径 / 文件路径）。
+> ⚠️ **`nvram -p` tidak akan mencantumkan `Boot####`** (diuji langsung di mesin ini, hanya keluar 19 variabel, semuanya variabel sisi Apple dan alat).
+> **Harus dibaca satu per satu dengan `GUID:nama`**. Nomor yang tidak terbaca akan menampilkan `(iokit/common) data was not found`.
+> ★ Supaya output mudah dibaca, pakai `scripts/oc-nvram-bootentry.sh dump` (mengurai nama / jalur perangkat / jalur file).
 
-### 4.2 本机实测快照
+### 4.2 Snapshot hasil uji di mesin ini
 
-**（a）`LauncherOption=Disabled` 期间（10-15 02:20–02:41）**
+**(a) Selama `LauncherOption=Disabled` (10-15 02:20–02:41)**
 
-| 变量 | 内容 | 说明 |
+| Variabel | Isi | Penjelasan |
 |---|---|---|
-| `BootOrder` | `80 00`（= 只有 `Boot0080`） | 固件启动顺序里**只有 macOS 那条** |
-| `Boot0080` | 名字 `Mac OS X`，路径 `\System\Library\CoreServices\boot.efi` | ★ **macOS 自己 `bless` 出来的项**，**不是 OpenCore 的** |
-| `Boot0000` | 名字 `Windows Boot Manager`，路径 `\EFI\MICROSOFT\BOOT\BOOTMGFW.EFI` | ★ 见 §5 的 ASUS 坑 |
-| `Boot0001` | `data was not found` | 被删掉的 OpenCore 项 |
+| `BootOrder` | `80 00` (= hanya ada `Boot0080`) | Di urutan boot firmware **hanya ada entri macOS** |
+| `Boot0080` | nama `Mac OS X`, jalur `\System\Library\CoreServices\boot.efi` | ★ **entri hasil `bless` milik macOS sendiri**, **bukan milik OpenCore** |
+| `Boot0000` | nama `Windows Boot Manager`, jalur `\EFI\MICROSOFT\BOOT\BOOTMGFW.EFI` | ★ lihat jebakan ASUS di §5 |
+| `Boot0001` | `data was not found` | Entri OpenCore yang sudah dihapus |
 
-⇒ **没有 OpenCore 自己的项** —— 与 `Disabled` 一致：引导靠 `\EFI\BOOT\BOOTx64.efi` 兜底。
+⇒ **Tidak ada entri milik OpenCore sendiri** — konsisten dengan `Disabled`: boot mengandalkan `\EFI\BOOT\BOOTx64.efi` sebagai cadangan.
 
-**（b）手工重建之后（10-15 02:38 起，当前）**
+**(b) Setelah dibangun ulang secara manual (mulai 10-15 02:38, saat ini)**
 
 ```
-BootOrder = %01%00%80%00          → 顺序 = [Boot0001, Boot0080]
+BootOrder = %01%00%80%00          → urutan = [Boot0001, Boot0080]
 
-Boot0001  名称 OpenCore           154 字节  ACTIVE
+Boot0001  nama OpenCore           154 byte  ACTIVE
   PciRoot(0x0) / Pci(0x6,0x0) / Pci(0x0,0x0) / NVMe(0x1,⟨EUI64⟩)
-  HD(1, GPT, ⟨ESP 分区 GUID⟩, 0x1000, 0x39000) / \EFI\OC\OpenCore.efi
+  HD(1, GPT, ⟨ESP partisi GUID⟩, 0x1000, 0x39000) / \EFI\OC\OpenCore.efi
 ```
 
-⇒ OpenCore 那条项**在 `BootOrder` 第一位**。
+⇒ Entri OpenCore itu **ada di posisi pertama `BootOrder`**.
 
-### 4.3 引导期日志
+### 4.3 Log saat boot
 
 ```bash
 grep -E "OCB: (Have existing option|Creating boot option|Moving boot option)" \
      /Volumes/EFI/opencore-*.txt
 ```
 
-★ 这三行合起来能**完整还原**设备路径（连大小都对得上）：
+★ Ketiga baris itu bersama-sama bisa **merekonstruksi jalur perangkat sepenuhnya** (termasuk ukuran byte-nya):
 `OCB: Creating boot option OpenCore of 154 bytes` + `OCB: 1 -> Boot0001 = HD(...)` +
-`OCB: Expanded DP remainder - \EFI\OC\OpenCore.efi`。
+`OCB: Expanded DP remainder - \EFI\OC\OpenCore.efi`.
 
-## 5. 代价与取舍（改之前必须知道）
+## 5. Biaya dan trade-off (wajib diketahui sebelum mengubah)
 
-| 项 | 内容 |
+| Poin | Isi |
 |---|---|
-| ★ **官方警告** | *"When `LauncherOption` is not enabled, **other operating systems may overwrite OpenCore settings**"* ⇒ 多系统时**官方建议开启**。本机缓解 = `\EFI\BOOT\BOOTx64.efi` 兜底 + 随时可重加 |
-| **官方 Note** | **在 OpenCore 之前执行 NVRAM reset 会抹掉这条项**（OpenCore 内部执行的 reset 一般不会）⇒ 刷 BIOS / 清 NVRAM 后要重加 |
-| **官方 Note 3（Intel Visual BIOS）** | Intel NUC 等固件的 bug：**只要有一条指向 USB 设备的启动项，之后插任何 U 盘都只显示那一条**。官方建议：**任何会从 U 盘启动的 OpenCore 都设 `Disabled` 或 `System`**。本机是 ASUS 不是 Intel NUC，**只是同类现象** |
-| ★★ **ASUS / AMI 专属坑（有源码依据）** | `Platform/OpenRuntime/UefiRuntimeServices.c` 注释：*"Many modern AMI BIOSes (e.g. **ASUS ROG STRIX Z370-F GAMING**) have bugs in AMI Post Manager protocol … `GetNextVariableName` … matches every `Boot####` variable as a potential boot option **regardless of the GUID namespace** … the boot option list on most ASUS firmware … is **corrupted (e.g. duplicated options) if `Boot####` variables are present outside `gEfiGlobalVariableGuid`**."* ⇒ **这正是 OpenCore 把 `Boot*` 重定向到 `OC_VENDOR`（改名前缀 `OCBt`）的原因** |
-| ★★ **同一注释里的另一条** | *"**`Boot0000` is reserved on ASUS boards** and is treated like a deleted entry. Setting `Boot0000` will essentially cause entries to **duplicate and eventual BIOS brick**."* ⇒ **ASUS 上绝对不要手工创建 `Boot0000`** |
-| **固件兼容性** | 官方 Note 1：部分固件 NVRAM 实现有缺陷（Haswell 等）⇒ `LauncherOption` **只应在已知兼容的板子上用**（`acidanthera/bugtracker#1222`） |
+| ★ **Peringatan resmi** | *"When `LauncherOption` is not enabled, **other operating systems may overwrite OpenCore settings**"* ⇒ saat multi-sistem, **resmi menyarankan untuk mengaktifkannya**. Mitigasi di mesin ini = cadangan `\EFI\BOOT\BOOTx64.efi` + bisa ditambahkan kembali kapan saja |
+| **Note resmi** | **NVRAM reset yang dijalankan sebelum OpenCore akan menghapus entri ini** (reset yang dijalankan di dalam OpenCore biasanya tidak) ⇒ setelah update BIOS / membersihkan NVRAM, entri harus ditambahkan ulang |
+| **Note resmi 3 (Intel Visual BIOS)** | bug firmware seperti Intel NUC: **begitu ada satu entri boot yang menunjuk ke perangkat USB, setelahnya U disk apa pun yang dicolokkan hanya menampilkan entri itu saja**. Rekomendasi resmi: **OpenCore mana pun yang akan di-boot dari U disk harus di-set `Disabled` atau `System`**. Mesin ini ASUS, bukan Intel NUC, **hanya fenomena sejenis** |
+| ★★ **Jebakan khusus ASUS / AMI (ada dasar dari source)** | Komentar di `Platform/OpenRuntime/UefiRuntimeServices.c`: *"Many modern AMI BIOSes (e.g. **ASUS ROG STRIX Z370-F GAMING**) have bugs in AMI Post Manager protocol … `GetNextVariableName` … matches every `Boot####` variable as a potential boot option **regardless of the GUID namespace** … the boot option list on most ASUS firmware … is **corrupted (e.g. duplicated options) if `Boot####` variables are present outside `gEfiGlobalVariableGuid`**."* ⇒ **inilah alasan OpenCore mengarahkan ulang `Boot*` ke `OC_VENDOR`** (prefix diubah menjadi `OCBt`) |
+| ★★ **Satu hal lain dalam komentar yang sama** | *"**`Boot0000` is reserved on ASUS boards** and is treated like a deleted entry. Setting `Boot0000` will essentially cause entries to **duplicate and eventual BIOS brick**."* ⇒ **di ASUS jangan pernah membuat `Boot0000` secara manual** |
+| **Kompatibilitas firmware** | Note resmi 1: sebagian implementasi NVRAM firmware punya cacat (Haswell dan sejenisnya) ⇒ `LauncherOption` **hanya boleh dipakai pada papan yang kompatibilitasnya sudah diketahui** (`acidanthera/bugtracker#1222`) |
 
-## 6. 判据纪律
+## 6. Disiplin kriteria
 
-- **先分清「消失的是哪一条项」**：OpenCore 的？Windows 的？还是 macOS `bless` 出来的 `Boot0080`？
-  三者由不同主体创建，处置完全不同。
-- **这是 NVRAM / 固件层问题** ⇒ 与 kext、驱动、`SecureBootModel` **无关**；「多等一会儿」不会变好。
-- **别与「选择器里看不到某个系统」混** —— 那是 `ScanPolicy` / `HideAuxiliary` / `Misc>Entries`（见 `pitfalls.md` §A）。
-- **改了 `LauncherOption` 之后**：下一次从「另一边」的 ESP 引导时，**复查一遍** `BootOrder` 是否又变了。
-- **多系统机器**：`Full` 与 `Disabled` 各有代价，**没有免费选项** —— 选完写进报告，并留好 §3.2 的兜底。
-- ★★ **从 macOS 写的启动项，验收只看 BIOS，不看回读**（原因见 §7.0）。
+- **Pisahkan dulu "entri mana yang hilang"**: milik OpenCore? Milik Windows? Atau `Boot0080` hasil `bless` milik macOS?
+  Ketiganya dibuat oleh pihak berbeda, penanganannya sama sekali berbeda.
+- **Ini masalah lapisan NVRAM / firmware** ⇒ **tidak ada hubungannya** dengan kext, driver, `SecureBootModel`; "menunggu lebih lama" tidak akan membuatnya membaik.
+- **Jangan campur dengan "ada sistem yang tidak terlihat di selector"** — itu urusan `ScanPolicy` / `HideAuxiliary` / `Misc>Entries` (lihat `pitfalls.md` §A).
+- **Setelah mengubah `LauncherOption`**: saat berikutnya boot dari ESP "sisi yang lain", **periksa ulang** apakah `BootOrder` berubah lagi.
+- **Mesin multi-sistem**: `Full` dan `Disabled` sama-sama punya biaya, **tidak ada pilihan gratis** — catat pilihanmu di laporan, dan simpan cadangan dari §3.2.
+- ★★ **Entri boot yang ditulis dari macOS, verifikasi hanya melihat BIOS, bukan pembacaan balik** (alasannya lihat §7.0).
 
-## 7. ★★ 官方方法：启动项丢了怎么加回来
+## 7. ★★ Metode resmi: cara menambahkan kembali entri boot yang hilang
 
-> **官方依据**：`Docs/Configuration.pdf`（按机器上的 OpenCore 版本取）——
-> `Misc>Boot>LauncherOption`（含 **Note 3**）、`UEFI>Quirks>RequestBootVarRouting`、
-> `Misc>Tools`（`FullNvramAccess` / `OpenControl` / `OpenShell` / `BootKicker`）、
-> `Misc>Boot>PickerMode` Note 3、Troubleshooting → Tips and Tricks。
-> 下文引号内均为**官方原文**。
+> **Dasar resmi**: `Docs/Configuration.pdf` (ambil sesuai versi OpenCore di mesinmu) —
+> `Misc>Boot>LauncherOption` (termasuk **Note 3**), `UEFI>Quirks>RequestBootVarRouting`,
+> `Misc>Tools` (`FullNvramAccess` / `OpenControl` / `OpenShell` / `BootKicker`),
+> `Misc>Boot>PickerMode` Note 3, Troubleshooting → Tips and Tricks.
+> Semua kutipan di bawah ini adalah **teks asli resmi**.
 
-### 7.0 先搞清两个键（决定「能不能从系统里写」）
+### 7.0 Pahami dulu dua kunci ini (menentukan "bisa atau tidak menulis dari dalam sistem")
 
-| 键 | 官方定义 | 意味着什么 |
+| Kunci | Definisi resmi | Artinya |
 |---|---|---|
-| `Misc>Boot>LauncherOption=Full` | *"create or update the top priority boot option in UEFI variable storage at bootloader startup"* | OpenCore 每次开机**自己维护**入口（自愈） |
-| `UEFI>Quirks>RequestBootVarRouting=true` | *"Request redirect of all `Boot` prefixed variables from `EFI_GLOBAL_VARIABLE_GUID` to `OC_VENDOR_VARIABLE_GUID`."* | ★ **OS 对 `Boot*` 的读写被劫持进 OpenCore 自己的命名空间** |
+| `Misc>Boot>LauncherOption=Full` | *"create or update the top priority boot option in UEFI variable storage at bootloader startup"* | OpenCore **memelihara sendiri** entri di setiap kali menyala (self-healing) |
+| `UEFI>Quirks>RequestBootVarRouting=true` | *"Request redirect of all `Boot` prefixed variables from `EFI_GLOBAL_VARIABLE_GUID` to `OC_VENDOR_VARIABLE_GUID`."* | ★ **akses baca/tulis `Boot*` dari OS dialihkan ke namespace milik OpenCore** |
 
-★★ **最重要的一条推论**：`RequestBootVarRouting=true` 时，**在 macOS / Linux 里写启动项
-「看起来成功、读回也一致」，但没落到固件**。官方讲 Linux `efibootmgr` 时说得非常直白：
+★★ **Inferensi terpenting**: ketika `RequestBootVarRouting=true`, menulis entri boot dari dalam macOS / Linux
+"terlihat berhasil, dan pembacaan balik juga konsisten", tapi **tidak sampai ke firmware**. Penjelasan resmi untuk Linux `efibootmgr` sangat terus terang:
 
 > *"Linux must be started either **not via OpenCore**, or **via OpenCore with
 > `RequestBootVarRouting` disabled** for this to work."*
 
-⇒ **想从操作系统里写启动项，就必须把你「启动时用的那份」config 的 `RequestBootVarRouting` 设成 `false`。**
+⇒ **Jika ingin menulis entri boot dari dalam sistem operasi, `RequestBootVarRouting` pada config "yang dipakai saat boot" harus di-set `false`.**
 
-### 7.1 四种方法（官方给的，按可靠性排）
+### 7.1 Empat metode (dari resmi, diurutkan dari keandalan)
 
-| 方法 | 在哪做 | 可靠性 | 前提 |
+| Metode | Dilakukan di mana | Keandalan | Prasyarat |
 |---|---|---|---|
-| **A** `LauncherOption=Full`，让 OpenCore 自己建 | 从该 ESP 启动一次 | ★★★ 直接写固件 | 需 `RequestBootVarRouting=true` |
-| **B** **OpenShell + `bcfg`（官方推荐）** | OpenCore 选择器 → Tools → OpenShell | ★★★ 固件级 | 纯 U 盘即可 |
-| **C** 先 `OpenControl.efi disable` 再 `bcfg` | 同上 | ★★★ | 方法 B 报「写不进去」时用 |
-| **D** 从操作系统里写 | macOS / Linux / Windows | ★ 必须 `RequestBootVarRouting=false` | 见 §7.0 |
+| **A** `LauncherOption=Full`, biarkan OpenCore membangun sendiri | Boot sekali dari ESP tersebut | ★★★ langsung menulis ke firmware | Membutuhkan `RequestBootVarRouting=true` |
+| **B** **OpenShell + `bcfg` (rekomendasi resmi)** | Selector OpenCore → Tools → OpenShell | ★★★ level firmware | Cukup U disk saja |
+| **C** `OpenControl.efi disable` dulu, lalu `bcfg` | Sama seperti di atas | ★★★ | Dipakai saat metode B gagal "tidak bisa menulis" |
+| **D** Menulis dari dalam sistem operasi | macOS / Linux / Windows | ★ wajib `RequestBootVarRouting=false` | Lihat §7.0 |
 
-> ★ **A 解决不了「鸡生蛋」**：固件里本来就没有 OpenCore 入口时，你**没法启动硬盘上的 OpenCore**，
-> 也就没法让它自己建。⇒ 这种情况先用 **B / C / D 建一次**，之后交给 A 自愈。
+> ★ **A tidak menyelesaikan masalah "ayam dan telur"**: saat firmware memang belum punya entri OpenCore, kamu **tidak bisa menjalankan OpenCore di hard drive**,
+> sehingga tidak bisa membuatnya membangun sendiri. ⇒ dalam kasus ini gunakan **B / C / D sekali dulu**, lalu serahkan ke A untuk self-healing.
 
-### 7.2 方法 B（官方推荐）：OpenShell 里 `bcfg boot add`
+### 7.2 Metode B (rekomendasi resmi): `bcfg boot add` di OpenShell
 
-**纯 U 盘操作，不需要 Windows，也不需要进任何操作系统。** 官方在 `LauncherOption` Note 3 里给的就是这套。
+**Operasi murni U disk, tidak butuh Windows, dan tidak perlu masuk ke sistem operasi apa pun.** Inilah yang resmi diberikan di Note 3 `LauncherOption`.
 
 ```text
-① 插 U 盘，开机按 F8（或进 BIOS）从 U 盘启动
-② OpenCore 选择器 → Tools → OpenShell
-③ 依次执行：
+① Colokkan U disk, nyalakan lalu tekan F8 (atau masuk BIOS) dan boot dari U disk
+② Selector OpenCore → Tools → OpenShell
+③ Jalankan berurutan:
 
-   map -r                                  ← 列出所有文件系统
-   dir FS0:\EFI\OC\                        ← 逐个确认：能列出 OpenCore.efi 的那个就是目标 ESP
-   bcfg boot dump                          ← 先看现有启动项，心里有数
+   map -r                                  ← daftar semua sistem berkas
+   dir FS0:\EFI\OC\                        ← konfirmasi satu per satu: yang bisa menampilkan OpenCore.efi adalah ESP target
+   bcfg boot dump                          ← lihat dulu entri boot yang ada, supaya tahu posisinya
    bcfg boot add 0 FS0:\EFI\OC\OpenCore.efi "OpenCore"
-                  ↑ 第一个参数 = 插入位置，0 = 排到第一位
-                    FS0 换成上一步确认的那个
+                  ↑ parameter pertama = posisi penyisipan, 0 = diletakkan di urutan pertama
+                    FS0 diganti dengan yang sudah dipastikan pada langkah sebelumnya
 
-④ exit 退出 OpenShell → 重启
+④ exit untuk keluar dari OpenShell → restart
 ```
 
-- **认目标 ESP 的诀窍**：它里面**同时**有 `\EFI\OC\OpenCore.efi`（OpenCore）和 `\EFI\Microsoft\Boot\bootmgfw.efi`（Windows）
-- **判据**：重启后 BIOS 启动菜单里出现「OpenCore」且**排在第一位**
+- **Kunci mengenali ESP target**: di dalamnya **sekaligus** ada `\EFI\OC\OpenCore.efi` (OpenCore) dan `\EFI\Microsoft\Boot\bootmgfw.efi` (Windows)
+- **Kriteria**: setelah restart, di menu boot BIOS muncul "OpenCore" dan **berada di posisi pertama**
 
-### 7.3 方法 C：`bcfg` 报「写不进去」时，先解锁 NVRAM 保护
+### 7.3 Metode C: saat `bcfg` melapor "tidak bisa menulis", buka dulu proteksi NVRAM
 
-官方原文：
+Kutipan asli resmi:
 
 > *"if OpenCore has `RequestBootVarRouting` enabled, it will be necessary to run
 > `\EFI\OC\Tools\OpenControl.efi disable` before using `bcfg`."*
 > *"(After `OpenControl disable`, it is necessary to either reboot or run `OpenControl restore`,
 > before booting an operating system.)"*
 
-1. 把官方发布包里的 `X64/EFI/OC/Tools/OpenControl.efi` 放进 **U 盘**的 `EFI/OC/Tools/`
-2. `Misc>Tools` 里加一条指向它，并把 **`FullNvramAccess` 设成 `true`**
-   （官方：*"Disable `OpenRuntime` NVRAM protection during usage of a tool."*）
-3. 从选择器**跑一次这个工具**，再进 OpenShell 执行 §7.2 的 `bcfg boot add`
-4. ★★ **之后必须重启（或先在 OpenShell 里跑 `OpenControl restore`），否则不能引导系统**
+1. Masukkan `X64/EFI/OC/Tools/OpenControl.efi` dari paket rilis resmi ke `EFI/OC/Tools/` pada **U disk**
+2. Tambahkan satu entri di `Misc>Tools` yang menunjuk ke file itu, dan **set `FullNvramAccess` ke `true`**
+   (resmi: *"Disable `OpenRuntime` NVRAM protection during usage of a tool."*)
+3. Dari selector **jalankan tool ini sekali**, lalu masuk ke OpenShell dan jalankan `bcfg boot add` seperti di §7.2
+4. ★★ **Setelah itu wajib restart (atau jalankan `OpenControl restore` di dalam OpenShell dulu), kalau tidak sistem tidak bisa boot**
 
-### 7.4 方法 D：从操作系统里写（**前提 `RequestBootVarRouting=false`**）
+### 7.4 Metode D: menulis dari dalam sistem operasi (**prasyarat `RequestBootVarRouting=false`**)
 
-| 系统 | 手段 | 备注 |
+| Sistem | Cara | Catatan |
 |---|---|---|
-| Linux | `efibootmgr` | 官方原文点名的就是这个 |
-| macOS | `nvram <GUID>:<名字>` | 可读写固件启动项；**`nvram -p` 不会列出它们** |
-| Windows | EasyUEFI / Boot Camp 控制面板 | 最直观 |
+| Linux | `efibootmgr` | Inilah yang disebut secara eksplisit di teks resmi |
+| macOS | `nvram <GUID>:<nama>` | Bisa membaca dan menulis entri boot firmware; **`nvram -p` tidak akan mencantumkannya** |
+| Windows | EasyUEFI / Boot Camp Control Panel | Paling intuitif |
 
-官方 Troubleshooting 里也把「改默认启动项」的正规入口列全了：
+Bagian Troubleshooting resmi juga mencantumkan semua pintu masuk resmi untuk "mengubah entri boot default":
 
 > *"This choice can be altered from UEFI Setup, with the macOS Startup Disk preference,
 > or the Windows Boot Camp Control Panel."*
 
-**辅助工具**：`scripts/oc-nvram-bootentry.sh`（`dump` / `backup` / `restore` / `add` / `del`）
-—— ★ **`add` / `del` / `restore` 要提权；而且只在 `RequestBootVarRouting=false` 时才有意义。**
+**Alat bantu**: `scripts/oc-nvram-bootentry.sh` (`dump` / `backup` / `restore` / `add` / `del`)
+— ★ **`add` / `del` / `restore` butuh hak akses elevasi; dan hanya bermakna saat `RequestBootVarRouting=false`.**
 
-### 7.5 附：`BootKicker` —— 官方为「从 U 盘切回硬盘」写的方法（黑苹果通常不可用）
+### 7.5 Lampiran: `BootKicker` — metode resmi yang ditulis untuk "berpindah dari U disk kembali ke hard drive" (biasanya tidak tersedia di hackintosh)
 
-官方在 `PickerMode` Note 3 里描述的场景，与「U 盘里的 OpenCore → 硬盘上的 OpenCore」完全一致：
+Skenario yang dideskripsikan resmi di Note 3 `PickerMode` identik dengan "OpenCore di U disk → OpenCore di hard drive":
 
 > *"…it can be used to switch which OpenCore installation is blessed, with `CTRL+Enter`,
 > e.g. from a recovery OpenCore installation on USB/CD back to the main installation of OpenCore
 > on the hard drive, if this is lost after an NVRAM reset."*
 
-但 Tools 表对它的定义是 *"Display Apple BootPicker menu (**for Macs with compatible firmware**)"*。
-⇒ **它依赖 Apple 的 BootPicker 协议，非 Apple 固件（黑苹果）上一般用不了。**
-列在这里只是让你知道官方有这条，**别在这上面耗时间**。
+Namun definisinya di tabel Tools adalah *"Display Apple BootPicker menu (**for Macs with compatible firmware**)"*.
+⇒ **ia bergantung pada protokol BootPicker dari Apple, jadi di firmware non-Apple (hackintosh) umumnya tidak bisa dipakai.**
+Ditempatkan di sini hanya agar kamu tahu bahwa opsi resmi ini ada, **jangan habiskan waktu di sini**.
 
-### 7.6 日常应该怎么配（建议）
+### 7.6 Bagaimana konfigurasi sehari-hari (disarankan)
 
-| | `LauncherOption` | `RequestBootVarRouting` | 作用 |
+| | `LauncherOption` | `RequestBootVarRouting` | Fungsi |
 |---|---|---|---|
-| **硬盘那份** | `Full` | `true` | 入口**自愈**；且不会被 Windows 抢走 |
-| **U 盘那份** | `Disabled` | `false`（想当救援盘）或 `true` | 永远不会抢硬盘的入口；`false` 时还能当「从系统里写启动项」的救援盘 |
+| **Yang di hard drive** | `Full` | `true` | Entri **self-healing**; dan tidak akan direbut Windows |
+| **Yang di U disk** | `Disabled` | `false` (kalau mau dipakai sebagai rescue disk) atau `true` | Tidak akan pernah merebut entri hard drive; saat `false` juga bisa jadi rescue disk untuk "menulis entri boot dari dalam sistem" |
 
-> ★ **为什么硬盘要保持 `Full` + `true`**：官方原话 *"When `LauncherOption` is not enabled,
-> other operating systems may overwrite OpenCore settings"* —— 关了它，
-> **Windows 大更新时可能把 OpenCore 的启动项覆盖掉**。`Full` 正是在防这个。
-> ★ 而**任何会从 U 盘启动的 OpenCore，`LauncherOption` 必须是 `Disabled`**（官方 Note 3）—— 见 §1 的根因。
+> ★ **Mengapa hard drive harus tetap `Full` + `true`**: kutipan resmi *"When `LauncherOption` is not enabled,
+> other operating systems may overwrite OpenCore settings"* — begitu dimatikan,
+> **update besar Windows bisa menimpa entri boot OpenCore**. `Full` justru untuk mencegah itu.
+> ★ Dan **OpenCore mana pun yang akan di-boot dari U disk, `LauncherOption`-nya harus `Disabled`** (Note resmi 3) — lihat akar masalah di §1.
 
-### 7.7 官方出处（可自行核对）
+### 7.7 Sumber resmi (bisa kamu verifikasi sendiri)
 
-- `Misc > Boot > LauncherOption` —— 四个取值、`LauncherPath`、**Note 3**（USB 场景警告 + `bcfg` 抢救步骤）
-- `UEFI > Quirks > RequestBootVarRouting` —— 重定向的定义与目的
-- `Misc > Tools` —— `FullNvramAccess`、`OpenControl`、`OpenShell`、`BootKicker`
-- `Misc > Boot > PickerMode` —— Note 3（`BootKicker` / `CTRL+Enter`）
+- `Misc > Boot > LauncherOption` — empat nilai, `LauncherPath`, **Note 3** (peringatan skenario USB + langkah pemulihan `bcfg`)
+- `UEFI > Quirks > RequestBootVarRouting` — definisi dan tujuan pengarah ulang
+- `Misc > Tools` — `FullNvramAccess`, `OpenControl`, `OpenShell`, `BootKicker`
+- `Misc > Boot > PickerMode` — Note 3 (`BootKicker` / `CTRL+Enter`)
 - Troubleshooting → Tips and Tricks → *How do I choose the default boot entry?*
 
-★ 以上全部出自 OpenCore 官方 `Configuration.pdf`（随每个发布包提供，在 `Docs/` 下）。
-**一切以你机器上那个 OpenCore 版本对应的文档为准** —— 不同版本键名与取值可能变。
+★ Semua di atas berasal dari `Configuration.pdf` resmi OpenCore (disertakan di setiap paket rilis, ada di `Docs/`).
+**Selalu rujuk dokumen yang sesuai dengan versi OpenCore di mesinmu** — nama kunci dan nilai bisa berubah antar versi.
 
-## 8. ★ 从「U 盘启动」改成「硬盘启动」
+## 8. ★ Dari "boot dari U disk" menjadi "boot dari hard drive"
 
-> **本机现状**（`nvram 4D1FDA02-…:boot-path`）：
-> 10-15 02:55 = `…/USB(0x18,0x0)/…/\EFI\OC\OpenCore.efi` ⇒ 当时**从 U 盘**引导（`REL-108`）；
+> **Kondisi aktual mesin ini** (`nvram 4D1FDA02-…:boot-path`):
+> 10-15 02:55 = `…/USB(0x18,0x0)/…/\EFI\OC\OpenCore.efi` ⇒ saat itu **di-boot dari U disk** (`REL-108`);
 > **10-15 03:40 = `PciRoot(0x0)/Pci(0x6,0x0)/Pci(0x0,0x0)/NVMe(0x1,…)/HD(1,GPT,…)/\EFI\OC\OPENCORE.EFI`**
-> ⇒ ★★ **已经改成从内置硬盘引导**（OC = `DBG-108`）—— 也就是说**下面这套步骤本机已经走通了**，
-> 留作流程参考。
+> ⇒ ★★ **sudah diubah menjadi boot dari hard drive internal** (OC = `DBG-108`) — artinya **langkah-langkah di bawah ini sudah berhasil diuji di mesin ini**,
+> disimpan sebagai referensi alur.
 
-### 8.1 为什么要换
+### 8.1 Mengapa harus diganti
 
-- U 盘不在就**进不了系统**（U 盘成了单点依赖）
-- U 盘那份可能是**救援配置**（本机 U 盘是 `iMacPro1,1` 的 FALLBACK 配置），与硬盘那份不是同一套
-- `LauncherOption` 两边都 `Full` 时会互相改写（§1）
+- Tanpa U disk, **tidak bisa masuk ke sistem** (U disk menjadi titik ketergantungan tunggal)
+- Yang di U disk mungkin **konfigurasi rescue** (U disk di mesin ini adalah konfigurasi FALLBACK untuk `iMacPro1,1`), bukan set yang sama dengan hard drive
+- Saat `LauncherOption` di kedua sisi sama-sama `Full`, keduanya saling menimpa (§1)
 
-### 8.2 步骤
+### 8.2 Langkah-langkah
 
-1. **确认硬盘 ESP 里有完整、能用的 EFI**
+1. **Pastikan di ESP hard drive ada EFI yang lengkap dan bisa dipakai**
    ```bash
-   diskutil list | grep "EFI EFI"                  # 认盘（★ 盘号会漂，别硬编码）
+   diskutil list | grep "EFI EFI"                  # kenali disknya (★ nomor disk bisa bergeser, jangan hardcode)
    diskutil mount diskXs1 && ls /Volumes/EFI/EFI/OC/
    ```
-   至少要：`EFI/OC/OpenCore.efi`、`config.plist`、`Kexts/`、`Drivers/`、`ACPI/`、`Tools/`、`Resources/`，
-   以及 **`EFI/BOOT/BOOTx64.efi`**（兜底入口）。
-   ★ 硬盘那份**不能**照抄 U 盘的：`PlatformInfo`（机型/三码）、`ACPI`、`Kernel` 都可能不同。
-2. **硬盘 config**：`Misc>Boot>LauncherOption=Full`（让它自建并置顶）、`LauncherPath=Default`、
+   Minimal ada: `EFI/OC/OpenCore.efi`, `config.plist`, `Kexts/`, `Drivers/`, `ACPI/`, `Tools/`, `Resources/`,
+   serta **`EFI/BOOT/BOOTx64.efi`** (entri cadangan).
+   ★ Yang di hard drive **tidak boleh** disalin apa adanya dari U disk: `PlatformInfo` (model/tiga kode), `ACPI`, `Kernel` bisa berbeda.
+2. **config hard drive**: `Misc>Boot>LauncherOption=Full` (agar ia membangun sendiri dan menempatkan di depan), `LauncherPath=Default`,
    `UEFI>Quirks>RequestBootVarRouting=true`
-3. **U 盘 config**：`Misc>Boot>LauncherOption=Disabled`（不再改写 NVRAM）
-4. 两边都走安全流程：`plutil -lint` → 官方 `ocvalidate`（**必须同版本**）→ 算 sha → `sync` →
-   **卸载 → 重挂 → 复验 sha**
-5. **重启，并在固件启动菜单里选「那块硬盘」**（不要选 U 盘）
-6. 进去之后 OpenCore（硬盘，`Full`）会在开机时把 `Boot####` 建好并置顶
-7. ★★ **验收（三步都要做）**
-   - 重启进 **BIOS 启动菜单**：有「OpenCore」且在**第一位**
-   - `nvram 4D1FDA02-…:boot-path`：指向**硬盘**的 ESP（不是 `USB(...)`）
-   - **拔掉 U 盘再重启一次**，确认照样进系统 ← **这一步才算真验收**
-8. 可选：把 U 盘留作**救援盘**（保持 `Disabled`），或删掉它那条旧启动项
+3. **config U disk**: `Misc>Boot>LauncherOption=Disabled` (tidak lagi menimpa NVRAM)
+4. Kedua sisi mengikuti alur aman: `plutil -lint` → `ocvalidate` resmi (**wajib versi sama**) → hitung sha → `sync` →
+   **unmount → mount ulang → verifikasi sha**
+5. **Restart, dan pilih "hard drive itu" di menu boot firmware** (jangan pilih U disk)
+6. Setelah masuk, OpenCore (hard drive, `Full`) akan membangun `Boot####` dan meletakkannya di depan saat menyala
+7. ★★ **Verifikasi (ketiga langkah wajib dilakukan)**
+   - Restart ke **menu boot BIOS**: ada "OpenCore" dan berada di **posisi pertama**
+   - `nvram 4D1FDA02-…:boot-path`: menunjuk ke ESP **hard drive** (bukan `USB(...)`)
+   - **Cabut U disk lalu restart sekali lagi**, pastikan tetap bisa masuk sistem ← **langkah inilah yang benar-benar menjadi verifikasi**
+8. Opsional: simpan U disk sebagai **rescue disk** (tetap `Disabled`), atau hapus entri boot lamanya
 
-### 8.3 注意
+### 8.3 Perhatikan
 
-- ★ **换的不只是启动介质，还是「哪一份 config」** —— 硬盘那份可能是**调试态**
-  （本机硬盘 = `DBG-108`，U 盘 = `REL-108`）。**要不要顺手换回 RELEASE / 关掉 debug 日志，是独立决定，先问用户。**
-- ★ **别用 `ScanPolicy` 去做「少显示」**（那是安全策略，见 `pitfalls.md` §A）。
-- ★ 换完**复查 `en0` 归属**（换引导介质不影响网卡，但如果你同时动了别的，见 `network-en0-order.md`）。
-- ★ 每次改完 ESP 都**同步工作区镜像 + 版本存档**，否则下次分不清哪份是哪份。
+- ★ **Yang diganti bukan hanya media boot, tapi juga "config yang mana"** — yang di hard drive mungkin berstatus **debug**
+  (di mesin ini hard drive = `DBG-108`, U disk = `REL-108`). **Apakah sekalian dikembalikan ke RELEASE / dimatikan debug log, adalah keputusan terpisah, tanyakan dulu ke pengguna.**
+- ★ **Jangan pakai `ScanPolicy` untuk "menampilkan lebih sedikit"** (itu kebijakan keamanan, lihat `pitfalls.md` §A).
+- ★ Setelah berganti, **periksa ulang kepemilikan `en0`** (ganti media boot tidak memengaruhi NIC, tetapi kalau ada hal lain yang ikut diubah, lihat `network-en0-order.md`).
+- ★ Setiap kali selesai mengubah ESP, **sinkronkan mirror workspace + arsip versi**, kalau tidak lain kali tidak bisa dibedakan mana yang mana.

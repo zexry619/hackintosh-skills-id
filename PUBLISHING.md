@@ -1,301 +1,301 @@
-# 发布到 WorkBuddy
+# Menerbitkan ke WorkBuddy
 
-> 把本仓库的 skill 装进 WorkBuddy 有**两条路线**，先看这张表选一条。
+> Memasang skill dari repo ini ke WorkBuddy punya **dua rute**, lihat tabel ini dulu untuk memilih salah satu.
 
-| | **路线 A：自有市场仓库**（推荐，**本仓库已配好**） | **路线 B：上架到 SkillHub** |
+| | **Rute A: repo marketplace sendiri** (disarankan, **repo ini sudah dikonfigurasi**) | **Rute B: publikasikan ke SkillHub** |
 |---|---|---|
-| 面向 | 公开分发 / 小范围分享 / 团队内部 | 进公共技能商店被搜到 |
-| 用户怎么装 | `/plugin marketplace add GeekAudio/hackintosh-skills` 然后 `/plugin install …` | 在 **<https://skillhub.cn>** 上浏览并安装 |
-| **在哪操作** | 你的 Git 仓库 | **网页：<https://skillhub.cn>**（登录后提交） |
-| 需要审核吗 | **不需要** | 平台侧有校验 / 精选机制 |
-| 需要账号吗 | 不需要（只要有公开仓库） | **需要** SkillHub 账号 |
-| 更新方式 | 改完 `git push` 即可，用户端同步市场元数据 | 重新走一遍提交流程 |
+| Ditujukan untuk | Distribusi publik / berbagi terbatas / internal tim | Masuk ke toko skill publik agar bisa dicari |
+| Cara pengguna memasang | `/plugin marketplace add GeekAudio/hackintosh-skills` lalu `/plugin install …` | Menjelajah dan memasang di **<https://skillhub.cn>** |
+| **Di mana dioperasikan** | Repo Git Anda | **Web: <https://skillhub.cn>** (submit setelah login) |
+| Perlu ditinjau? | **Tidak** | Ada validasi / mekanisme seleksi di sisi platform |
+| Perlu akun? | Tidak (cukup ada repo publik) | **Perlu** akun SkillHub |
+| Cara pembaruan | Setelah diubah, `git push` saja, sisi pengguna menyinkronkan metadata marketplace | Ulangi seluruh alur submit |
 
 ---
 
-## 路线 A：自有市场仓库
+## Rute A: repo marketplace sendiri
 
-### A.1 本仓库已经配好的文件
+### A.1 File yang sudah dikonfigurasi di repo ini
 
 ```
 hackintosh-skills/
 ├── .codebuddy-plugin/
-│   └── marketplace.json          ← 市场清单（必需，缺了整仓库都不显示）
+│   └── marketplace.json          ← manifest marketplace (wajib, tanpa ini seluruh repo tidak tampil)
 └── opencore-config-audit/
     ├── .codebuddy-plugin/
-    │   └── plugin.json           ← 插件元数据
-    ├── SKILL.md                  ← 技能正文
+    │   └── plugin.json           ← metadata plugin
+    ├── SKILL.md                  ← isi skill
     ├── USAGE.md
     ├── references/  scripts/
 ```
 
-### A.2 用户怎么装（三步）
+### A.2 Cara pengguna memasang (tiga langkah)
 
 ```bash
-# ① 添加市场
+# ① Tambahkan marketplace
 /plugin marketplace add GeekAudio/hackintosh-skills
 
-# ② 安装插件（<插件名>@<市场名>）
+# ② Pasang plugin (<nama plugin>@<nama marketplace>)
 /plugin install opencore-config-audit@hackintosh-skills
 ```
 
-> 快捷方式：`/plugin market` = `/plugin marketplace`；`rm` = `remove`。
-> 也可以先运行 `/plugin` 进「发现」标签页浏览。
+> Pintasan: `/plugin market` = `/plugin marketplace`; `rm` = `remove`.
+> Anda juga bisa menjalankan `/plugin` lalu menelusuri tab "Temukan".
 
-**添加市场的其他来源**（同样支持）：
+**Sumber lain untuk menambahkan marketplace** (semuanya didukung):
 
 ```bash
-/plugin marketplace add https://gitlab.com/team/plugins.git      # 其他 Git 主机
-/plugin marketplace add https://gitlab.com/team/plugins.git#v1.0.0   # 指定分支/标签
-/plugin marketplace add ./my-marketplace                          # 本地目录（开发调试）
-/plugin marketplace add https://example.com/marketplace.json      # HTTP 托管
+/plugin marketplace add https://gitlab.com/team/plugins.git      # Host Git lain
+/plugin marketplace add https://gitlab.com/team/plugins.git#v1.0.0   # Tentukan branch/tag
+/plugin marketplace add ./my-marketplace                          # Direktori lokal (untuk pengembangan/debug)
+/plugin marketplace add https://example.com/marketplace.json      # Hosting HTTP
 ```
 
-> ⚠️ **URL 型市场**（直接给 marketplace.json 的 HTTP 地址）对**相对路径**支持不好，
-> 安装时可能报「路径未找到」⇒ **优先用 Git 型**（`owner/repo`）。
+> ⚠️ **Marketplace bertipe URL** (alamat HTTP langsung ke marketplace.json) tidak mendukung **path relatif** dengan baik,
+> saat dipasang bisa muncul error "path tidak ditemukan" ⇒ **prioritaskan tipe Git** (`owner/repo`).
 
-### A.3 字段说明（官方 schema）
+### A.3 Penjelasan field (schema resmi)
 
-**`.codebuddy-plugin/marketplace.json`（市场清单）**
+**`.codebuddy-plugin/marketplace.json` (manifest marketplace)**
 
-| 字段 | 类型 | 必需 | 说明 |
+| Field | Tipe | Wajib | Keterangan |
 |---|---|---|---|
-| `name` | string | ✅ | 市场标识符（kebab-case，无空格） |
-| `owner` | object | ✅ | 市场维护者信息（`name` / `email`） |
-| `plugins` | array | ✅ | 可用插件列表 |
-| `description` | string | | 市场简要描述 |
-| `version` | string | | 市场版本 |
+| `name` | string | ✅ | Identifier marketplace (kebab-case, tanpa spasi) |
+| `owner` | object | ✅ | Info pengelola marketplace (`name` / `email`) |
+| `plugins` | array | ✅ | Daftar plugin yang tersedia |
+| `description` | string | | Deskripsi singkat marketplace |
+| `version` | string | | Versi marketplace |
 
-**`plugins[]` 里的每一条**
+**Setiap entri di `plugins[]`**
 
-| 字段 | 类型 | 必需 | 说明 |
+| Field | Tipe | Wajib | Keterangan |
 |---|---|---|---|
-| `name` | string | ✅ | 插件标识符（kebab-case，无空格） |
-| `source` | string/object | ✅ | 插件获取来源（见下） |
-| `description` | string | ✅ | 插件简要描述 |
-| `version` | string | | 插件版本 |
-| `author` | object | | 作者信息 |
-| `homepage` / `repository` | string | | 主页 / 源码仓库 URL |
-| `license` | string | | SPDX 标识符（如 `MIT`） |
-| `keywords` | array | | 用于发现与分类的标签 |
-| `category` | string | | 插件分类 |
-| **`strict`** | boolean | | **默认 `true`**：插件目录里**必须**有 `plugin.json`。<br>`false` 时 `plugin.json` 可选，本条即完整清单 |
-| `commands` / `agents` / **`skills`** / `hooks` / `mcpServers` | string/array/object | | **组件路径覆盖** —— 自定义各组件的位置 |
+| `name` | string | ✅ | Identifier plugin (kebab-case, tanpa spasi) |
+| `source` | string/object | ✅ | Sumber pengambilan plugin (lihat di bawah) |
+| `description` | string | ✅ | Deskripsi singkat plugin |
+| `version` | string | | Versi plugin |
+| `author` | object | | Info penulis |
+| `homepage` / `repository` | string | | URL halaman utama / repo kode sumber |
+| `license` | string | | Identifier SPDX (misal `MIT`) |
+| `keywords` | array | | Tag untuk penemuan dan klasifikasi |
+| `category` | string | | Kategori plugin |
+| **`strict`** | boolean | | **Bawaan `true`**: direktori plugin **harus** berisi `plugin.json`.<br>Jika `false`, `plugin.json` opsional dan entri ini sudah menjadi manifest lengkap |
+| `commands` / `agents` / **`skills`** / `hooks` / `mcpServers` | string/array/object | | **Override path komponen** — menentukan posisi tiap komponen |
 
-**`source` 的三种写法**
+**Tiga cara menulis `source`**
 
 ```jsonc
-// ① 同仓库相对路径（本仓库用的就是这个）
+// ① Path relatif dalam repo yang sama (yang dipakai repo ini)
 "source": "./opencore-config-audit"
 
-// ② GitHub 仓库
+// ② Repo GitHub
 "source": { "source": "github", "repo": "owner/plugin-repo" }
 
-// ③ 任意 Git URL
+// ③ URL Git sembarang
 "source": { "source": "url", "url": "https://gitlab.com/team/plugin.git" }
 ```
 
-**`.codebuddy-plugin/plugin.json`（插件元数据）**
+**`.codebuddy-plugin/plugin.json` (metadata plugin)**
 
-字段同上（`name` / `version` / `description` / `author` / `repository` / `license` / `keywords` / `category`），
-外加**组件路径**：
+Field sama seperti di atas (`name` / `version` / `description` / `author` / `repository` / `license` / `keywords` / `category`),
+ditambah **path komponen**:
 
-| 字段 | 说明 |
+| Field | Keterangan |
 |---|---|
-| `skills` | Skill 的路径。**本仓库写的是 `["./SKILL.md"]`** —— 直接指向插件根目录的 `SKILL.md`，所以现有布局不用改 |
-| `commands` / `agents` / `hooks` / `mcpServers` | 命令 / Agent / 钩子 / MCP 服务器 |
+| `skills` | Path Skill. **Repo ini menulis `["./SKILL.md"]`** — langsung menunjuk ke `SKILL.md` di root plugin, jadi layout yang ada tidak perlu diubah |
+| `commands` / `agents` / `hooks` / `mcpServers` | Perintah / Agent / hook / server MCP |
 
-### A.4 再加一个新技能
+### A.4 Menambahkan skill baru
 
-1. 在仓库根新建目录 `my-new-skill/`，放 `SKILL.md`（必需）、`USAGE.md`、`references/`、`scripts/`
-2. 新建 `my-new-skill/.codebuddy-plugin/plugin.json`，**`"skills": ["./SKILL.md"]`** 别忘
-3. 在根 `.codebuddy-plugin/marketplace.json` 的 `plugins[]` 里加一条，`"source": "./my-new-skill"`
-4. 校验 JSON 合法 → `git push`（用户端同步市场元数据后即可看到）
+1. Buat direktori `my-new-skill/` di root repo, isi dengan `SKILL.md` (wajib), `USAGE.md`, `references/`, `scripts/`
+2. Buat `my-new-skill/.codebuddy-plugin/plugin.json`, jangan lupa **`"skills": ["./SKILL.md"]`**
+3. Tambahkan satu entri di `plugins[]` pada `.codebuddy-plugin/marketplace.json` di root, `"source": "./my-new-skill"`
+4. Validasi JSON agar valid → `git push` (terlihat setelah sisi pengguna menyinkronkan metadata marketplace)
 
-### A.5 上线前自检
+### A.5 Pemeriksaan mandiri sebelum rilis
 
 ```bash
-# ① JSON 语法
+# ① Sintaks JSON
 python3 -c "import json;[json.load(open(p)) for p in ['.codebuddy-plugin/marketplace.json',
   'opencore-config-audit/.codebuddy-plugin/plugin.json']];print('JSON OK')"
 
-# ② 每个 skill 仍然合法
+# ② Setiap skill tetap valid
 python3 <skill-creator>/scripts/quick_validate.py opencore-config-audit
 
-# ③ source 指向的目录确实存在，且里面有 .codebuddy-plugin/plugin.json
+# ③ Direktori yang ditunjuk `source` benar-benar ada, dan berisi .codebuddy-plugin/plugin.json
 
-# ④ ★ 文档一致性自检（索引对齐 / 死链 / 三处版本号 / 已知错误说法回归）
+# ④ ★ Pemeriksaan mandiri konsistensi dokumen (keselarasan indeks / tautan mati / nomor versi di tiga tempat / regresi klaim salah yang sudah dikenal)
 bash tools/doc-lint.sh
-# 发布前连脱敏一起跑：
+# Jalankan sekaligus dengan redaksi data sebelum terbit:
 bash tools/doc-lint.sh --with-redact
 ```
 
-> **④ 为什么值得跑**：references 互相引用，一处结论写错会顺着引用链传染 ——
-> 本 skill 就栽过一次（把 Dortania 的 **iServices** 要求错误扩展成了 AirDrop 依赖 `en0`，
-> 结果 5 个文件全线写错）。`doc-lint.sh` 把那类「已知错误说法」写成了规则，
-> 并会检查每个 reference / script 有没有在 `SKILL.md` 里被索引（漏索引 = 模型永远读不到）。
-> 退出码 0 = 干净，1 = 有告警。
+> **④ Mengapa layak dijalankan**: reference saling merujuk, satu kesimpulan yang salah akan menyebar lewat rantai referensi —
+> skill ini pernah mengalaminya (persyaratan **iServices** dari Dortania diperluas secara keliru menjadi AirDrop yang bergantung pada `en0`,
+> hasilnya 5 file semuanya salah tulis). `doc-lint.sh` menulis jenis "klaim salah yang sudah dikenal" itu sebagai aturan,
+> dan memeriksa apakah setiap reference / script sudah terindeks di `SKILL.md` (terlewat diindeks = model tidak akan pernah membacanya).
+> Kode keluar 0 = bersih, 1 = ada peringatan.
 
-### A.6 常见问题
+### A.6 Masalah umum
 
-| 现象 | 原因 / 处理 |
+| Gejala | Penyebab / penanganan |
 |---|---|
-| 加了市场但看不到插件 | `marketplace.json` 路径不对（必须在仓库根的 `.codebuddy-plugin/` 下），或 JSON 语法错 |
-| 装了插件但技能不显示 | 清缓存：`rm -rf ~/.workbuddy-ai/plugins/cache`，重启后重新安装 |
-| 安装后「文件未找到」 | **插件会被复制到缓存**，所以**引用插件目录之外的路径无法工作** —— 所有资源必须放在插件目录内 |
-| URL 型市场报路径错误 | 改用 Git 型市场（`owner/repo`） |
+| Marketplace ditambahkan tapi plugin tidak terlihat | Path `marketplace.json` salah (harus berada di `.codebuddy-plugin/` pada root repo), atau sintaks JSON salah |
+| Plugin terpasang tapi skill tidak tampil | Bersihkan cache: `rm -rf ~/.workbuddy-ai/plugins/cache`, restart lalu pasang ulang |
+| Setelah memasang muncul "file tidak ditemukan" | **Plugin disalin ke cache**, sehingga **path di luar direktori plugin tidak bisa dipakai** — semua resource harus berada di dalam direktori plugin |
+| Marketplace bertipe URL melaporkan error path | Beralih ke marketplace tipe Git (`owner/repo`) |
 
 ---
 
-## 路线 B：上架到 SkillHub（公共技能商店）
+## Rute B: publikasikan ke SkillHub (toko skill publik)
 
-### ★ 先分清三件容易混的事
+### ★ Bedakan dulu tiga hal yang mudah tertukar
 
-| 你以为的 | 实际是什么 | 是不是「上架商店」 |
+| Yang Anda kira | Sebenarnya apa | Apakah itu "publikasi ke toko" |
 |---|---|---|
-| WorkBuddy 技能面板 → **「上传技能」** | 弹窗标题其实是 **`Import Skill`** —— 把技能**导入到你自己的**个人库 / 项目 | ❌ **不是**（这是本地导入） |
-| 技能设置里的 **「上传到 WorkBuddy Cloud」** | 说明原文：*"{names} will be available in **cloud sessions** after upload"* —— 同步到**你自己的云端会话**（功能开关 `EnableSkillToCloud` **默认关闭**） | ❌ **不是**（这是同步自己的云） |
-| **`https://skillhub.cn`** | **SkillHub —— 专为中国用户优化的 AI Skills 社区**（腾讯云托管），有精选、分类、下载量/星标、付费技能、企业专区、比赛 | ✅ **这才是商店** |
+| Panel skill WorkBuddy → **"Unggah Skill"** | Judul pop-up sebenarnya **`Import Skill`** — mengimpor skill **ke pustaka / proyek milik Anda sendiri** | ❌ **Bukan** (ini impor lokal) |
+| **"Unggah ke WorkBuddy Cloud"** di pengaturan skill | Teks aslinya: *"{names} will be available in **cloud sessions** after upload"* — menyinkronkan ke **sesi cloud milik Anda sendiri** (sakelar fitur `EnableSkillToCloud` **bawaan nonaktif**) | ❌ **Bukan** (ini sinkronisasi cloud Anda sendiri) |
+| **`https://skillhub.cn`** | **SkillHub — komunitas AI Skills yang dioptimalkan untuk pengguna Tiongkok** (dihosting di Tencent Cloud), dengan pilihan terbaik, kategori, jumlah unduhan/bintang, skill berbayar, zona perusahaan, dan kompetisi | ✅ **Inilah tokonya** |
 
-### B.1 商店与接口地址
+### B.1 Toko dan alamat API
 
-| 用途 | 地址 |
+| Kegunaan | Alamat |
 |---|---|
-| **商店网站（人去的）** | **<https://skillhub.cn>** |
-| 技能列表页 | `https://skillhub.cn/skills` |
-| **教程** | `https://skillhub.cn/tutorials` ← **上架前先看这个** |
-| **签名验证文档** | `https://skillhub.cn/docs/verify-signature` ← 与发布校验有关 |
-| 比赛 / 获奖 | `https://skillhub.cn/contest` · `/contest/winners` |
-| 企业专区 | `https://skillhub.cn/enterprise-zone` |
-| 技能 API | `https://api.skillhub.cn` —— `/api/skills`（列表）· `/api/v1/categories`（分类）· `/api/v1/search?q=`（语义搜索） |
-| 技能详情页 | `https://api.skillhub.cn/<作者>/<slug>`（例：`/indiv-ebandao/dev-expert`） |
-| 应用侧网关 | `https://lightmake.site`（WorkBuddy 内部用它拉列表/搜索/分类） |
+| **Website toko (untuk manusia)** | **<https://skillhub.cn>** |
+| Halaman daftar skill | `https://skillhub.cn/skills` |
+| **Tutorial** | `https://skillhub.cn/tutorials` ← **lihat ini dulu sebelum publikasi** |
+| **Dokumentasi verifikasi tanda tangan** | `https://skillhub.cn/docs/verify-signature` ← terkait dengan validasi publikasi |
+| Kompetisi / pemenang | `https://skillhub.cn/contest` · `/contest/winners` |
+| Zona perusahaan | `https://skillhub.cn/enterprise-zone` |
+| API skill | `https://api.skillhub.cn` — `/api/skills` (daftar) · `/api/v1/categories` (kategori) · `/api/v1/search?q=` (pencarian semantik) |
+| Halaman detail skill | `https://api.skillhub.cn/<penulis>/<slug>` (contoh: `/indiv-ebandao/dev-expert`) |
+| Gateway sisi aplikasi | `https://lightmake.site` (WorkBuddy memakainya secara internal untuk mengambil daftar/pencarian/kategori) |
 
-> 站点的 `robots.txt` + `sitemap.xml` 是公开的，上面这些路由都来自它。
+> `robots.txt` + `sitemap.xml` situs ini publik, semua route di atas berasal dari sana.
 
-### B.2 上架前：把包准备好
+### B.2 Sebelum publikasi: siapkan paketnya
 
 ```bash
 python3 <skill-creator>/scripts/package_skill.py opencore-config-audit ./dist
-# → dist/opencore-config-audit.zip（内含 SKILL.md，带 YAML 的 name + description）
+# → dist/opencore-config-audit.zip (memuat SKILL.md dengan YAML name + description)
 ```
 
-**自检**：
+**Pemeriksaan mandiri**:
 
 ```bash
-# ① 内容
+# ① Konten
 python3 - <<'EOF'
 import zipfile
 z='dist/opencore-config-audit.zip'; zf=zipfile.ZipFile(z); n=zf.namelist()
 md=[x for x in n if x.endswith('/SKILL.md')][0]
 fm=zf.read(md).decode('utf-8').split('---')[1]
-print(z, '| SKILL.md ✅' if ('name:' in fm and 'description:' in fm) else '❌', '| 文件数', len(n))
+print(z, '| SKILL.md ✅' if ('name:' in fm and 'description:' in fm) else '❌', '| jumlah file', len(n))
 EOF
 
-# ② ★ 脱敏（必做）
+# ② ★ Redaksi data (wajib)
 bash opencore-config-audit/scripts/redact-check.sh opencore-config-audit
-# 退出码 0 = 干净；1 = 有命中，先处理再打包
+# Kode keluar 0 = bersih; 1 = ada yang terdeteksi, tangani dulu sebelum dikemasan
 ```
 
-> ★★ **三码（serial/MLB/UUID）+ ROM 用的 MAC 等同于这台机器的 Apple 身份**（iMessage / FaceTime 认的就是它们）。
-> **上传即公开** —— 打包前务必跑一遍 `redact-check.sh`，再人工扫一眼。
+> ★★ **Tiga kode (serial/MLB/UUID) + MAC yang dipakai ROM sama dengan identitas Apple mesin ini** (iMessage / FaceTime hanya mengenali mereka).
+> **Unggah berarti langsung publik** — wajib jalankan `redact-check.sh` sekali sebelum dikemasan, lalu periksa manual sekali lagi.
 
-### B.3 上架
+### B.3 Publikasi
 
-**在浏览器里打开 <https://skillhub.cn>** → 登录 → 找提交/发布入口（先看 `/tutorials`）。
+**Buka <https://skillhub.cn> di browser** → login → cari pintu masuk submit/publikasi (lihat dulu `/tutorials`).
 
-> ⚠️ **具体入口我没法替你确认**：站点是 SPA 且提交入口在登录之后，
-> 我这边只能用 curl 拿到外壳 HTML，看不到登录后的界面。**以站内教程为准。**
+> ⚠️ **Pintu masuk spesifiknya tidak bisa saya pastikan untuk Anda**: situsnya SPA dan pintu masuk submit ada setelah login,
+> dari sisi saya hanya bisa mengambil HTML kerangka dengan curl, tidak melihat tampilan setelah login. **Ikuti tutorial di dalam situs.**
 
-### B.3.1 ★ 提交时会弹「支付宝付费改造」检查 —— **点「仍要提交」即可**
+### B.3.1 ★ Saat submit akan muncul pemeriksaan "overhaul pembayaran Alipay" — **klik "Tetap submit" saja**
 
-纯技术文档提交时，平台会弹一个 **「支付宝付费改造部分通过」** 的确认框，列出 5 个「缺失项」：
+Saat mengirim dokumentasi teknis murni, platform akan menampilkan kotak konfirmasi **"Sebagian pemeriksaan overhaul pembayaran Alipay lolos"** yang mencantumkan 5 "item yang hilang":
 
-| 缺失项 | 是什么 |
+| Item yang hilang | Apa itu |
 |---|---|
-| 402 账单下发 | 支付宝付费协议的**账单下发**流程 |
-| 携带凭证重试 | 付费重试时带凭证 |
-| 验付调用 | 调用支付宝验付 |
-| 履约确认 | 付费后确认履约 |
-| 订单持久化与幂等 | 订单落库 + 幂等 |
+| 402 penerbitan tagihan | Alur **penerbitan tagihan** dari protokol pembayaran Alipay |
+| Retry dengan bukti | Mengirim bukti saat mencoba ulang pembayaran |
+| Panggilan verifikasi pembayaran | Memanggil verifikasi pembayaran Alipay |
+| Konfirmasi pemenuhan | Konfirmasi pemenuhan setelah pembayaran |
+| Persistensi dan idempotensi pesanan | Penyimpanan pesanan + idempotensi |
 
-**⇒ 这是「付费技能（SkillPay）」的检查，与免费技术文档无关。**
+**⇒ Ini pemeriksaan untuk "skill berbayar (SkillPay)", tidak ada hubungannya dengan dokumentasi teknis gratis.**
 
-弹窗里三句话都说明它**不适用、也不拦**：
+Ketiga kalimat di pop-up itu menyatakan bahwa pemeriksaan ini **tidak berlaku dan tidak memblokir**:
 
-- 红框：*"该 skill 是纯技术文档…与支付/计费**毫无关联**…**5 项特征均未命中**"*
-- 底部：*"**该检查不阻断提交**"*
-- 底部：*"提交后平台审核仍会重新做一次完整检测，若不合规将被拒绝"*
+- Kotak merah: *"skill ini adalah dokumentasi teknis murni… sama sekali tidak terkait dengan pembayaran/penagihan… **kelima ciri tidak terdeteksi**"*
+- Bawah: *"**pemeriksaan ini tidak memblokir submit**"*
+- Bawah: *"setelah submit, peninjauan platform akan mengulang pemeriksaan lengkap, dan akan ditolak bila tidak sesuai"*
 
-**⇒ 点「仍要提交」。** 这 5 项对免费技术文档**本来就不该命中**，不是你的技能有问题。
-（若真要做付费技能，才需要按弹窗里那个「查看支付宝付费改造最佳实践指南」去接。）
+**⇒ Klik "Tetap submit".** Kelima item itu memang **seharusnya tidak terdeteksi** untuk dokumentasi teknis gratis, bukan berarti skill Anda bermasalah.
+(Hanya jika Anda benar-benar ingin membuat skill berbayar, barulah perlu mengikuti "Lihat panduan praktik terbaik overhaul pembayaran Alipay" dari pop-up itu.)
 
-### B.3.2 ★ 上架后「搜不到」怎么办 —— 先分清是服务端还是搜索词的问题
+### B.3.2 ★ Setelah publikasi "tidak ditemukan" — bedakan dulu apakah masalahnya di sisi server atau di kata kunci pencarian
 
-**结论先行**：多数情况**不是没上架**，而是**搜索词/分类没对上**。按下面顺序查。
+**Kesimpulan dulu**: pada kebanyakan kasus **bukan berarti belum dipublikasikan**, melainkan **kata kunci/kategori tidak cocok**. Periksa sesuai urutan berikut.
 
-#### 第 1 步：确认服务端到底有没有（两个接口都能验）
+#### Langkah 1: pastikan server benar-benar punya (bisa dicek lewat dua API)
 
 ```bash
-# ① 关键词列表（分类/浏览走这条）
+# ① Daftar kata kunci (dipakai untuk kategori/browsing)
 curl -s "https://api.skillhub.cn/api/skills?keyword=hackintosh&page=1&pageSize=20"
 
-# ② 语义搜索（搜索框走这条）
+# ② Pencarian semantik (dipakai oleh kotak pencarian)
 curl -s "https://api.skillhub.cn/api/v1/search?q=hackintosh&limit=10"
 ```
 
-返回里能找到 `slug` + `namespace.canonicalName`（如 `@user_b1ac2e69/hackintosh`）⇒ **已上架且已索引**。
-⇒ 那就**不是上架问题**，往下看。
+Kalau di respons ditemukan `slug` + `namespace.canonicalName` (misal `@user_b1ac2e69/hackintosh`) ⇒ **sudah dipublikasikan dan sudah diindeks**.
+⇒ berarti **bukan masalah publikasi**, lanjutkan ke bawah.
 
-#### 第 2 步：换搜索词（★ 最常见的坑）
+#### Langkah 2: ganti kata kunci (★ jebakan paling umum)
 
-**语义搜索对短词/宽泛词召回很差。** 实测（同一个技能）：
+**Pencarian semantik sangat buruk untuk kata pendek/general.** Hasil uji (skill yang sama):
 
-| 搜法 | 结果 |
+| Cara mencari | Hasil |
 |---|---|
-| `q=hackintosh` | ✅ 命中 |
-| `q=黑苹果安装`（**完整名**） | ✅ 命中 |
-| `q=黑苹果` | ❌ **不命中** |
-| `q=OpenCore` | ❌ **不命中** |
-| `keyword=黑苹果`（列表接口） | ✅ 命中 |
-| `keyword=OpenCore`（列表接口） | ✅ 命中 |
+| `q=hackintosh` | ✅ ketemu |
+| `q=instalasi apel hitam` (**nama lengkap**) | ✅ ketemu |
+| `q=apel hitam` | ❌ **tidak ketemu** |
+| `q=OpenCore` | ❌ **tidak ketemu** |
+| `keyword=apel hitam` (API daftar) | ✅ ketemu |
+| `keyword=OpenCore` (API daftar) | ✅ ketemu |
 
-⇒ **应用内搜索框（走语义搜索）请用「hackintosh」或技能的完整名字**；
-只搜「黑苹果」「OpenCore」这种宽泛词，语义召回可能给不出来。
+⇒ **Kotak pencarian di dalam aplikasi (memakai pencarian semantik) sebaiknya memakai "hackintosh" atau nama lengkap skill**;
+hanya mencari kata umum seperti "apel hitam" atau "OpenCore", recall semantis bisa gagal mengembalikan hasil.
 
-#### 第 3 步：确认你在哪个搜索框里找
+#### Langkah 3: pastikan Anda mencari di kotak pencarian yang mana
 
-| 位置 | 搜的是什么 |
+| Lokasi | Yang dicari |
 |---|---|
-| **技能面板 → SkillHub 标签** | ✅ **云端商店**（上架的东西在这里找） |
-| 技能面板 → **已安装** 标签 | 本地已装的 |
-| 输入框打 **`/`** | **本地已装技能** —— ★ **上架不会自动出现在这里，要先「安装」** |
-| 技能面板 → 分类 + 排序（全部 / 综合评分 / 下载量 / 最近更新 / 安装量） | 按分类浏览（走 `/api/skills`） |
+| **Panel skill → tab SkillHub** | ✅ **Toko cloud** (cari barang yang sudah dipublikasikan di sini) |
+| Panel skill → tab **Terpasang** | Yang sudah terpasang secara lokal |
+| Ketik **`/`** di kolom input | **Skill yang sudah terpasang lokal** — ★ **publikasi tidak otomatis muncul di sini, harus "dipasang" dulu** |
+| Panel skill → kategori + urutan (semua / nilai gabungan / jumlah unduhan / pembaruan terbaru / jumlah pemasangan) | Menjelajah per kategori (memakai `/api/skills`) |
 
-> ★ **最容易误会的一条**：上架到 SkillHub **≠** 出现在你的 `/` 列表里。
-> `/` 列表只显示**本地已装**的技能 —— 要先在 SkillHub 里点「安装」。
+> ★ **Yang paling sering disalahpahami**: publikasi ke SkillHub **≠** muncul di daftar `/` Anda.
+> Daftar `/` hanya menampilkan skill yang **terpasang lokal** — harus klik "Pasang" dulu di SkillHub.
 
-#### 第 4 步：默认列表里看不到是正常的
+#### Langkah 4: tidak terlihat di daftar bawaan itu wajar
 
-SkillHub 库里 **19 万+** 个技能。新上架的技能 `downloads / installs / stars = 0`，
-按「综合评分 / 下载量 / 最近更新」排序时**排在最后** ⇒ **只能靠搜索或直接链接找到**。
-这不是故障。
+SkillHub punya **190 ribu+** skill. Skill yang baru dipublikasikan punya `downloads / installs / stars = 0`,
+jadi saat diurutkan berdasarkan "nilai gabungan / jumlah unduhan / pembaruan terbaru" **ada di urutan terakhir** ⇒ **hanya bisa ditemukan lewat pencarian atau tautan langsung**.
+Ini bukan kegagalan.
 
-#### ★ 想让它更容易被搜到，改这四项
+#### ★ Agar lebih mudah ditemukan, ubah empat hal ini
 
-| 项 | 为什么重要 |
+| Item | Mengapa penting |
 |---|---|
-| **描述（`description`）** | ★★ **别把几百字的 SKILL.md 描述整段当商店描述** —— 语义向量会被稀释，短词召回更差。**写一段聚焦、口语化的简介**（讲清「给谁用、解决什么」） |
-| **标签（`tags`）** | ★ 上架时若留空（`tags: null`），检索只能靠名称+描述。**加上 `hackintosh` / `opencore` / `macos` / `efi` / `黑苹果` 这类词** |
-| **分类 / 子分类** | 别让它落到不相关的类目里（例如技术文档被分到「代码生成 / 代码审查」）—— 影响**按分类浏览**的曝光 |
-| 图标 | 有图标更容易被点（可选） |
+| **Deskripsi (`description`)** | ★★ **Jangan memakai seluruh deskripsi SKILL.md yang ratusan kata sebagai deskripsi toko** — vektor semantis akan terencerunkan, recall kata pendek makin buruk. **Tulis ringkasan yang fokus dan kasual** (jelaskan "untuk siapa, menyelesaikan apa") |
+| **Tag (`tags`)** | ★ Jika dikosongkan saat publikasi (`tags: null`), pencarian hanya bisa mengandalkan nama+deskripsi. **Tambahkan kata seperti `hackintosh` / `opencore` / `macos` / `efi` / `apel hitam`** |
+| **Kategori / subkategori** | Jangan sampai masuk ke kategori yang tidak relevan (misal dokumentasi teknis masuk ke "Pembuatan kode / Peninjauan kode") — memengaruhi **exposure saat menjelajah per kategori** |
+| Ikon | Lebih mudah diberi klik jika ada ikon (opsional) |
 
-### B.4 这一步需要你来做
+### B.4 Langkah ini harus Anda lakukan
 
-打包与自检**本仓库已经做完**（`dist/` 里就是可直接上传的包）。
-但**登录与提交必须有你的账号**，我代替不了。
+Kemasan dan pemeriksaan mandiri **sudah dikerjakan di repo ini** (di `dist/` ada paket yang siap diunggah).
+Tapi **login dan submit harus memakai akun Anda**, saya tidak bisa menggantikannya.
 
-### 两条路线可以并存
+### Dua rute bisa berjalan bersamaan
 
-先把仓库做成可添加的市场（路线 A）**给自己和熟人用**，
-等技能稳定了再打包上架官方（路线 B）—— 两条互不冲突。
+Pertama jadikan repo ini marketplace yang bisa ditambahkan (Rute A) **untuk dipakai Anda sendiri dan orang yang dikenal**,
+setelah skill-nya stabil baru dikemasan dan dipublikasikan ke kanal resmi (Rute B) — keduanya tidak saling bertentangan.

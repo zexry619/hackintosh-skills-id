@@ -1,206 +1,206 @@
-# 博通网卡（BCM943602CDP / BCM43602）配置流程
+# Kartu jaringan Broadcom (BCM943602CDP / BCM43602) alur konfigurasi
 
-> 依据：本机（ASUS Z690 / macOS 15.8.1 → 26.7.1）的实战记录 +
-> OCLP 的 `efi_builder/networking/wireless.py`（Modern Wireless 分支）逐字对齐的写法。
-> **★ 本流程必须按 macOS 版本分开走** —— 苹果从 Sequoia 起把 Broadcom Wi-Fi 驱动删了，
-> 而 Sequoia 与 Tahoe 的补法**不是同一套**。
+> Dasar: catatan praktis dari mesin ini (ASUS Z690 / macOS 15.8.1 → 26.7.1) +
+> penulisan yang selaras kata per kata dengan `efi_builder/networking/wireless.py` OCLP (cabang Modern Wireless).
+> **★ Alur ini wajib dipisah per versi macOS** — Apple menghapus driver Wi-Fi Broadcom mulai Sequoia,
+> dan cara tambal Sequoia dan Tahoe **bukan satu paket yang sama**.
 
-## 0. 先认清卡
+## 0. Kenali dulu kartunya
 
-| 部件 | 芯片 | 位置 | 说明 |
+| Komponen | Chip | Lokasi | Keterangan |
 |---|---|---|---|
-| Wi-Fi | **BCM43602** | **PCIe**，`14e4:43ba` | FullMAC，3×3 802.11ac；subsystem `0x14E4,0x16D`（= Apple） |
-| 蓝牙 | **BCM20703** | **USB**（主板 9-pin 内部排针） | Apple 原厂芯片，macOS 原生支持 |
+| Wi-Fi | **BCM43602** | **PCIe**, `14e4:43ba` | FullMAC, 3×3 802.11ac; subsystem `0x14E4,0x16D` (= Apple) |
+| Bluetooth | **BCM20703** | **USB** (pin header internal 9-pin di motherboard) | Chip fabrikasi asli Apple, didukung native oleh macOS |
 
-> ★ **从 15 升到 26 时这张卡的驱动要换**（`AirPortBrcmNIC-Tahoe.kext`，`MinKernel 25.0.0`）
-> ⇒ 完整升级流程见 `os-upgrade-15-to-26.md`。
+> ★ **Saat naik dari 15 ke 26, driver kartu ini harus diganti** (`AirPortBrcmNIC-Tahoe.kext`, `MinKernel 25.0.0`)
+> ⇒ Alur upgrade lengkap lihat `os-upgrade-15-to-26.md`.
 
-- ★ **蓝牙不走 PCIe**：卡上那条 9-pin 内部 USB 线不接就只有 Wi-Fi、没有蓝牙
-- ★ **BCM20703 固件在卡上** ⇒ 一般**不需要** `BrcmPatchRAM3` / `BrcmFirmwareData`（那是给非原厂博通卡的）
-- ★ 拔掉/屏蔽**原来的 Intel 网卡**（本机是 AX201，蓝牙 `8087:0026`）：两个蓝牙控制器会让 macOS 犯迷糊
+- ★ **Bluetooth tidak lewat PCIe**: kalau kabel USB internal 9-pin di kartu tidak dicolokkan, hanya ada Wi-Fi, tanpa Bluetooth
+- ★ **Firmware BCM20703 ada di dalam kartu** ⇒ umumnya **tidak perlu** `BrcmPatchRAM3` / `BrcmFirmwareData` (itu untuk kartu Broadcom non-orisinil)
+- ★ Cabut/blokir **kartu jaringan Intel asli** (di mesin ini AX201, Bluetooth `8087:0026`): dua Bluetooth controller membuat macOS bingung
 
-## 1. ★★ 按系统分路线（核心）
+## 1. ★★ Pilih jalur sesuai sistem (inti)
 
-| | **macOS 15 Sequoia（Darwin 24）** | **macOS 26 Tahoe（Darwin 25）** |
+| | **macOS 15 Sequoia (Darwin 24)** | **macOS 26 Tahoe (Darwin 25)** |
 |---|---|---|
-| Wi-Fi 内核驱动 | `IO80211FamilyLegacy.kext` + 它内部的 **`AirPortBrcmNIC.kext` 插件** | **独立的 `AirPortBrcmNIC-Tahoe.kext`** |
-| 内核条目版本限制 | plugin：`MinKernel 23.0.0` / **`MaxKernel 24.99.99`** | 独立 kext：**`MinKernel 25.0.0`** / `MaxKernel` 空 |
-| 驱动来源 | OCLP 2.5.1 的 kext 集 | **OCLP 3.0.0-rc.3+** 新增的 Tahoe 版（`payloads/Kexts/Wifi/AirPortBrcmNIC-Tahoe-v1.0.0.zip`） |
-| 为什么不一样 | — | OCLP 2.5.1 的 `AirPortBrcmNIC.kext` 带 `MaxKernel=24.99.99` ⇒ **升到 Tahoe 后条目被跳过 ⇒ Wi-Fi 直接消失** |
-| 用户态（root patch） | **必须**打 OCLP root patch | **同样需要**（用 OCLP 3.0.0+ 打） |
-| 双系统共用一个配置 | 两条都留着，**靠 `MinKernel`/`MaxKernel` 各管一段**：Sequoia 条目 `MaxKernel 24.99.99`，Tahoe 条目 `MinKernel 25.0.0` | 同左 |
+| Driver kernel Wi-Fi | `IO80211FamilyLegacy.kext` + plugin **`AirPortBrcmNIC.kext`** di dalamnya | **kext mandiri `AirPortBrcmNIC-Tahoe.kext`** |
+| Batas versi entri kernel | plugin: `MinKernel 23.0.0` / **`MaxKernel 24.99.99`** | kext mandiri: **`MinKernel 25.0.0`** / `MaxKernel` kosong |
+| Sumber driver | Kext set OCLP 2.5.1 | Versi Tahoe baru yang ditambahkan **OCLP 3.0.0-rc.3+** (`payloads/Kexts/Wifi/AirPortBrcmNIC-Tahoe-v1.0.0.zip`) |
+| Kenapa berbeda | — | `AirPortBrcmNIC.kext` dari OCLP 2.5.1 punya `MaxKernel=24.99.99` ⇒ **setelah naik ke Tahoe entri dilewati ⇒ Wi-Fi langsung hilang** |
+| User space (root patch) | **Wajib** melakukan root patch OCLP | **Juga dibutuhkan** (gunakan OCLP 3.0.0+) |
+| Dua OS berbagi satu config | Dua-duanya disimpan, **masing-masing diatur oleh `MinKernel`/`MaxKernel`**: entri Sequoia `MaxKernel 24.99.99`, entri Tahoe `MinKernel 25.0.0` | Sama seperti di sebelah |
 
-> 本机现状就是「两条并存」：plugin 版 `AirPortBrcmNIC.kext` = **禁用**（注释 Sequoia only），
-> `AirPortBrcmNIC-Tahoe.kext` = **启用**（注释 Tahoe / Darwin 25+）。
+> Kondisi mesin ini sekarang persis "keduanya berdampingan": versi plugin `AirPortBrcmNIC.kext` = **dinonaktifkan** (komentar Sequoia only),
+> `AirPortBrcmNIC-Tahoe.kext` = **diaktifkan** (komentar Tahoe / Darwin 25+).
 
-## 2. 两版都要做的部分
+## 2. Bagian yang wajib dilakukan di kedua versi
 
-### 2.1 `Kernel → Block`（OCLP 路线的前提）
+### 2.1 `Kernel → Block` (prasyarat jalur OCLP)
 
-- **移除**（如果之前为省电/排障屏蔽过）：`IOBluetoothFamily`、`IOBluetoothHIDDriver`、`AppleBluetoothModule`、
-  `AppleBluetoothMultitouch`、`IO80211Family`
-- **新增**：
+- **Hapus** (kalau sebelumnya diblokir untuk hemat daya/penelusuran masalah): `IOBluetoothFamily`, `IOBluetoothHIDDriver`, `AppleBluetoothModule`,
+  `AppleBluetoothMultitouch`, `IO80211Family`
+- **Tambahkan**:
   ```
   Identifier : com.apple.iokit.IOSkywalkFamily
   Strategy   : Exclude
   MinKernel  : 23.0.0
   Enabled    : true
   ```
-  （OCLP 路线要**替换** IOSkywalkFamily，所以先屏蔽系统的）
+  (Jalur OCLP harus **mengganti** IOSkywalkFamily, jadi sistemnya diblokir dulu)
 
-### 2.2 `Kernel → Add`（顺序不能反）
+### 2.2 `Kernel → Add` (urutannya tidak boleh dibalik)
 
 ```
 [1] IOSkywalkFamily.kext          MinKernel 23.0.0
 [2] IO80211FamilyLegacy.kext      MinKernel 23.0.0
-[3] AirPortBrcmNIC.kext（plugin） MinKernel 23.0.0 / MaxKernel 24.99.99   ← Sequoia
+[3] AirPortBrcmNIC.kext (plugin)  MinKernel 23.0.0 / MaxKernel 24.99.99   ← Sequoia
 [4] AirPortBrcmNIC-Tahoe.kext     MinKernel 25.0.0                        ← Tahoe
-[5] BlueToolFixup.kext            （蓝牙必需，macOS 12+）
+[5] BlueToolFixup.kext            (Bluetooth wajib, macOS 12+)
 ```
 
-- **顺序依据（来自 kext 自己的 `OSBundleLibraries`）**：`IO80211FamilyLegacy` 依赖
-  `com.apple.iokit.IOSkywalkFamily 1.0`；`AirPortBrcmNIC` 依赖 `com.apple.iokit.IO80211FamilyLegacy 600.0`
-  ⇒ **IOSkywalkFamily 必须在最前**，顺序错了会「有图标但连不上/打不开」
-- `AirPortBrcmNIC.kext` 的 `IONameMatch` 里就有 **`pci14e4,43ba`** —— 正是这张卡
-- Tahoe 那条的字段（照 OCLP 3.0.0 的写法）：
+- **Dasar urutan (dari `OSBundleLibraries` milik kext itu sendiri)**: `IO80211FamilyLegacy` bergantung pada
+  `com.apple.iokit.IOSkywalkFamily 1.0`; `AirPortBrcmNIC` bergantung pada `com.apple.iokit.IO80211FamilyLegacy 600.0`
+  ⇒ **IOSkywalkFamily harus paling depan**, urutan salah akan menyebabkan "ada ikon tapi tidak bisa konek/tidak bisa dibuka"
+- `IONameMatch` pada `AirPortBrcmNIC.kext` sudah memuat **`pci14e4,43ba`** — persis kartu ini
+- Field untuk entri Tahoe (mengikuti penulisan OCLP 3.0.0):
   `BundlePath=AirPortBrcmNIC-Tahoe.kext` / `ExecutablePath=Contents/MacOS/AirPortBrcmNIC` /
   `PlistPath=Contents/Info.plist` / `MinKernel=25.0.0` / `Arch=x86_64`
-- ★ **`itlwm.kext` 必须禁用**（Intel 网卡驱动，会和博通冲突）
+- ★ **`itlwm.kext` wajib dinonaktifkan** (driver kartu Intel, akan bentrok dengan Broadcom)
 
-### 2.3 NVRAM（`7C436110-…-FE41995C9F82`，**data 类型**）
+### 2.3 NVRAM (`7C436110-…-FE41995C9F82`, **tipe data `data`**)
 
 ```
 bluetoothExternalDongleFailed   = 00
 bluetoothInternalControllerInfo = 000000000000000089653a552efd
 ```
 
-（Sonoma/Sequoia 起蓝牙必需的「控制器信息」注入；缺了蓝牙打不开）
+(Inject "informasi controller" yang wajib ada untuk Bluetooth sejak Sonoma/Sequoia; tanpa itu Bluetooth tidak bisa dibuka)
 
-### 2.4 USB 端口映射（最容易翻车的一步）
+### 2.4 Pemetaan port USB (langkah yang paling gampang gagal)
 
-用 `USBToolBox.kext` + `UTBMap.kext` 时，**没写进映射表的端口会被直接禁用**：
+Kalau memakai `USBToolBox.kext` + `UTBMap.kext`, **port yang tidak ditulis di tabel pemetaan akan langsung dinonaktifkan**:
 
-- 蓝牙所在端口（本机 **HS11**）的 `UsbConnector` 设为 **`255` (Internal)**
-- **移除原 Intel 蓝牙端口**（本机 HS14）；`port-count` 相应减 1
-- 验证（读的是**端口对象上的实际值**，不是只看配置文件）：
+- `UsbConnector` untuk port tempat Bluetooth berada (di mesin ini **HS11**) disetel ke **`255` (Internal)**
+- **Hapus port Bluetooth Intel asli** (di mesin ini HS14); `port-count` dikurangi 1
+- Verifikasi (yang dibaca adalah **nilai sebenarnya pada objek port**, bukan hanya melihat file konfigurasi):
   ```bash
-  ioreg -p IOUSB -w0 -l | grep -i -A3 "bluetooth"     # 应见 Bluetooth USB Host Controller / BCM20703
+  ioreg -p IOUSB -w0 -l | grep -i -A3 "bluetooth"     # harus melihat Bluetooth USB Host Controller / BCM20703
   ```
 
-### 2.5 `built-in` 注入（Dortania 的 `en0` / iServices 要求）
+### 2.5 Inject `built-in` (persyaratan `en0` / iServices dari Dortania)
 
 ```
 DeviceProperties → Add →
   PciRoot(0x0)/Pci(0x1C,0x1)/Pci(0x0,0x0)
-    built-in = <01>          ← Data 类型，值 1 字节 01
+    built-in = <01>          ← tipe Data, nilai 1 byte 01
 ```
 
-- 路径怎么来的：从 IODeviceTree 回溯祖先链 `Root / PC00@0 / RP02@1C,1 / PXSX@0` ⇒
-  `PciRoot(0x0)/Pci(0x1C,0x1)/Pci(0x0,0x0)`（与 iGPU 的 `PciRoot(0x0)/Pci(0x2,0x0)` 同规则）
-- **为什么是 `01`**：Dortania《OpenCore Post-Install · iServices》原文 —— `built-in` 用 `Data` 类型、值 `01`；
-  实测 PCIe 设备默认都是 `<00>`（= 非内建）
-- 验证：`ioreg -p IOService -l -w0 | grep -B30 '"IOName" = "pci14e4,43ba"' | grep built-in`
+- Dari mana path-nya: menelusuri rantai ancestor di IODeviceTree `Root / PC00@0 / RP02@1C,1 / PXSX@0` ⇒
+  `PciRoot(0x0)/Pci(0x1C,0x1)/Pci(0x0,0x0)` (aturan sama dengan `PciRoot(0x0)/Pci(0x2,0x0)` untuk iGPU)
+- **Kenapa `01`**: kutipan asli Dortania, "OpenCore Post-Install · iServices" — `built-in` memakai tipe `Data` dengan nilai `01`;
+  hasil uji: perangkat PCIe secara default semuanya `<00>` (= bukan built-in)
+- Verifikasi: `ioreg -p IOService -l -w0 | grep -B30 '"IOName" = "pci14e4,43ba"' | grep built-in`
 
-## 3. 用户态：OCLP root patch（两版都要）
+## 3. User space: OCLP root patch (kedua versi)
 
-**为什么必须打**：实测系统里 `/System/Library/Extensions/IO80211Family.kext` **是个空壳**
-（`IOKitPersonalities` 空字典、连 `Contents/MacOS` 都没有），全盘 `find -iname "*AirPortBrcm*"` 为空
-⇒ 苹果在 Sequoia 把博通 Wi-Fi 驱动整个删了。**内核层**靠上面注入的 kext 补回来，
-**用户态框架**（`IO80211.framework` / `wifip2pd` / `WiFiPeerToPeer.framework`）必须靠 **root patch**。
+**Kenapa wajib ditambal**: hasil uji di sistem menunjukkan `/System/Library/Extensions/IO80211Family.kext` **adalah cangkang kosong**
+(`IOKitPersonalities` dict kosong, bahkan `Contents/MacOS` tidak ada), dan `find -iname "*AirPortBrcm*"` di seluruh disk kosong
+⇒ Apple menghapus driver Wi-Fi Broadcom seluruhnya di Sequoia. **Lapisan kernel** dipulihkan oleh kext yang di-inject di atas,
+**framework user space** (`IO80211.framework` / `wifip2pd` / `WiFiPeerToPeer.framework`) wajib mengandalkan **root patch**.
 
 ```
-1) ★ 先跑保护脚本（见 §3.1）
-2) 装 OCLP（Sequoia 用 2.5.1+；Tahoe 用 3.0.0-rc.3+）—— 必须走 .pkg 装
-   （它的 privileged-helper 靠 SUID 提权，root patch 依赖这个）
-3) 打开 OpenCore-Patcher.app → Post-Install Root Patch → Start Root Patching
-   应看到 "Networking: Modern Wireless"（OCLP 按 PCI 的 0x43BA 识别，在官方支持列表里）
-4) 重建 dyld shared cache 可能要 10–30 分钟，别中断 → 重启
-5) ★★ 重启后确认 **Wi-Fi 是 `en0`**（打补丁会改变驱动挂载顺序，可能把无线挤到 `en1`）
-   ⇒ 见 `network-en0-order.md`
+1) ★ Jalankan skrip proteksi dulu (lihat §3.1)
+2) Pasang OCLP (Sequoia pakai 2.5.1+; Tahoe pakai 3.0.0-rc.3+) — harus dipasang lewat .pkg
+   (privileged-helper-nya mengandalkan SUID untuk elevasi, root patch bergantung pada ini)
+3) Buka OpenCore-Patcher.app → Post-Install Root Patch → Start Root Patching
+   Harus melihat "Networking: Modern Wireless" (OCLP mengenali lewat PCI 0x43BA, ada di daftar dukungan resmi)
+4) Rebuild dyld shared cache bisa memakan 10–30 menit, jangan dihentikan → reboot
+5) ★★ Setelah reboot pastikan **Wi-Fi adalah `en0`** (patch mengubah urutan mount driver, wireless bisa terdorong ke `en1`)
+   ⇒ lihat `network-en0-order.md`
 ```
 
-> ★★ **为什么这一步不能省**：`en0` 是 Apple **iServices** 认定的「主网卡」——
-> `ROM`、iMessage / FaceTime / App Store 都挂在它上面。
-> 打补丁 / 换卡后 `en0` 换人 ⇒ 这些会**静默失效**。查法与「钉住」方法见 **`network-en0-order.md`**。
+> ★★ **Kenapa langkah ini tidak boleh dilewati**: `en0` adalah "kartu jaringan utama" yang diakui Apple **iServices** —
+> `ROM`, iMessage / FaceTime / App Store semuanya bergantung padanya.
+> Setelah patch / ganti kartu, `en0` berpindah pemilik ⇒ semuanya bisa **gagal diam-diam**. Cara mengecek dan cara "mem-pin" lihat **`network-en0-order.md`**.
 >
-> ★ **AirDrop / 接力 / 连续互通不在这个清单里** —— 它只要求「有 `awdl0`（Broadcom 原生栈）+ 蓝牙 BLE」，
-> 与 `en0` / `ROM` / 序列号 / UUID **都无关**。别为了 AirDrop 去改 `ROM`。
-> 排查顺序与权威依据见 **`airdrop-handoff.md`**。
+> ★ **AirDrop / Handoff / Continuity tidak termasuk dalam daftar ini** — syaratnya hanya "ada `awdl0` (stack native Broadcom) + Bluetooth BLE",
+> sama sekali **tidak terkait** dengan `en0` / `ROM` / nomor seri / UUID. Jangan mengubah `ROM` demi AirDrop.
+> Urutan pemeriksaan dan acuan otoritatif lihat **`airdrop-handoff.md`**.
 
-### 3.1 ★★ 打补丁前必须先跑保护脚本（否则 NVIDIA 驱动会失效）
+### 3.1 ★★ Skrip proteksi wajib dijalankan sebelum menambal (kalau tidak, driver NVIDIA jadi tidak berfungsi)
 
-OCLP 打补丁前会执行 `clean_auxiliary_kc()`（`sys_patch/kernelcache/kernel_collection/support.py`）：
+OCLP sebelum menambal akan menjalankan `clean_auxiliary_kc()` (`sys_patch/kernelcache/kernel_collection/support.py`):
 
 ```python
 for file in Path("/Library/Extensions").glob("*.kext"):
     if datetime.fromtimestamp(file.stat().st_mtime) < datetime(2021, 10, 1):
-        # → 移动到 /Library/Relocated Extensions
+        # → dipindahkan ke /Library/Relocated Extensions
 ```
 
-而 NullMoth NVIDIA 那 4 个 kext（`NVRM` / `NVAccel` / `NVRMFB` / `NVRMAGDC`）的 **mtime 是 epoch 0**
-⇒ **会被搬走 ⇒ NVIDIA 驱动失效**。
+Sementara 4 kext NVIDIA NullMoth itu (`NVRM` / `NVAccel` / `NVRMFB` / `NVRMAGDC`) **mtime-nya epoch 0**
+⇒ **akan dipindahkan ⇒ driver NVIDIA tidak berfungsi**.
 
-**处置**：先跑保护脚本，它做两件事 ——
-① 把整个 `/Library/Extensions` 备份出来；② 把 mtime 早于 2021-10-01 的 kext 目录 **`touch` 成当前时间**
-（**只改时间戳、不改内容**，不影响加载）。跑完打印复查结果，全 ✅ 才继续。
+**Penanganan**: jalankan skrip proteksi dulu, karena ia melakukan dua hal —
+① mencadangkan seluruh `/Library/Extensions`; ② **`touch` direktori kext yang mtime-nya lebih tua dari 2021-10-01** dengan waktu sekarang
+(**hanya mengubah timestamp, bukan isi**, tidak memengaruhi pemuatan). Setelah selesai, hasil pemeriksaan dicetak, lanjutkan hanya jika semuanya ✅.
 
-打完补丁后**务必复查**：
+Setelah patch selesai **wajib diperiksa ulang**:
 
 ```bash
-ls -1 /Library/Extensions/*.kext                  # NVIDIA 4 件套还在
-ls -1 "/Library/Relocated Extensions" 2>/dev/null # 应该为空/不存在
+ls -1 /Library/Extensions/*.kext                  # 4 kext NVIDIA masih ada
+ls -1 "/Library/Relocated Extensions" 2>/dev/null # seharusnya kosong/tidak ada
 ```
 
-## 4. 验证判据
+## 4. Kriteria verifikasi
 
-| 检查 | 期望 |
+| Yang diperiksa | Harapan |
 |---|---|
-| `kmutil showloaded --list-only \| grep 80211` | 4 行：`IOSkywalkFamily`、`corecapture`、`IO80211FamilyLegacy`、`AirPort.BrcmNIC` |
-| `ioreg` 里驱动是否绑上卡 | `"IONameMatched" = "pci14e4,43ba"`、`"IOClass" = "AirPort_BrcmNIC"` |
-| ★ Wi-Fi 是否真的活 | **看 `ifconfig en1`（要有 `inet` + `status: active`）**，或 `ioreg -n en1 -r -l -w0 \| grep -E "IO80211SSID\|IO80211BSSID\|IOControllerEnabled"` |
-| AWDL（AirDrop/接力） | `ifconfig` 里有 **`awdl0`**（AirLink）与 **`llw0`**（LowLatency）且 UP/RUNNING |
-| 蓝牙 | `system_profiler SPBluetoothDataType` **秒回**；`Chipset: BCM_20703A2`、`Transport: USB` |
-| 蓝牙死锁是否根除 | `log show --last 3m --predicate 'process == "bluetoothd"' \| grep -c "Couldn't find IOBluetoothHCIController"` = **0** |
+| `kmutil showloaded --list-only \| grep 80211` | 4 baris: `IOSkywalkFamily`, `corecapture`, `IO80211FamilyLegacy`, `AirPort.BrcmNIC` |
+| Apakah driver terikat ke kartu di `ioreg` | `"IONameMatched" = "pci14e4,43ba"`, `"IOClass" = "AirPort_BrcmNIC"` |
+| ★ Apakah Wi-Fi benar-benar hidup | **Lihat `ifconfig en1` (harus ada `inet` + `status: active`)**, atau `ioreg -n en1 -r -l -w0 \| grep -E "IO80211SSID\|IO80211BSSID\|IOControllerEnabled"` |
+| AWDL (AirDrop/Handoff) | Ada **`awdl0`** (AirLink) dan **`llw0`** (LowLatency) di `ifconfig`, status UP/RUNNING |
+| Bluetooth | `system_profiler SPBluetoothDataType` **langsung balas**; `Chipset: BCM_20703A2`, `Transport: USB` |
+| Apakah deadlock Bluetooth sudah hilang | `log show --last 3m --predicate 'process == "bluetoothd"' \| grep -c "Couldn't find IOBluetoothHCIController"` = **0** |
 
-> ★★ **别只看 `system_profiler SPAirPortDataType` 判 Wi-Fi 死活**：重启后驱动要读卡、关联、DHCP，
-> 十几秒才起来。本机就出现过「验证时返回空 ⇒ 以为失败，其实只是还没初始化」的假警报。
-> **`ifconfig en1` 才是硬判据。**
+> ★★ **Jangan hanya menilai hidup/matinya Wi-Fi dari `system_profiler SPAirPortDataType`**: setelah reboot driver harus membaca kartu, berasosiasi, DHCP,
+> jadi butuh belasan detik untuk siap. Di mesin ini pernah muncul alarm palsu "saat verifikasi mengembalikan kosong ⇒ dikira gagal, padahal hanya belum inisialisasi".
+> **`ifconfig en1` itulah kriteria kerasnya.**
 
-## 5. 国家码 / 速率：什么时候才需要 `AirportBrcmFixup`
+## 5. Kode negara / laju: kapan `AirportBrcmFixup` baru dibutuhkan
 
-| 场景 | 做法 |
+| Situasi | Cara menangani |
 |---|---|
-| 系统已自动协商出正确的 `IO80211CountryCode`（本机 = `CN`，信道表 1–13 / 36–64 / 149–165 与中国划分完全吻合） | **不要动**（人工干预只会帮倒忙） |
-| AP 用了 **100–140（DFS）** 信道，或要突破发射功率 | 才需要 `AirportBrcmFixup.kext` + `brcmfx-country=US`（或 HK/KR） |
-| 速率不到理论值 | 先查 AP 的空间流数：BCM43602 是 **3×3**，若 AP 只有 2×2 就只能 2 流（本机 867 Mbps 属正常） |
+| Sistem sudah otomatis menegosiasikan `IO80211CountryCode` yang benar (di mesin ini = `CN`, tabel kanal 1–13 / 36–64 / 149–165 persis sama dengan pembagian di Tiongkok) | **Jangan diubah** (interaksi manual hanya akan merugikan) |
+| AP memakai kanal **100–140 (DFS)**, atau ingin menembus daya transmisi | Baru perlu `AirportBrcmFixup.kext` + `brcmfx-country=US` (atau HK/KR) |
+| Laju tidak mencapai nilai teoretis | Cek dulu jumlah spatial stream milik AP: BCM43602 itu **3×3**, kalau AP cuma 2×2 maka hanya 2 stream (867 Mbps di mesin ini normal) |
 
-## 6. 代价与回滚
+## 6. Biaya dan rollback
 
-| 项 | 代价 |
+| Item | Biaya |
 |---|---|
-| OCLP 换掉 `IOSkywalkFamily` | **所有 DriverKit 网卡驱动失效** ⇒ Intel i225/i226 必须改用 `AppleIGC.kext`（IOKit 驱动） |
-| OCLP root patch | **不能用增量 OTA**；**每次系统更新后都要重打**（且每次都要先跑 §3.1 的保护脚本） |
-| 加回蓝牙/Wi-Fi kext | 启动会变慢一些（当初屏蔽蓝牙/Wi-Fi 换来 137 s→91 s，现在要还一部分） |
-| 回滚 | 改 config + 换 kext 之前先备份；本机的做法是「脚本 + `--revert`」+ ESP/工作区双备份 |
+| OCLP menggantikan `IOSkywalkFamily` | **Semua driver kartu jaringan DriverKit jadi tidak berfungsi** ⇒ Intel i225/i226 wajib memakai `AppleIGC.kext` (driver IOKit) |
+| OCLP root patch | **Tidak bisa memakai OTA inkremental**; **setiap update sistem harus ditambal ulang** (dan tiap kali harus jalankan skrip proteksi di §3.1 dulu) |
+| Menambahkan kembali kext Bluetooth/Wi-Fi | Boot jadi sedikit lebih lambat (dulu memblokir Bluetooth/Wi-Fi menghasilkan 137 s→91 s, sekarang sebagian harus dikembalikan) |
+| Rollback | Cadangkan sebelum mengubah config + mengganti kext; cara di mesin ini adalah "skrip + `--revert`" + cadangan ganda di ESP/workspace |
 
-## 7. 本机实测事实（可直接引用）
+## 7. Fakta terukur di mesin ini (bisa langsung dikutip)
 
-| 项 | 值 |
+| Item | Nilai |
 |---|---|
-| Wi-Fi 卡 | `(0x14E4, 0x16D)`，固件 `Broadcom BCM43xx 1.0 (7.77.111.1 AirPortDriverBrcmNIC-1772.1)` |
-| 接口 | `en1`（Infrastructure）+ **`awdl0`**（AirLink）+ **`llw0`**（LowLatency） |
-| 速率/信号 | 802.11ac / Ch36 (5 GHz, 80 MHz) / WPA2 / **867 Mbps** / MCS 9 / -36 dBm |
-| 蓝牙 | `BCM_20703A2`，Vendor `0x004C (Apple)`，FW `v76 c4290`，USB 端口 **HS11**（`UsbConnector=255`） |
-| 支持的蓝牙服务 | HFP AVRCP A2DP HID Braille **LEA AACP GATT** SerialPort（后三个是 Continuity 需要的） |
+| Kartu Wi-Fi | `(0x14E4, 0x16D)`, firmware `Broadcom BCM43xx 1.0 (7.77.111.1 AirPortDriverBrcmNIC-1772.1)` |
+| Interface | `en1` (Infrastructure) + **`awdl0`** (AirLink) + **`llw0`** (LowLatency) |
+| Laju/sinyal | 802.11ac / Ch36 (5 GHz, 80 MHz) / WPA2 / **867 Mbps** / MCS 9 / -36 dBm |
+| Bluetooth | `BCM_20703A2`, Vendor `0x004C (Apple)`, FW `v76 c4290`, port USB **HS11** (`UsbConnector=255`) |
+| Layanan Bluetooth yang didukung | HFP AVRCP A2DP HID Braille **LEA AACP GATT** SerialPort (tiga yang terakhir dibutuhkan Continuity) |
 | `built-in` | `PciRoot(0x0)/Pci(0x1C,0x1)/Pci(0x0,0x0)` = `<01>` |
-| 国家码 | `IO80211CountryCode = CN`（自动协商正确，**不需要** `AirportBrcmFixup`） |
+| Kode negara | `IO80211CountryCode = CN` (negosiasi otomatis benar, **tidak perlu** `AirportBrcmFixup`) |
 
-### 踩过的环境坑
+### Jebakan lingkungan yang pernah dilewati
 
-1. **本机 zsh 没有 `timeout`**（没装 coreutils）⇒ 脚本里 `timeout N cmd` 会**静默失败**，
-   会让「蓝牙探针 0 秒返回」变成**假结果**。写验证脚本时要自带 bash 版 timeout 兼容层。
-2. **`log show` 在沙箱里永远跑不了**（`log: Cannot run while sandboxed`）⇒ 日志类诊断得走提权 AppleScript 或让用户手动跑。
-3. **Wi-Fi 的设备节点名不是 `ARPT`**，是 `AirPort_BrcmNIC` / `en1`；`ioreg -l -w0` 不加过滤会输出几百 KB。
-4. **改配置时注意别踩到别的任务**：本机曾出现「另一个会话同时改同一份 config」（iGPU 注入 + 删 `-wegnoigpu`）
-   ⇒ 改动前**必读 live 并对 diff**；`NVRAM>Delete` 含 `boot-args` 时，配置文件里的值**下次重启就会覆盖实际生效值**。
-5. **EFI 盘号会漂**：同一次会话里 `diskutil list` 先后给过两个不同的 EFI 分区号 ⇒ 一律按卷 UUID / 现查。
+1. **zsh di mesin ini tidak punya `timeout`** (coreutils tidak terpasang) ⇒ `timeout N cmd` di dalam skrip akan **gagal diam-diam**,
+   yang membuat "probe Bluetooth balas dalam 0 detik" berubah menjadi **hasil palsu**. Saat menulis skrip verifikasi, sertakan lapisan kompatibilitas timeout versi bash.
+2. **`log show` tidak akan pernah jalan di dalam sandbox** (`log: Cannot run while sandboxed`) ⇒ diagnostik berbasis log harus lewat AppleScript dengan elevasi hak akses atau meminta pengguna menjalankannya manual.
+3. **Nama node perangkat Wi-Fi bukan `ARPT`**, melainkan `AirPort_BrcmNIC` / `en1`; `ioreg -l -w0` tanpa filter mengeluarkan ratusan KB.
+4. **Saat mengubah config, perhatikan jangan menabrak task lain**: di mesin ini pernah terjadi "sesi lain mengubah config yang sama" (inject iGPU + menghapus `-wegnoigpu`)
+   ⇒ **wajib baca file live dan bandingkan diff**; kalau `NVRAM>Delete` memuat `boot-args`, nilai di file konfigurasi **akan menimpa nilai yang benar-benar berlaku pada reboot berikutnya**.
+5. **Nomor disk EFI bisa bergeser**: dalam satu sesi yang sama, `diskutil list` sempat memberi dua nomor partisi EFI yang berbeda ⇒ selalu pakai UUID volume / cek ulang saat itu juga.

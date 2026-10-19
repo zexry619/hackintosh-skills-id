@@ -1,11 +1,11 @@
 #!/bin/bash
-# CPU 实际频率探针 —— 用于验证 Intel 睿频 / 对比不同机型或 BIOS 设置下的真实核心频率
-# 原理：mulsd（标量双精度乘法）在 Intel 近代表上固定 4 周期延迟；
-#       把乘法写进内联汇编 => 编译器无法折叠，测得的就是纯依赖链周期数。
-#       ★ 不要用普通 C 循环测频率：clang -O2 会把依赖加法折叠，得出荒谬值（曾算出 8.34/11.03 GHz）
-# 用法：bash cpu-freq-probe.sh          （需要 Xcode 命令行工具，提供 clang）
-# 参考：i7-12700K 单核睿频 5.0 GHz / 全核约 4.7 GHz / 基础频率 3.6 GHz
-# 配合 CPU-S（看「当前睿频状态」）与 Intel Power Gadget 交叉印证
+# Probe frekuensi CPU aktual — untuk memverifikasi Intel Turbo Boost / membandingkan frekuensi inti nyata pada berbagai model mesin atau pengaturan BIOS
+# Prinsip: mulsd (perkalian skalar presisi ganda) memiliki latensi tetap 4 siklus pada CPU Intel generasi terbaru;
+#       menulis perkalian ke dalam assembly inline => kompilator tidak dapat melipat kodenya, sehingga yang diukur murni jumlah siklus rantai dependensi.
+#       ★ Jangan gunakan loop C biasa untuk mengukur frekuensi: clang -O2 akan melipat dependensi penjumlahan dan menghasilkan nilai konyol (pernah menghasilkan 8.34/11.03 GHz)
+# Cara pakai: bash cpu-freq-probe.sh          (memerlukan Xcode command line tools yang menyediakan clang)
+# Referensi: i7-12700K turbo boost 1 inti 5.0 GHz / semua inti sekitar 4.7 GHz / frekuensi dasar 3.6 GHz
+# Cross-check dengan CPU-S (lihat "status turbo boost saat ini") dan Intel Power Gadget
 set -u
 TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
 cat > "$TMP/fb.c" <<'EOF'
@@ -27,9 +27,9 @@ int main(void){
     return 0;
 }
 EOF
-clang -O2 -o "$TMP/fb" "$TMP/fb.c" || { echo "编译失败（需要 Xcode 命令行工具）"; exit 1; }
-echo "机型: $(system_profiler SPHardwareDataType 2>/dev/null | awk -F': ' '/Model Identifier/{print $2}')"
-echo -n "单线程实测核心频率: "; "$TMP/fb"; echo " GHz"
-echo "8 线程并发（每线程）:"
+clang -O2 -o "$TMP/fb" "$TMP/fb.c" || { echo "Kompilasi gagal (memerlukan Xcode command line tools)"; exit 1; }
+echo "Model: $(system_profiler SPHardwareDataType 2>/dev/null | awk -F': ' '/Model Identifier/{print $2}')"
+echo -n "Frekuensi inti terukur single-thread: "; "$TMP/fb"; echo " GHz"
+echo "8 thread paralel (per thread):"
 for i in 1 2 3 4 5 6 7 8; do printf '  '; "$TMP/fb"; echo ' GHz'; done
-echo "参考：i7-12700K 单核睿频 5.0 GHz / 全核约 4.7 GHz"
+echo "Referensi: i7-12700K turbo boost 1 inti 5.0 GHz / semua inti sekitar 4.7 GHz"

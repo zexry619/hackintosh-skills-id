@@ -1,139 +1,139 @@
-# 装不上 / 进不去系统 —— 分层 debug 流程
+# Tidak bisa terpasang / tidak bisa boot ke sistem —— alur debug berlapis
 
-> 依据：本机 10-08 ~ 10-16 的**全部失败复盘**（换机型循环重启 ×6、卡 USB/HID ×3、`decmpfs` panic ×2、
-> `X86PlatformShim` panic、`no kext summary` 极早期失败、ReBAR 黑屏、VMD 找不到盘…）+ OpenCore 官方文档。
-> ★★ **一句话**：**先分层定位「挂在哪一段」，再查那一段的日志** ——
-> **不要一上来就改配置**（改了就没法复盘，本机踩过）。
+> Dasar: **seluruh rekap kegagalan** pada mesin ini antara 10-08 ~ 10-16 (ganti model mesin loop restart ×6, macet di USB/HID ×3, `decmpfs` panic ×2,
+> `X86PlatformShim` panic, kegagalan sangat dini `no kext summary`, layar hitam ReBAR, VMD tidak menemukan disk…)+ dokumen resmi OpenCore.
+> ★★ **Inti satu kalimat**: **tentukan dulu secara berlapis "di bagian mana macetnya", baru periksa log bagian itu** ——
+> **jangan langsung mengubah konfigurasi** (kalau diubah, kasusnya tidak bisa direkap ulang, sudah pernah dialami mesin ini).
 
-## 0. ★★ 第一步永远是分层
+## 0. ★★ Langkah pertama selalu berlapis
 
-把启动拆成四段，**先判在哪一段挂的**：
+Pecah boot menjadi empat bagian, **tentukan dulu di bagian mana macetnya**:
 
-| 段 | 表现 | 去哪查 |
+| Bagian | Gejala | Di mana mencari |
 |---|---|---|
-| **① 固件 / OpenCore 自身** | **连选择器都不出现**；或出现后一选就回 BIOS / 黑屏 | §2 |
-| **② OpenCore 引导期** | 选择器出来了，选了 macOS 后**卡在 OpenCore 自己的输出** | §3（OC 日志） |
-| **③ 内核早期**（< 1–2 s） | 苹果 logo / `-v` 刚开始就停；或**立刻重启** | §4 |
-| **④ 内核中后期 / 用户态** | **走到很后面**（驱动都加载了）才卡 / panic | §5、§6 |
+| **① Firmware / OpenCore itu sendiri** | **Selector pun tidak muncul**; atau setelah muncul langsung kembali ke BIOS / layar hitam | §2 |
+| **② Periode boot OpenCore** | Selector sudah muncul, setelah memilih macOS **macet di output milik OpenCore sendiri** | §3 (log OC) |
+| **③ Awal kernel** (< 1–2 s) | Logo Apple / `-v` baru mulai langsung berhenti; atau **langsung restart** | §4 |
+| **④ Kernel menengah akhir / user space** | **Baru macet jauh di akhir** (semua driver sudah termuat) / panic | §5, §6 |
 
-### 0.1 ★★ 先分清「卡死」还是「循环重启」
+### 0.1 ★★ Bedakan dulu "hang" atau "loop restart"
 
-- **循环重启 = 引导看门狗超时自动重启 ⇒ 「多等一会儿」无效**（本机 10-12 换机型 6 次全是这个形态）。
-- **卡死才值得等** —— 本机也踩过反例：看着像卡死，其实是在**回滚 11 GB 的系统卷快照，很慢但不是死**。
-- ★ 判据：屏幕**有没有闪一下重启**；BIOS/开机自检是不是重新走了一遍。
+- **Loop restart = boot watchdog timeout otomatis restart ⇒ "tunggu lebih lama" tidak berguna** (di mesin ini 10-12 ganti model 6 kali semuanya bentuk ini).
+- **Yang layak ditunggu hanya hang** — mesin ini juga pernah punya kasus sebaliknya: terlihat seperti hang, padahal sedang **rollback snapshot system volume 11 GB, lambat tapi bukan mati**.
+- ★ Kriteria: layar **berkedip sekali indicating restart**; apakah POST/BIOS berjalan ulang dari awal.
 
-## 1. 三条铁律（先记住，能省一半折腾）
+## 1. Tiga aturan besi (ingat dulu, menghemat separuh kerumitan)
 
-1. ★ **没有 `-v` 就没有信息** —— 排查期**必须开 `-v`**（日常态才关）。
-   日志完整性两边一样，但**屏幕上的信息只有 `-v` 给**（`-v` 是**偏好项，要问客户**，铁律 13）。
-2. ★★ **进不去 ≠ 一定要重装** —— 先按 §7 把**上一份能用的配置**拿回来，再慢慢查。
-3. ★★ **备一个能用的 U 盘 EFI**（那份用 `Misc>Boot>LauncherOption=Disabled`，**不改写 NVRAM**）——
-   它是**所有救援路径的前提**（`boot-entries.md`）。
+1. ★ **Tanpa `-v` tidak ada informasi** — saat troubleshooting **harus nyalakan `-v`** (matikan hanya di pemakaian harian).
+   Kelengkapan log sama saja, tapi **informasi di layar hanya diberikan oleh `-v`** (`-v` adalah **preferensi, harus bertanya ke klien**, aturan besi 13).
+2. ★★ **Tidak bisa boot ≠ harus instal ulang** — pertama ikuti §7 untuk **mengembalikan konfigurasi yang terakhir masih bisa dipakai**, lalu telusuri perlahan.
+3. ★★ **Siapkan satu USB EFI yang masih bisa dipakai** (yang itu memakai `Misc>Boot>LauncherOption=Disabled`, **tidak menulis ulang NVRAM**)——
+   ini adalah **prasyarat semua jalur pemulihan** (`boot-entries.md`).
 
-## 2. ① 固件 / OpenCore 自身（连选择器都进不去）
+## 2. ① Firmware / OpenCore itu sendiri (selector bahkan tidak bisa dimasuki)
 
-| 症状 | 查什么 |
+| Gejala | Yang perlu dicek |
 |---|---|
-| **黑屏，连 logo 都没有** | ★ 本机已知：`UEFI>Quirks>ResizeGpuBars=13`（8 GB）会让**开机黑屏 ~21 s** ⇒ **先等够 2 分钟**；真超时再改 `12` 或关 BIOS ReBAR（`nvidia-driver.md`） |
-| **选择器不出现** | ★ 第三方开机 logo（如 `NullMothLogo.efi`）**可能让固件到不了选择器** ⇒ 从别的系统里关掉它。★ **boot-args 救不了「选择器之前」挂住的情况** |
-| **改过主题后选择器全黑 / 不启动** | ★ **必需图标缺一个 OpenCanopy 就不启动** ⇒ 跑 `scripts/oc-theme-check.sh`；逃生口 `PickerMode=Builtin`（`theme-opencanopy.md`） |
-| **怀疑构建混搭** | ★ **只换 `OpenCore.efi` 没换 Drivers** = 构建混搭的引导器 ⇒ **连官方同名 Drivers 一起换**（铁律 14） |
-| **BIOS 里看不到 OpenCore 项** | 那是启动项问题，不是引导问题 ⇒ `boot-entries.md`（`LauncherOption` / `bcfg` / `OpenControl`） |
+| **Layar hitam, logo pun tidak ada** | ★ Diketahui di mesin ini: `UEFI>Quirks>ResizeGpuBars=13` (8 GB) menyebabkan **layar hitam saat boot ~21 s** ⇒ **tunggu cukup 2 menit dulu**; kalau benar-benar timeout, ubah ke `12` atau matikan BIOS ReBAR (`nvidia-driver.md`) |
+| **Selector tidak muncul** | ★ Logo boot pihak ketiga (misalnya `NullMothLogo.efi`) **bisa membuat firmware gagal mencapai selector** ⇒ matikan dari sistem lain. ★ **boot-args tidak bisa menolong kondisi macet "sebelum selector"** |
+| **Setelah tema diubah, selector jadi layar hitam semua / tidak mau start** | ★ **Ikon wajib yang kurang satu membuat OpenCanopy tidak mau start** ⇒ jalankan `scripts/oc-theme-check.sh`; jalan keluar `PickerMode=Builtin` (`theme-opencanopy.md`) |
+| **Curiga build tercampur** | ★ **Ganti `OpenCore.efi` saja tapi tidak mengganti Drivers** = bootloader build tercampur ⇒ **ganti juga Drivers resmi dengan nama sama** (aturan besi 14) |
+| **OpenCore tidak terlihat di BIOS** | Itu masalah entri boot, bukan masalah boot ⇒ `boot-entries.md` (`LauncherOption` / `bcfg` / `OpenControl`) |
 
-## 3. ② OpenCore 引导期
+## 3. ② Periode boot OpenCore
 
-**拿日志**（三条路径，见 `logs-and-debug.md` §4）：
+**Ambil log** (tiga jalur, lihat `logs-and-debug.md` §4):
 
-- ① **文件**：ESP 根目录 `opencore-*.txt`（需 `Misc>Debug>Target` 含 **`0x40`**；**256 KB 上限**）
-- ② **DataHub**（`Target` 含 **`0x04`**；控制台关掉也能读）
-- ③ **UEFI 变量**（`Target` 含 **`0x10`**，日志上限 32 KB）
+- ① **Berkas**: `opencore-*.txt` di root ESP (perlu `Misc>Debug>Target` berisi **`0x40`**; **batas atas 256 KB**)
+- ② **DataHub** (`Target` berisi **`0x04`**; tetap bisa dibaca walau konsol dimatikan)
+- ③ **Variabel UEFI** (`Target` berisi **`0x10`**, batas log 32 KB)
 
-**判据清单**：`OCABC: MAT support` / `slide` / APFS 驱动门槛 / ACPI 表清单 / 启动项注册 ⇒ `logs-and-debug.md` §5。
+**Daftar kriteria**: `OCABC: MAT support` / `slide` / ambang driver APFS / daftar tabel ACPI / registrasi entri boot ⇒ `logs-and-debug.md` §5.
 
-> ★★ **进不去系统时怎么读日志**：用 **U 盘 EFI 或 Recovery 启动** → 挂载**内置** EFI → 读 `opencore-*.txt`。
+> ★★ **Cara membaca log saat tidak bisa boot ke sistem**: boot dengan **USB EFI atau Recovery** → mount EFI **internal** → baca `opencore-*.txt`.
 
-## 4. ③ 内核早期（< 1–2 s）
+## 4. ③ Awal kernel (< 1–2 s)
 
-| 症状 | 含义 / 查什么 |
+| Gejala | Arti / yang perlu dicek |
 |---|---|
-| **`can't perform kext scan: no kext summary`** | ★★ **极早期（< 1 s）的启动缓存层故障** —— **与 GPU、与「某个具体 kext」无关**，别往显卡驱动上查（本机踩过） |
-| **立刻重启、什么都看不到** | ★ 引导看门狗 ⇒ 回到 §0.1 先确认形态 |
-| **`X86PlatformShim` / `xcpm_hwp_enable` panic（type 13）** | ★★ **第一件事查 BIOS 的 `Intel(R) Speed Shift Technology` 是否 `Enabled`**（**`Auto` 也可能等效关闭**）—— `wrmsr(0x770,1)` #GP（`intel-turbo.md` §10） |
-| **刚改完 kext 就挂** | 用 `scripts/kext-inventory.sh` 对照改动前清单；★ 查 `Kernel>Add` **引用缺失** / **顺序**（`Lilu` 必须最前） |
+| **`can't perform kext scan: no kext summary`** | ★★ **Kegagalan lapisan cache boot yang sangat dini (< 1 s)** —— **tidak terkait GPU, tidak terkait "kext tertentu"**, jangan telusuri ke driver kartu grafis (sudah pernah dialami mesin ini) |
+| **Langsung restart, tidak ada yang terlihat** | ★ boot watchdog ⇒ kembali ke §0.1 untuk memastikan bentuknya |
+| **`X86PlatformShim` / `xcpm_hwp_enable` panic (type 13)** | ★★ **Hal pertama: cek apakah `Intel(R) Speed Shift Technology` di BIOS `Enabled`** (**`Auto` pun bisa berarti mati**) —— `wrmsr(0x770,1)` #GP (`intel-turbo.md` §10) |
+| **Baru saja mengubah kext lalu macet** | Bandingkan dengan `scripts/kext-inventory.sh` terhadap daftar sebelum perubahan; ★ cek `Kernel>Add` **referensi hilang** / **urutan** (`Lilu` harus paling depan) |
 
-## 5. ④ 内核中后期 / 用户态
+## 5. ④ Kernel menengah akhir / user space
 
-| 症状 | 查什么 |
+| Gejala | Yang perlu dicek |
 |---|---|
-| **走到很后面（驱动都加载了）才卡** | 多半是**用户态服务没起来**。本机实例：`AppleUSBHostHIDDevice` 都建好了，但在等 **DriverKit dext `com.apple.AppleUSBHostHIDDrivers`** ⇒ **没有键鼠输入**（看着像卡死，其实是等不到服务） |
-| **卡在 Preboot** | ★ 专项排查见 `5T33Z0/OC-Little-Translated` 的 `Content/18_Troubleshooting/Fixing_Preboot`（另有 `K_Debugging/` 的 SysReport 法） |
-| **panic 了** | ★ **首选证据在 `/Library/Logs/DiagnosticReports/`**；带 `keepsyms=1` 的 panic 回溯**直接给帧名**（所以排查期值得开 `keepsyms=1`） |
-| **`decmpfs_pagein_compressed: couldn't ubc_upl_map a single page`**（`apfs_vnops.c`） | ★ 本机**已知族**：APFS **透明解压路径**的内核断言，**与 GPU / 机型 / 内存压力无关**（panic 里 `Compressor Info: 0% … 0 swapfiles` 已排除内存不足）；特征是**开机几十分钟后、新进程启动时**、**不同机型不同进程同一行代码** |
-| **开机 ~2 s 的 `element modified after free`** | ★ 本机实测是 **`NVMeFix.kext`** 造成的（**不是 GPU、不是网卡驱动**）⇒ 先**禁用 `NVMeFix` 做 A/B** |
-| **`SIGABRT` 在 `MPSLibrary::MPSKey_Compile`**（**应用**崩溃，不是 boot 失败） | ★ NVIDIA Metal 驱动建不出 MPS 计算管线 ⇒ **系统级、与 EFI / 三码 / 内存注入无关**（`nvidia-driver.md`、`pitfalls.md`） |
+| **Baru macet jauh di akhir (semua driver sudah termuat)** | Kemungkinan besar **layanan user space tidak jalan**. Contoh di mesin ini: `AppleUSBHostHIDDevice` sudah dibuat, tapi menunggu **DriverKit dext `com.apple.AppleUSBHostHIDDrivers`** ⇒ **tidak ada input keyboard/mouse** (terlihat seperti hang, padahal menunggu layanan yang tidak datang) |
+| **Macet di Preboot** | ★ Troubleshooting khusus ada di `5T33Z0/OC-Little-Translated` `Content/18_Troubleshooting/Fixing_Preboot` (ada juga metode SysReport di `K_Debugging/`) |
+| **Panic** | ★ **Bukti utama ada di `/Library/Logs/DiagnosticReports/`**; panic backtrace dengan `keepsyms=1` **langsung memberi nama frame** (karena itu saat troubleshooting layak menyalakan `keepsyms=1`) |
+| **`decmpfs_pagein_compressed: couldn't ubc_upl_map a single page`** (`apfs_vnops.c`) | ★ **Keluarga yang sudah diketahui di mesin ini**: kernel assertion pada **jalur dekompresi transparan APFS**, **tidak terkait GPU / model mesin / tekanan memori** (di panic `Compressor Info: 0% … 0 swapfiles` sudah menyingkirkan kekurangan memori); cirinya **beberapa puluhan menit setelah boot, saat proses baru dijalankan**, **baris kode yang sama pada model dan proses yang berbeda** |
+| **`element modified after free` sekitar ~2 s setelah boot** | ★ Teruji di mesin ini penyebabnya **`NVMeFix.kext`** (**bukan GPU, bukan driver jaringan**) ⇒ **nonaktifkan `NVMeFix` untuk A/B dulu** |
+| **`SIGABRT` di `MPSLibrary::MPSKey_Compile`** (**aplikasi** crash, bukan kegagalan boot) | ★ Driver NVIDIA Metal tidak bisa membuat jalur komputasi MPS ⇒ **masalah tingkat sistem, tidak terkait EFI / tiga kode / injeksi memori** (`nvidia-driver.md`, `pitfalls.md`) |
 
-## 6. 装机期专属：装不上 / 找不到盘
+## 6. Khusus masa instalasi: tidak bisa terpasang / tidak menemukan disk
 
-| 症状 | 查什么 |
+| Gejala | Yang perlu dicek |
 |---|---|
-| ★★ **安装器「找不到任何驱动器」** | 九成是 **BIOS 里 VMD / Intel RST 没关**（macOS 没有 VMD 驱动）⇒ `bios-settings.md` |
-| **安装期键鼠没反应 / 卡 USB** | `XHCI Hand-off` / `Legacy USB Support`；★ **`UTBMap` 是否把安装盘或键鼠映射掉了** |
-| **装到一半重启** | 先按 §0.1 判形态；**循环重启** ⇒ 查 ACPI（§8） |
-| **装完第一次开机进不去** | 常见是 **`MinKernel`/`MaxKernel` 分流不对**（`os-upgrade-15-to-26.md`）或 **kext 顺序** |
-| **刚装完就 panic 在电源管理** | 查 BIOS `Speed Shift`（§4） |
+| ★★ **Installer "tidak menemukan drive sama sekali"** | Sembilan dari sepuluh kasus karena **VMD / Intel RST di BIOS tidak dimatikan** (macOS tidak punya driver VMD) ⇒ `bios-settings.md` |
+| **Saat instalasi keyboard/mouse tidak merespons / macet di USB** | `XHCI Hand-off` / `Legacy USB Support`; ★ **apakah `UTBMap` memetakan keluar disk instalasi atau keyboard/mouse** |
+| **Restart di tengah instalasi** | Dulu tentukan bentuknya lewat §0.1; **loop restart** ⇒ cek ACPI (§8) |
+| **Setelah instalasi selesai, boot pertama tidak bisa masuk** | Sering kali **`MinKernel`/`MaxKernel` pembagian salah** (`os-upgrade-15-to-26.md`) atau **urutan kext** |
+| **Baru selesai instalasi lalu panic di power management** | Cek BIOS `Speed Shift` (§4) |
 
-## 7. ★★ 救援顺序（进不去系统时按这个来）
+## 7. ★★ Urutan pemulihan (ikuti ini saat tidak bisa boot ke sistem)
 
-1. **先回到「上一份能用的配置」** —— 每次改 ESP 都该留备份（铁律 2/3）；
-   `scripts/oc-edit-safe.sh` 的版本存档就是干这个的
-2. **U 盘 EFI 启动**（前提是它存在且 `LauncherOption=Disabled`，不会改写 NVRAM）
-3. **Recovery / 单用户模式** 挂载**内置** EFI，把配置换回去
-4. **二分**：拔掉可疑硬件 / 关掉可疑开关
-   - 例：核显相关（`-wegnoigpu`）、ReBAR、某个可疑 kext
-   - ★ **一次只改一项**（铁律 5）—— 否则下次复盘无法定位
-5. **从别的系统直接改 ESP**（Windows / 另一份 macOS 都能挂 FAT）
-6. ★ **不要**在进不去的时候「顺手多改几项」—— 那会让下次复盘彻底失去线索
+1. **Kembali dulu ke "konfigurasi yang terakhir masih bisa dipakai"** —— setiap kali mengubah ESP harus ada backup (aturan besi 2/3);
+   arsip versi dari `scripts/oc-edit-safe.sh` memang untuk ini
+2. **Boot dengan USB EFI** (prasyaratnya file itu ada dan `LauncherOption=Disabled`, sehingga tidak menulis ulang NVRAM)
+3. Boot **Recovery / mode single-user**, mount EFI **internal**, kembalikan konfigurasi
+4. **Bsearch**: cabut perangkat yang mencurigakan / matikan sakelar yang mencurigakan
+   - Contoh: iGPU terkait (`-wegnoigpu`), ReBAR, sebuah kext yang mencurigakan
+   - ★ **Ubah satu hal saja per kali** (aturan besi 5)—— kalau tidak, rekap berikutnya tidak bisa melacak
+5. **Ubah ESP langsung dari sistem lain** (Windows / macOS lain sama-sama bisa mount FAT)
+6. ★ **Jangan** "mengubah beberapa hal sekalian" saat sedang tidak bisa boot —— itu membuat rekap berikutnya kehilangan semua petunjuk
 
-## 8. ACPI 相关（本机特例，换机型必看）
+## 8. Terkait ACPI (kasus khusus mesin ini, wajib dilihat saat ganti model)
 
-★★★ **本机（ASUS Z690）换机型 ⇒ 循环重启**，真因是**主板 OEM SSDT `xh_adls3`**：
-board-id 变了 ⇒ macOS **重新解析 ACPI 表** ⇒ 该表解析不过（**`HS06 AE_NOT_FOUND`**）
-⇒ 电源管理 / ACPI 层出问题 ⇒ **循环重启**（不是卡死）。
+★★★ **Di mesin ini (ASUS Z690) ganti model ⇒ loop restart**, penyebab sebenarnya adalah **SSDT OEM motherboard `xh_adls3`**:
+board-id berubah ⇒ macOS **mengurai ulang tabel ACPI** ⇒ tabel itu gagal diurai (**`HS06 AE_NOT_FOUND`**)
+⇒ lapisan power management / ACPI bermasalah ⇒ **loop restart** (bukan hang).
 
-- **修法 = `ACPI>Delete` 删原表（`SSDT` + `OemTableId=xh_adls3`）+ `ACPI>Add` 加 `SSDT-XHADLS3.aml`**
-- **顺序：先完善 SSDT（在【旧机型】下验证通过）→ 再换 SMBIOS → 再重做 CPUFriend**（铁律 19）
-- 已排除的方向（别白试）：USB 端口图 · OCLP 根补丁 · 机型本身 · 15 端口上限 · NVRAM 残留
-- 详见 `smbios-and-serials.md` §2
+- **Perbaikan = `ACPI>Delete` tabel asli (`SSDT` + `OemTableId=xh_adls3`) + `ACPI>Add` `SSDT-XHADLS3.aml`**
+- **Urutan: perfectingkan SSDT dulu (diverifikasi lolos di [model lama]) → ganti SMBIOS → lalu buat ulang CPUFriend** (aturan besi 19)
+- Arah yang sudah disingkirkan (jangan coba sia-sia): peta port USB · root patch OCLP · model mesin itu sendiri · batas 15 port · sisa NVRAM
+- Lihat detail di `smbios-and-serials.md` §2
 
-## 9. 取证清单（照着抄）
+## 9. Daftar pengumpulan bukti (tinggal salin)
 
 ```bash
-# ① 本次开机的 OC 日志（进不去系统时：U 盘 EFI / Recovery 启动后挂内置 EFI 再读）
+# ① Log OC dari boot ini (saat tidak bisa boot ke sistem: boot via USB EFI / Recovery, mount EFI internal, baru baca)
 ls -l /Volumes/EFI/opencore-*.txt
 
-# ② panic 报告（首选证据）
+# ② Laporan panic (bukti utama)
 ls -lt /Library/Logs/DiagnosticReports/*.panic 2>/dev/null | head
 
-# ③ 本次开机的内核日志（需提权）
+# ③ Kernel log dari boot ini (perlu hak akses root)
 scripts/grab-logs.sh
 
-# ④ 卡在哪一段（时间线三段拆解 + 停顿窗口）
+# ④ Bagian mana yang macet (pemecahan timeline tiga bagian + jendela jeda)
 scripts/boot-timeline.sh
 scripts/find-boot-gap.sh
 
-# ⑤ 现状快照：OC 版本 / kext 清单（含 config 引用核对）
+# ⑤ Snapshot kondisi saat ini: versi OC / daftar kext (termasuk verifikasi referensi config)
 nvram 4D1FDA02-38C7-4A6A-9CC6-4BCCA8B30102:opencore-version
 scripts/kext-inventory.sh /Volumes/EFI
 
-# ⑥ 配置整体校验
+# ⑥ Validasi keseluruhan konfigurasi
 scripts/oc-verify.sh
 ```
 
-## 10. 出处
+## 10. Sumber
 
-- OpenCore `Configuration.pdf` / `Differences.pdf`（`Misc>Debug>Target` 位定义、版本语义）。
-- 本机失败族复盘：换机型循环重启（`smbios-and-serials.md` §2）· `decmpfs` panic（APFS 透明解压）·
-  `no kext summary`（极早期缓存层）· `X86PlatformShim` panic（BIOS Speed Shift）·
-  `element modified after free`（`NVMeFix`）· `MPSKey_Compile`（NVIDIA Metal）。
-- 相关：`logs-and-debug.md` · `boot-timeline.md` · `boot-entries.md` · `bios-settings.md` ·
-  `pitfalls.md` · `kext-and-oc-update.md` · `lifecycle.md`。
+- OpenCore `Configuration.pdf` / `Differences.pdf` (definisi bit `Misc>Debug>Target`, semantik versi).
+- Rekap keluarga kegagalan di mesin ini: loop restart ganti model (`smbios-and-serials.md` §2)· `decmpfs` panic (dekompresi transparan APFS)·
+  `no kext summary` (lapisan cache sangat dini)· `X86PlatformShim` panic (BIOS Speed Shift)·
+  `element modified after free` (`NVMeFix`)· `MPSKey_Compile` (NVIDIA Metal).
+- Terkait: `logs-and-debug.md` · `boot-timeline.md` · `boot-entries.md` · `bios-settings.md` ·
+  `pitfalls.md` · `kext-and-oc-update.md` · `lifecycle.md`.

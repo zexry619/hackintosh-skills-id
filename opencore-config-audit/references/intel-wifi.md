@@ -1,102 +1,102 @@
-# Intel 无线网卡驱动安装方法（AirportItlwm / itlwm）
+# Cara memasang driver kartu jaringan nirkabel Intel (AirportItlwm / itlwm)
 
-> 上游：`OpenIntelWireless/itlwm`（zxystd 等）。
-> 本机参考的 fork：**`laobamac/itlwm`**（<https://github.com/laobamac/itlwm>）——
-> 它为 **macOS Sequoia 15.2+** 与 **macOS 26 Tahoe** 分别提供 `AirportItlwm` 构建。
-> 下文「官方口径」= 该 fork README 原文，「通用做法」= OpenCore 注入的常规步骤。
+> Upstream: `OpenIntelWireless/itlwm` (zxystd dan lainnya).
+> Fork yang dirujuk di sini: **`laobamac/itlwm`** (<https://github.com/laobamac/itlwm>) —
+> fork tersebut menyediakan build `AirportItlwm` terpisah untuk **macOS Sequoia 15.2+** dan **macOS 26 Tahoe**.
+> Di bawah ini, "pendapat resmi" = kalimat asli README fork tersebut, "cara umum" = langkah injeksi yang biasa di OpenCore.
 
-## 0. 先分清两种形态
+## 0. Bedakan dulu dua bentuk ini
 
-| 形态 | 表现 | 版本要求 |
+| Bentuk | Perilaku | Persyaratan versi |
 |---|---|---|
-| **`AirportItlwm`** | **原生** Wi-Fi：出现在系统 Wi-Fi 菜单里，不需要额外客户端 | **必须与 macOS 版本匹配的构建**（不同 macOS 的 ABI 不同） |
-| `itlwm` | 走 ioctl，需要一个用户态客户端（HeliPort）来扫描/连接 | 跨版本可用性较好 |
+| **`AirportItlwm`** | Wi-Fi **asli**: muncul di menu Wi-Fi sistem, tidak memerlukan klien tambahan | **Harus memakai build yang cocok dengan versi macOS** (ABI tiap macOS berbeda) |
+| `itlwm` | Lewat ioctl, memerlukan klien user-space (HeliPort) untuk memindai/terhubung | Kompatibilitas lintas versi cukup baik |
 
-本 fork 提供的是 **`AirportItlwm`**（Sequoia 目标 + Tahoe 目标），README 里没有 `itlwm` 形态的说明。
+Fork ini menyediakan **`AirportItlwm`** (target Sequoia + target Tahoe), tidak ada penjelasan mengenai bentuk `itlwm` di README.
 
-## 1. 官方口径（laobamac/itlwm README 原文要点）
+## 1. Pendapat resmi (poin utama README laobamac/itlwm)
 
-**版本线（★ 最关键）**
+**Garis versi (★ paling penting)**
 
-- `AirportItlwm-Sequoia` 目标：**macOS Sequoia 15.2 及以后**，x86_64；实测于 macOS 15.8 (24H23)
-- `AirportItlwm-Tahoe` 目标：**macOS 26.x（Darwin 25.x）**
-- ★ 原文：*"Sequoia and Tahoe use separate ABI headers and build products."*
+- Target `AirportItlwm-Sequoia`: **macOS Sequoia 15.2 dan setelahnya**, x86_64; teruji pada macOS 15.8 (24H23)
+- Target `AirportItlwm-Tahoe`: **macOS 26.x (Darwin 25.x)**
+- ★ Kalimat asli: *"Sequoia and Tahoe use separate ABI headers and build products."*
   → *"Use this kext only on Darwin 24.2.0–24.99.99. Keep the Tahoe kext restricted to Darwin 25.x when both systems share an OpenCore configuration."*
-  ⇒ **双系统共用一个 OpenCore 配置时，必须用 `MinKernel`/`MaxKernel` 把两个 kext 分别限定在各自的 Darwin 版本**，否则会加载错的那份
+  ⇒ **Saat dua sistem berbagi satu konfigurasi OpenCore, wajib menggunakan `MinKernel`/`MaxKernel` untuk membatasi masing-masing kext pada versi Darwin-nya masing-masing**, jika tidak yang termuat adalah yang salah
 
-**macOS 26 上的能力与限制**
+**Kemampuan dan batasan di macOS 26**
 
-- Wi-Fi 6（802.11ax / HE）**默认关闭**；加 boot-arg **`itlwm_he=1`** 在支持的网卡上启用
-- 支持：WPA2-Personal、WPA2/WPA3 过渡网络（含可选 PMF）、扫描 / 连接 / 切换网络 / 私有 Wi-Fi 地址
-- **不支持**：WPA3-only、强制 PMF、**AWDL / AirDrop**、MLO
-- 设备支持跟随上游硬件表；**Tahoe 兼容性仍需逐网卡验证**
+- Wi-Fi 6 (802.11ax / HE) **nonaktif secara default**; tambahkan boot-arg **`itlwm_he=1`** untuk mengaktifkannya pada kartu jaringan yang mendukung
+- Didukung: WPA2-Personal, jaringan transisi WPA2/WPA3 (termasuk PMF opsional), pemindaian / penyambungan / pergantian jaringan / alamat Wi-Fi privat
+- **Tidak didukung**: WPA3-only, PMF paksa, **AWDL / AirDrop**, MLO
+- Perangkat mengikuti tabel hardware upstream; **kompatibilitas Tahoe masih perlu diverifikasi per kartu jaringan**
 
-**下载与构建**
+**Unduhan dan build**
 
-- 从 **fork 自己的 Releases** 取 Sequoia / Tahoe 的 **Release** 与 **Debug** 构建
-- 自行构建：装 Xcode + Python 3，`MacKernelSDK` 检出到 `MacKernelSDK/`（README 指定 commit `3f750085caa17ec3a7880f11c11bf4f48cd6a164`）
+- Ambil build **Release** dan **Debug** untuk Sequoia / Tahoe dari **Releases milik fork itu sendiri**
+- Build sendiri: pasang Xcode + Python 3, check out `MacKernelSDK` ke `MacKernelSDK/` (README menetapkan commit `3f750085caa17ec3a7880f11c11bf4f48cd6a164`)
 
 ```bash
-# Tahoe（macOS 26）
+# Tahoe (macOS 26)
 xcodebuild -project itlwm.xcodeproj -scheme AirportItlwm-Tahoe \
   -configuration Release ARCHS=x86_64 CODE_SIGNING_ALLOWED=NO build
-# Sequoia（macOS 15.2+）
+# Sequoia (macOS 15.2+)
 xcodebuild -project itlwm.xcodeproj -scheme AirportItlwm-Sequoia \
   -configuration Release ARCHS=x86_64 CODE_SIGNING_ALLOWED=NO build
 ```
 
-- 上游文档（Intro / Compatibility / FAQ）：<https://OpenIntelWireless.github.io/itlwm>
+- Dokumen upstream (Intro / Compatibility / FAQ): <https://OpenIntelWireless.github.io/itlwm>
 
-## 2. 装进 OpenCore（通用做法）
+## 2. Memasang ke dalam OpenCore (cara umum)
 
-1. 把 `AirportItlwm.kext` 放进 `EFI/OC/Kexts/`
-2. 在 `Kernel → Add` 加条目，**必须排在 `Lilu.kext` 之后**（Lilu 是宿主）
-3. **用 `MinKernel` / `MaxKernel` 限定 Darwin 版本**（见 §1）：Sequoia 那份填 `MinKernel=24.2.0` / `MaxKernel=24.99.99`；Tahoe 那份填 `MinKernel=25.0.0`。用 `uname -r` 查当前 Darwin 版本
-4. 需要 Wi-Fi 6 时，boot-args 加 `itlwm_he=1`
-5. `Misc → Security → SecureBootModel = Disabled`（第三方 kext 非 Apple 签名）；SIP 按需放宽
-6. 重启后验证：
+1. Letakkan `AirportItlwm.kext` di `EFI/OC/Kexts/`
+2. Tambahkan entri di `Kernel → Add`, **wajib berada setelah `Lilu.kext`** (Lilu adalah host)
+3. **Batasi versi Darwin dengan `MinKernel` / `MaxKernel`** (lihat §1): untuk versi Sequoia isi `MinKernel=24.2.0` / `MaxKernel=24.99.99`; untuk versi Tahoe isi `MinKernel=25.0.0`. Gunakan `uname -r` untuk mengecek versi Darwin saat ini
+4. Saat membutuhkan Wi-Fi 6, tambahkan boot-args `itlwm_he=1`
+5. `Misc → Security → SecureBootModel = Disabled` (kext pihak ketiga tidak ditandatangani Apple); longgarkan SIP sesuai kebutuhan
+6. Verifikasi setelah restart:
 
 ```bash
-kmutil showloaded --list-only | grep -i itlwm          # kext 是否加载
-system_profiler SPAirPortDataType | head -30           # 是否出现 Wi-Fi 接口
-networksetup -listallhardwareports                    # 看有没有 Wi-Fi 端口（en0/en1）
+kmutil showloaded --list-only | grep -i itlwm          # apakah kext termuat
+system_profiler SPAirPortDataType | head -30           # apakah interface Wi-Fi muncul
+networksetup -listallhardwareports                    # apakah ada port Wi-Fi (en0/en1)
 ```
 
-## 3. Intel 蓝牙要另外装（别混）
+## 3. Bluetooth Intel harus dipasang terpisah (jangan dicampur)
 
-Intel 无线网卡上的**蓝牙**不由 itlwm 负责，需要：
+**Bluetooth** pada kartu jaringan nirkabel Intel **tidak ditangani** oleh itlwm, dibutuhkan:
 
-| kext | 作用 |
+| kext | Fungsi |
 |---|---|
-| `IntelBluetoothFirmware` | 给 Intel 蓝牙控制器加载固件 |
-| `IntelBTPatcher` | 补丁（新版 macOS 上常见） |
-| `BlueToolFixup` | 修 Bluetooth 栈（新版 macOS 上常与上面两个一起用） |
+| `IntelBluetoothFirmware` | Memuat firmware ke controller Bluetooth Intel |
+| `IntelBTPatcher` | Patch (umum pada macOS versi baru) |
+| `BlueToolFixup` | Memperbaiki Bluetooth stack (pada macOS versi baru sering dipakai bersama kedua kext di atas) |
 
-> 对照：Broadcom 卡走的是另一套（`BrcmPatchRAM*` / `BlueToolFixup` + 系统原生 `IO80211` 栈）。
+> Bandingkan: kartu Broadcom memakai rangkaian lain (`BrcmPatchRAM*` / `BlueToolFixup` + stack `IO80211` bawaan sistem).
 
-## 4. 排错
+## 4. Troubleshooting
 
-| 现象 | 检查 |
+| Gejala | Yang diperiksa |
 |---|---|
-| Wi-Fi 完全不出现在系统里 | `Lilu` 是否加载、`Kernel → Add` 顺序是否 Lilu 在前、kext 是否与当前 macOS **ABI 匹配**（Sequoia/Tahoe 别装错） |
-| kext 加载了但没有接口 | `MinKernel`/`MaxKernel` 是否把当前 Darwin 排除掉了（`uname -r`）；`system_profiler SPAirPortDataType` 里有没有接口 |
-| 能连 2.4G 连不上 5G / 连上很慢 | HE 是否开了（`itlwm_he=1`）、信道/加密方式是否在支持列表内（WPA3-only 与强制 PMF **不支持**） |
-| AirDrop / 接力不可用 | **已知不支持，不要当故障查**。官方 FAQ 原文：*"Only **Handoff** and **Universal Clipboard** works with AirportItlwm, **other features are not supported**"*；`itlwm.kext` 更彻底 —— 走 `IOEthernetController` 而非 `IO80211Family` ⇒ **没有 `awdl0`**。完整依据见 `airdrop-handoff.md` §1.2 |
-| 装完蓝牙坏 | 蓝牙是另一组 kext（§3），先确认那三个的状态 |
+| Wi-Fi sama sekali tidak muncul di sistem | Apakah `Lilu` termuat, urutan `Kernel → Add` apakah Lilu di depan, apakah kext **cocok dengan ABI** macOS saat ini (jangan salah pasang Sequoia/Tahoe) |
+| kext termuat tapi tidak ada interface | Apakah `MinKernel`/`MaxKernel` mengecualikan Darwin saat ini (`uname -r`); apakah ada interface di `system_profiler SPAirPortDataType` |
+| Bisa connect 2.4G tetapi tidak ke 5G / connect sangat lambat | Apakah HE sudah dinyalakan (`itlwm_he=1`), apakah kanal/enkripsi berada dalam daftar yang didukung (WPA3-only dan PMF paksa **tidak didukung**) |
+| AirDrop / Handoff tidak tersedia | **Diketahui tidak didukung, jangan dianggap kegagalan**. Kalimat asli FAQ resmi: *"Only **Handoff** and **Universal Clipboard** works with AirportItlwm, **other features are not supported**"*; `itlwm.kext` bahkan lebih parah — memakai `IOEthernetController` dan bukan `IO80211Family` ⇒ **tidak ada `awdl0`**. Dasar lengkapnya ada di `airdrop-handoff.md` §1.2 |
+| Bluetooth rusak setelah pemasangan | Bluetooth adalah rangkaian kext lain (§3), pastikan dulu status ketiga kext tersebut |
 
-## 5. 与「换网卡」的关系（重要）
+## 5. Hubungannya dengan "ganti kartu jaringan" (penting)
 
-换掉 Intel 网卡（例如换成 Broadcom BCM943602CDP）之后：
+Setelah mengganti kartu jaringan Intel (misalnya ke Broadcom BCM943602CDP):
 
-- **必须**把 Intel 无线/蓝牙那三个 kext 从 `Kernel → Add` 里**禁用或删除**，并把 `EFI/OC/Kexts/` 下的文件删掉 —— 否则它们仍会尝试匹配不存在的设备（白加载、日志噪音，某些版本还可能干扰 Bluetooth 栈）
-- 删除前先把原件备份出来；判断「是否真的不用」见 `disks-and-kexts.md` 的删除判据
-- ★★ **换卡后要确认 `en0` 归属** —— 内核按**驱动挂载先后**给 `en` 编号（与 PCI 顺序无关），
-  换卡 / 增删驱动会让 `en0` 换人 ⇒ **详见 `network-en0-order.md`**（含「怎么把无线钉到 `en0`」与连带影响）
+- **Wajib** menonaktifkan atau menghapus ketiga kext nirkabel/Bluetooth Intel dari `Kernel → Add`, dan menghapus file di `EFI/OC/Kexts/` — jika tidak, mereka tetap mencoba mencocokkan perangkat yang tidak ada (muat sia-sia, log jadi bising, pada versi tertentu juga bisa mengganggu Bluetooth stack)
+- Sebelum menghapus, backup aslinya dulu; cara menilai "apakah memang tidak dipakai" ada di kriteria penghapusan di `disks-and-kexts.md`
+- ★★ **Setelah ganti kartu, pastikan kepemilikan `en0`** — kernel memberi nomor `en` berdasarkan **urutan pemuatan driver** (tidak terkait urutan PCI),
+  ganti kartu / menambah atau menghapus driver bisa membuat `en0` berganti ⇒ **lihat `network-en0-order.md`** (termasuk "cara memaku nirkabel ke `en0`" dan dampaknya)
 
-> **同一台机器不要同时注入多套网卡驱动**。除 Intel / Broadcom 之外，MediaTek（MT7921 / MT7922 / RZ608）见
-> `mediatek-wifi.md` —— 那里的结论是「**蓝牙可用、Wi-Fi 仍实验性**，要稳定就换卡」。
+> **Jangan menyuntikkan beberapa set driver kartu jaringan sekaligus pada mesin yang sama**. Selain Intel / Broadcom, untuk MediaTek (MT7921 / MT7922 / RZ608) lihat
+> `mediatek-wifi.md` — kesimpulannya di sana adalah "**Bluetooth bisa dipakai, Wi-Fi masih eksperimental, mau stabil maka ganti kartu**".
 
-## 6. 安全提示
+## 6. Peringatan keamanan
 
-- 第三方 kext（非 Apple 签名）⇒ 需要 `SecureBootModel=Disabled`，SIP 视情况放宽。**只在你确实要用这张网卡时这么做**
-- 从 fork 的 Releases 下载时，注意核对来源仓库与文件哈希；上游是 `OpenIntelWireless/itlwm`，本 fork 是个人维护的分支，**Tahoe 支持仍属「需要逐网卡验证」的状态**
+- Kext pihak ketiga (tidak ditandatangani Apple) ⇒ butuh `SecureBootModel=Disabled`, SIP dilonggarkan bila perlu. **Lakukan ini hanya bila Anda memang akan memakai kartu jaringan tersebut**
+- Saat mengunduh dari Releases fork, perhatikan sumber repositori dan hash file; upstream adalah `OpenIntelWireless/itlwm`, sedangkan fork ini adalah cabang yang dipelihara secara pribadi, **dukungan Tahoe masih berstatus "perlu diverifikasi per kartu jaringan"**

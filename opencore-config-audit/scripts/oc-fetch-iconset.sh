@@ -1,28 +1,28 @@
 #!/bin/bash
-# 从官方 OcBinaryData 取 OpenCanopy 资源（图标集 / 字体 / 标签 / 音频）
+# Ambil sumber daya OpenCanopy (set ikon / font / label / audio) dari OcBinaryData resmi
 #
-# 用法:
-#   oc-fetch-iconset.sh iconset <GoldenGate|Syrah|Chardonnay|all> [Resources 目录]
-#   oc-fetch-iconset.sh font    [Resources 目录]
-#   oc-fetch-iconset.sh label   [Resources 目录]
-#   oc-fetch-iconset.sh audio   [语言码] [Resources 目录]     # 语言码如 zh_CN / en；省略只取通用几个
-#   默认 Resources 目录 = /Volumes/EFI/EFI/OC/Resources
+# Cara pakai:
+#   oc-fetch-iconset.sh iconset <GoldenGate|Syrah|Chardonnay|all> [direktori Resources]
+#   oc-fetch-iconset.sh font    [direktori Resources]
+#   oc-fetch-iconset.sh label   [direktori Resources]
+#   oc-fetch-iconset.sh audio   [kode bahasa] [direktori Resources]     # kode bahasa seperti zh_CN / en; jika dihilangkan hanya ambil yang umum
+#   Direktori Resources default = /Volumes/EFI/EFI/OC/Resources
 #
-# 来源: https://github.com/acidanthera/OcBinaryData（官方资源仓库）
-# 注意: 只新增文件，不删除任何现有文件；已有同名文件会被覆盖（先自己备份）
+# Sumber: https://github.com/acidanthera/OcBinaryData (repositori sumber daya resmi)
+# Perhatikan: hanya menambahkan file, tidak menghapus file yang ada; file dengan nama sama akan ditimpa (backup dulu sendiri)
 set -u
 
 REPO="acidanthera/OcBinaryData"
 RAW="https://raw.githubusercontent.com/$REPO/master/Resources"
 
-mode="${1:?用法: oc-fetch-iconset.sh <iconset|font|label|audio> [参数] [Resources 目录]}"
+mode="${1:?cara pakai: oc-fetch-iconset.sh <iconset|font|label|audio> [argumen] [direktori Resources]}"
 shift
 
 case "$mode" in
   iconset)
-    SET="${1:?缺少图标集名：GoldenGate | Syrah | Chardonnay | all}"; shift
+    SET="${1:?nama set ikon wajib diisi: GoldenGate | Syrah | Chardonnay | all}"; shift
     R="${1:-/Volumes/EFI/EFI/OC/Resources}"
-    [ -d "$R" ] || { echo "找不到 $R"; exit 2; }
+    [ -d "$R" ] || { echo "$R tidak ditemukan"; exit 2; }
     case "$SET" in
       all) SETS="GoldenGate Syrah Chardonnay";;
       *)   SETS="$SET";;
@@ -30,45 +30,45 @@ case "$mode" in
     for s in $SETS; do
       dst="$R/Image/Acidanthera/$s"
       mkdir -p "$dst"
-      echo "== 取图标集 $s → $dst =="
+      echo "== Ambil set ikon $s → $dst =="
       list=$(curl -sSL --max-time 60 "https://api.github.com/repos/$REPO/contents/Resources/Image/Acidanthera/$s" \
              | grep -o '"name": "[^"]*\.icns"' | sed 's/.*: "//;s/"//')
-      [ -n "$list" ] || { echo "   ★ 列表拉取失败（网络/限流？）"; continue; }
+      [ -n "$list" ] || { echo "   ★ gagal mengambil daftar (jaringan/rate limit?)"; continue; }
       n=0
       for f in $list; do
-        if curl -sSL --max-time 60 -f "$RAW/Image/Acidanthera/$s/$f" -o "$dst/$f"; then n=$((n+1)); else echo "   ★ 下载失败 $f"; fi
+        if curl -sSL --max-time 60 -f "$RAW/Image/Acidanthera/$s/$f" -o "$dst/$f"; then n=$((n+1)); else echo "   ★ unduhan gagal $f"; fi
       done
-      echo "   完成 $n 个 .icns"
+      echo "   selesai $n berkas .icns"
     done
     ;;
 
   font)
     R="${1:-/Volumes/EFI/EFI/OC/Resources}"; dst="$R/Font"; mkdir -p "$dst"
-    echo "== 取字体 → $dst =="
+    echo "== Ambil font → $dst =="
     for f in Font_1x.bin Font_2x.bin Font_1x.png Font_2x.png; do
-      curl -sSL --max-time 60 -f "$RAW/Font/$f" -o "$dst/$f" && echo "   $f" || echo "   ★ $f 失败"
+      curl -sSL --max-time 60 -f "$RAW/Font/$f" -o "$dst/$f" && echo "   $f" || echo "   ★ $f gagal"
     done
     ;;
 
   label)
     R="${1:-/Volumes/EFI/EFI/OC/Resources}"; dst="$R/Label"; mkdir -p "$dst"
-    echo "== 取标签 → $dst =="
+    echo "== Ambil label → $dst =="
     list=$(curl -sSL --max-time 60 "https://api.github.com/repos/$REPO/contents/Resources/Label" \
            | grep -o '"name": "[^"]*"' | sed 's/.*: "//;s/"//' | grep -E '\.(lbl|l2x)$')
     n=0
     for f in $list; do
-      curl -sSL --max-time 60 -f "$RAW/Label/$f" -o "$dst/$f" && n=$((n+1)) || echo "   ★ $f 失败"
+      curl -sSL --max-time 60 -f "$RAW/Label/$f" -o "$dst/$f" && n=$((n+1)) || echo "   ★ $f gagal"
     done
-    echo "   完成 $n 个标签"
+    echo "   selesai $n label"
     ;;
 
   audio)
     LANG_="${1:-}"; case "$LANG_" in /*|"") R="${1:-/Volumes/EFI/EFI/OC/Resources}"; LANG_="";; *) R="${2:-/Volumes/EFI/EFI/OC/Resources}";; esac
     dst="$R/Audio"; mkdir -p "$dst"
-    echo "== 取音频 → $dst （语言: ${LANG_:-仅通用}）=="
+    echo "== Ambil audio → $dst (bahasa: ${LANG_:-hanya umum}) =="
     list=$(curl -sSL --max-time 60 "https://api.github.com/repos/$REPO/contents/Resources/Audio" \
            | grep -o '"name": "[^"]*\.mp3"' | sed 's/.*: "//;s/"//')
-    [ -n "$list" ] || { echo "   ★ 列表拉取失败"; exit 1; }
+    [ -n "$list" ] || { echo "   ★ gagal mengambil daftar"; exit 1; }
     n=0
     for f in $list; do
       keep=0
@@ -77,16 +77,16 @@ case "$mode" in
         AXEFIAudio_"$LANG"_*) [ -n "$LANG_" ] && keep=1;;
       esac
       [ "$keep" = 1 ] || continue
-      curl -sSL --max-time 60 -f "$RAW/Audio/$f" -o "$dst/$f" && n=$((n+1)) || echo "   ★ $f 失败"
+      curl -sSL --max-time 60 -f "$RAW/Audio/$f" -o "$dst/$f" && n=$((n+1)) || echo "   ★ $f gagal"
     done
-    echo "   完成 $n 个 mp3（完整集合有 362 个，按需再取）"
+    echo "   selesai $n mp3 (kumpulan lengkap ada 362, ambil lagi seperlunya)"
     ;;
 
-  *) echo "未知模式 ${mode}（可选 iconset / font / label / audio）"; exit 2;;
+  *) echo "mode tidak dikenal ${mode} (pilihan: iconset / font / label / audio)"; exit 2;;
 esac
 
 echo
-echo "== 提示 =="
-echo "  1) 之后在 config 里把 Misc>Boot>PickerMode 设为 External、PickerVariant 指到图标集（如 Acidanthera\\GoldenGate）"
-echo "  2) 跑 oc-theme-check.sh 复核，重启后看 OC 日志的 OCUI: 行"
-echo "  3) 改的是 ESP ⇒ 记得 sync → 卸载 → 重挂 → 复验 sha"
+echo "== Catatan =="
+echo "  1) Kemudian di config set Misc>Boot>PickerMode ke External, dan PickerVariant arahkan ke set ikon (misalnya Acidanthera\\GoldenGate)"
+echo "  2) Jalankan oc-theme-check.sh untuk verifikasi, setelah restart periksa baris OCUI: di log OC"
+echo "  3) Yang diubah adalah ESP ⇒ ingat untuk sync → unmount → remount → verifikasi ulang sha"
