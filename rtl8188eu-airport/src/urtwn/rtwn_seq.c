@@ -456,10 +456,29 @@ int rtwn_seq_read_efuse(rtwn_seq_result_t *r, rtwn_read_fn rd, rtwn_write_fn wr,
 			timedOut = 1;
 			break;
 		}
-		if (v == 0xff) {
-			/* Akhir map (nilai sah: sel belum diprogram). */
-			break;
-		}
+		/*
+		 * JANGAN berhenti di byte 0xff pertama!
+		 *
+		 * Temuan riset (FreeBSD sys/dev/rtwn, 22 Okt 2026): pembaca
+		 * EFUSE yang benar bersifat HEADER-DRIVEN, bukan "berhenti
+		 * di 0xff":
+		 *
+		 *   loop:
+		 *     hdr = byte(addr)
+		 *     if (hdr == 0xff) break        ← 0xff HANYA berarti
+		 *     off = hdr >> 4;                "akhir map" kalau
+		 *     msk = hdr & 0x0f               yang dibaca adalah
+		 *     words = popcount(~msk & 0x0f)  HEADER
+		 *     baca words × 2 byte data
+		 *     addr += 1 + words*2
+		 *
+		 * Byte 0xff bisa muncul DI TENGAH blok data (sel EFUSE yang
+		 * belum diprogram) → berhenti di sana memotong map.
+		 *
+		 * Perbaikan: baca SELURUH 256 byte fisiknya; parser
+		 * (efuse_parse_8188e) yangahi tahu kapan map berakhir
+		 * (karena ia menghitung jumlah byte data dari mask).
+		 */
 		raw[addr] = v;
 	}
 	if (addr < sizeof(raw)) {

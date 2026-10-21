@@ -154,6 +154,22 @@ int rtwn_seq_read_efuse_direct_8188e(rtwn_seq_result_t *r, rtwn_read_fn rd,
 		return -1;
 	}
 
+	/*
+	 * Validasi KEDUA (lebih kuat): image EFUSE 8188E menyimpan USB
+	 * VID/PID di offset 0xD0/0xD2 (lihat `struct r88e_rom` FreeBSD,
+	 * sys/dev/rtwn/rtl8188e/r88e_rom_image.h):
+	 *
+	 *   0xD0 vid (2 byte LE)   0xD2 pid (2 byte LE)
+	 *   0xD4 usb_opt           0xD7 macaddr[6]
+	 *
+	 * Kalau yang terbaca bukan 2357:010c → image bukan milik chip ini
+	 * (EFUSE salah baca / mode offload salah).
+	 */
+	if (rom[0xD0] != 0x57 || rom[0xD1] != 0x23 ||
+	    rom[0xD2] != 0x0c || rom[0xD3] != 0x01) {
+		return -1;
+	}
+
 	memcpy(r->mac, rom + 215, 6);
 	r->xtal = rom[185];
 	r->channel_plan = rom[184];

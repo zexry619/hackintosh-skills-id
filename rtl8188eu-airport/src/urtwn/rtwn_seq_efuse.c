@@ -352,7 +352,15 @@ int rtwn_seq_read_efuse_offload(rtwn_seq_result_t *r, rtwn_read_fn rd,
 		 * Ini MUCH lebih kuat daripada mengecek MAC != 0xff:
 		 * MAC bisa saja valid-looking walau segmentnya salah.
 		 */
-		if (rom[0] == 0x29 && r->mac[0] != 0xff && r->mac[0] != 0x00) {
+		/*
+		 * Validasi #2 (lebih kuat): image EFUSE 8188E menyimpan USB
+		 * VID/PID di 0xD0/0xD2 (lihat `struct r88e_rom` FreeBSD).
+		 * Harus 2357:010c untuk chip kita.
+		 */
+		if (rom[0] == 0x29 &&
+		    rom[0xD0] == 0x57 && rom[0xD1] == 0x23 &&
+		    rom[0xD2] == 0x0c && rom[0xD3] == 0x01 &&
+		    r->mac[0] != 0xff && r->mac[0] != 0x00) {
 			return 0;
 		}
 		memset(r->mac, 0, sizeof(r->mac));

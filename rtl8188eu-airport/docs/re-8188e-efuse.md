@@ -359,3 +359,101 @@ close_binary()
 
 Semua yang di atas bisa dilakukan **tanpa menyentuh hardware** — inilah
 kenapa RE adalah jalur teraman untuk iterasi.
+
+---
+
+## 8. ⭐ Rekonsiliasi dengan FreeBSD/OpenBSD (riset web, 22 Okt 2026)
+
+Agen riset web menemukan **FreeBSD** punya pembaca EFUSE untuk 8188E
+(`sys/dev/rtwn/if_rtwn_efuse.h`) dan `struct r88e_rom`
+(`sys/dev/rtwn/rtl8188e/r88e_rom_image.h`).
+
+### 8.1 Layout `struct r88e_rom` (konfirmasi independen)
+
+```
+0x00 reserved1[16]
+0x10 cck_tx_pwr[6]
+0x16 ht40_tx_pwr[5]
+0x1B tx_pwr_diff
+0x1C reserved2[156]
+0xB8 channel_plan        (184)  ← cocok dengan offset kita
+0xB9 crystalcap          (185)  ← xtal kita ✓
+0xBA thermal_meter       (186)
+0xBB reserved3[6]
+0xC1 rf_board_opt        (193)  ← "regulatory" kita ✓
+0xC2 rf_feature_opt
+0xC3 rf_bt_opt
+0xC4 version
+0xC5 customer_id
+0xC6 reserved4[3]
+0xC9 rf_ant_opt
+0xCA reserved5[6]
+--- union diff_d0 (0xD0) ---
+USB variant : vid(2)@0xD0  pid(2)@0xD2  usb_opt(1)@0xD4
+              reserved6[2]   macaddr[6]@0xD7   ← MAC = 215..220 ✓✓
+PCI variant : macaddr[6]@0xD0  vid@0xD6  pid@0xD8
+```
+
+`R88E_EFUSE_MAX_LEN 256` (fisik) / `R88E_EFUSE_MAP_LEN 512` (logis) —
+cocok dengan Linux `EFUSE_REAL_CONTENT_LEN_88E` / `EFUSE_MAP_LEN_88E`.
+
+**Konsekuensi:** image EFUSE chip kita harus berisi **VID 0x2357 di 0xD0** dan
+**PID 0x010c di 0xD2**. Ini sekarang dipakai sebagai **validasi kedua**
+(lebih kuat daripada cek MAC) di `rtwn_efuse_8188e.c` &
+`rtwn_seq_efuse.c`.
+
+### 8.2 ⚠️ Koreksi penting: akses 0x30 (32-bit) dan 0x031/32/33 (per-byte) itu SAMA
+
+Dulu kita menyimpulkan *"OpenBSD menulis address ke 0x030 — pada 8188E itu
+register DATA, jadi pembacaan OpenBSD tidak pernah sukses"*.
+
+**Temuan baru: itu belum tentu benar.** Register 0x030 pada 8188E, dibaca/
+ditulis sebagai **32 bit**, constituted oleh byte-byte yang sama:
+
+```
+0x030 byte0 = DATA      ← dibaca per-byte oleh gaya 8188E
+0x031 byte1 = addr low  ← addr = bits 8..17 dari word 32-bit
+0x032 byte2 = addr high (2 bit)
+0x033 byte3 = status (bit7 = ready; pada word 32-bit = bit31 = VALID)
+```
+
+Jadi **pembaca 92C-style (OpenBSD/FreeBSD) dan pembaca 8188E-style (vendor
+Windows) addressed register yang sama** — berbeda cara akses, bukan register
+berbeda. FreeBSDonomous mengirim dukungan 8188E USB selama bertahun-tahun
+dengan pembaca 92C-style → **pembaca 92C-style memang berfungsi untuk chip
+ini**.
+
+**Implikasi:** jalur `rtwn_seq_read_efuse()` (gaya 92C) di proyek kita **valid**,
+dan harus dipertahankan sebagai fallback.
+
+### 8.3 🐛 Bug reader yang ditemukan: berhenti di byte 0xFF pertama
+
+Pembaca EFUSE yang benar bersifat **header-driven**, bukan "berhenti saat 0xff":
+
+```
+loop:
+  hdr = byte(addr)
+  if (hdr == 0xff) break          ← 0xff HANYA = akhir map kalau yang
+  off = hdr >> 4;                    dibaca adalah HEADER
+  msk = hdr & 0x0f
+  words = popcount(~msk & 0x0f)
+  baca words × 2 byte data
+  addr += 1 + words*2
+```
+
+Byte `0xff` **bisa muncul di tengah blok data** (sel EFUSE yang belum
+diprogram). Reader lama kita berhenti di sana → map terpotong → MAC hilang.
+
+**Perbaikan:** baca seluruh 256 byte fisiknya; parser
+(`efuse_parse_8188e`) yang menghitung sendiri jumlah byte data dari mask,
+jadi ia tahu kapan map berakhir.
+
+### 8.4 Catatan lain
+
+* FreeBSD memakai `xtal = crystal_cap & 0x3f` lalu menulis ke
+  `R92C_AFE_XTAL_CTRL` (`addr | addr << 6`) — default `0x20`.
+* OpenBSD commit **`rtwn: add rtwn_efuse_preread` (23 Agu 2026)** — sangat
+  baru; menambah preread EFUSE per-chip untuk 88E.
+* `R92C_EFUSE_ACCESS = 0x0cf` / `ON = 0x69` — identik dengan Linux
+  `REG_EFUSE_ACCESS = 0x00CF` / `EFUSE_ACCESS_ON = 0x69` ✓
+
