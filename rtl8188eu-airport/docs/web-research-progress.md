@@ -6,8 +6,8 @@
 
 > Transkrip mentah (reasoning + tool + teks) — bahan audit.
 
-> **Ringkasan temuan sudah diolah di** [](research-digest.md)
-§2.2 dan [](re-8188e-efuse.md) §8.
+> **Ringkasan temuan sudah diolah di** docs/research-digest.md
+§2.2 dan docs/re-8188e-efuse.md §8.
 
 ---
 
