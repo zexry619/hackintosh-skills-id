@@ -669,6 +669,8 @@ ioreg:  +-o AppleUSBInterface@0
           +-o RtWlanU  <class RtWlanU, ...>       ← vendor claim interface
 
 | `docs/audit-hardening.md` | **Audit keamanan + 17 temuan + perbaikannya** |
+
+| `docs/re-8188e-efuse.md` | **RE EFUSE 8188E (decompilation vendor, 3 bug ditemukan)** |
 ```
 
 Hasil pengukuran:

@@ -55,17 +55,36 @@ int rtwn_efuse_read1_8188e(rtwn_read_fn rd, rtwn_write_fn wr, void *ctx,
 	rtwn_seq_raw_write1(rd, wr, ctx, EFUSE_STAT_8188E, (uint8_t)(v & 0x7f));
 
 	/*
-	 * Tunggu sampai bit7 (busy) CLEAR.
+	 * Tunggu sampai bit7 MENYALA (= pembacaan selesai).
 	 *
-	 * Catatan audit (22 Okt 2026): "1000 ms" di sini sebenarnya
-	 * 1000 MIKROdetik (= 1 ms) di driver vendor — 100 × 1 s = 100 s
-	 * hanya akan membekukan workloop kernel. Sekarang jadi
-	 * 100 × 1 ms = 100 ms total, cukup untuk EFUSE 8188E.
+	 * ‑‑‑ KESALAHAN POLARITAS (ditemukan via RE 22 Okt 2026) ‑‑‑
+	 *
+	 * Vendor (RtWlanU :: EFUSE_OneByteRead, 0x119c0b):
+	 *
+	 *     PlatformIOWrite1Byte(0x033, v & 0x7f);      // clear bit7 = MULAI
+	 *     cVar5 = PlatformEFIORead1Byte(0x033);
+	 *     if (-1 < cVar5) {                           // signed char!
+	 *         do { stall(1000);
+	 *              cVar5 = PlatformEFIORead1Byte(0x033);
+	 *         } while (-1 < cVar5);                  // ← tunggu bit7 MENYALA
+	 *         if (99 < counter) { *out = 0xff; error = 2; return FAIL; }
+	 *     }
+	 *     *out = PlatformEFIORead1Byte(0x030);         // DATA
+	 *
+	 * Perhatikan: `cVar5` adalah `char` (signed) → `-1 < cVar5` berarti
+	 * bit7 CLEAR. Loop berjalan selama bit7 masih CLEAR dan berhenti
+	 * ketika bit7 MENYALA. Jadi bit7 = "SIAP", bukan "busy".
+	 *
+	 * Versi lama kita menunggu bit7 MATI → selalu keluar dari loop
+	 * lebih awal / timeout → data EFUSE stale atau 0xff.
+	 *
+	 * Delay: vendor stall(1000) = 1000 µs = 1 ms. Kita pakai
+	 * RTWN_DELAY_MS(1) (sleep, bukan busy-wait) — 1 ms juga.
 	 */
 	for (i = 0; i < 100; i++) {
 		v = rtwn_seq_raw_read1(rd, wr, ctx, EFUSE_STAT_8188E);
-		if ((v & 0x80) == 0) {
-			break;
+		if ((v & 0x80) != 0) {
+			break;			/* bit7 menyala = siap */
 		}
 		RTWN_DELAY_MS(1);
 	}
