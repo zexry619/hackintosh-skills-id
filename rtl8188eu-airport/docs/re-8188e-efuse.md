@@ -306,8 +306,36 @@ Langkah vendor yang masih perlu diimplementasikan:
 | 18 | `_InitQueueReservedPage_8188E` | `0xb2f3d` |
 | 19 | `_InitTxBufferBoundary_8188E` | `0xb2faf` |
 
-Estimasi: masing-masing comprise puluhan-seratus write register → **ribuan
-baris** port. Ini、porsi terbesar of remaining work.
+### Ukuran kerja HAL (diukur via RE, 22 Okt 2026)
+
+Struktur panggilan (dari `procedure_callees` + pseudocode):
+
+```
+PHY_MACConfig        (0x107481, 221 baris)  -> phy_ConfigMACWith (50)
+                                               odm_config_mac_with_header_file (73)
+PHY_BBConfig        (0x107aa8, 252 baris)  -> phy_BB8188E_Config_ (153)
+                                               + 10 varian chip lain
+PHY_RFConfig8188E   (0x145d18,  18 baris)  -> wrapper tipis
+InitHalDm            (0x996ae,  11 baris)  -> dm_ODMStructureInit (325)
+FW_InitializeHALVars (0x99db8,  20 baris)  -> wrapper tipis
+```
+
+| Fungsi | Alamat | Ukuran pseudocode | Peran |
+|---|---|---|---|
+| `phy_BB8188E_Config_` | `0x14593c` | ~153 baris | konfigurasi **baseband** 8188E |
+| `dm_ODMStructureInit` | `0x981cf` | ~325 baris | inisialisasi struktur **DM/ODM** |
+| `odm_config_mac_with_header_file` | `0x1efdcc` | ~73 baris | tabel konfigurasi MAC |
+| `phy_ConfigMACWith` | `0x104802` | ~50 baris | menerapkan tabel MAC |
+
+**Total ~600 baris pseudocode -> +-450 baris C portabel.**
+
+Jadi M1d (HAL init) jauh lebih kecil dari perkiraan awal (bukan ribuan
+baris) -- bandingkan dengan 8.000+ baris kode yang sudah ada.
+
+Sebagian besar fungsi ini **table-driven** (tabel register), sama seperti
+`rtwn_flow.c` yang sudah kita punya untuk power-on. Pola yang sama bisa
+dipakai lagi: dump tabel dari vendor -> array `static const` di C.
+
 
 ---
 
