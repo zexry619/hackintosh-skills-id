@@ -1,0 +1,49 @@
+Timestamp               Ty Process[PID:TID]
+2026-10-21 03:10:58.065 Df kernelmanagerd[117:29c] installation check: bundle for io.github.zekri.RTL8188EUM1 is at /Users/zekri/Downloads/hackintosh-skills-id/rtl8188eu-airport/src/driver/build/RTL8188EUM1.kext
+2026-10-21 03:10:59.417 Df kernelmanager_helper[288:720] finding bundles at additional paths: 
+	/Library/Extensions/AppleKIS.kext
+	/Library/Extensions/AppleKIS.kext/Contents/PlugIns/AppleRSMHost.kext
+	/Users/zekri/Downloads/hackintosh-skills-id/rtl8188eu-airport/src/driver/build/RTL8188EUM1.kext
+	/Library/Extensions/Astris-IOUSBHostFamily.kext
+2026-10-21 03:10:59.532 Df kernelmanager_helper[288:761] finding bundles at additional paths: 
+	/Library/Extensions/Astris-IOUSBHostFamily.kext
+	/Users/zekri/Downloads/hackintosh-skills-id/rtl8188eu-airport/src/driver/build/RTL8188EUM1.kext
+	/Library/Extensions/AppleKIS.kext/Contents/PlugIns/AppleRSMHost.kext
+	/Library/Extensions/AppleKIS.kext
+2026-10-21 03:11:12.644 Df kernelmanager_helper[288:761] [com.apple.kernelmanagerd.logging:LoadRequestResolution] checking bundle path /Users/zekri/Downloads/hackintosh-skills-id/rtl8188eu-airport/src/driver/build/RTL8188EUM1.kext for Kext io.github.zekri.RTL8188EUM1 v0.2.0 in executable kext bundle io.github.zekri.RTL8188EUM1 at /Users/zekri/Downloads/hackintosh-skills-id/rtl8188eu-airport/src/driver/build/RTL8188EUM1.kext
+2026-10-21 03:11:12.644 Df kernelmanager_helper[288:761] [com.apple.kernelmanagerd.logging:LoadRequestResolution] checking unstaged bundle path /Users/zekri/Downloads/hackintosh-skills-id/rtl8188eu-airport/src/driver/build/RTL8188EUM1.kext for Kext io.github.zekri.RTL8188EUM1 v0.2.0 in executable kext bundle io.github.zekri.RTL8188EUM1 at /Users/zekri/Downloads/hackintosh-skills-id/rtl8188eu-airport/src/driver/build/RTL8188EUM1.kext
+2026-10-21 03:11:13.020 Df kernelmanager_helper[288:761] finding bundles at additional paths: 
+	/Users/zekri/Downloads/hackintosh-skills-id/rtl8188eu-airport/src/driver/build/RTL8188EUM1.kext
+	/Library/Extensions/Astris-IOUSBHostFamily.kext
+	/Library/Extensions/AppleKIS.kext
+	/Library/Extensions/AppleKIS.kext/Contents/PlugIns/AppleRSMHost.kext
+2026-10-21 03:11:14.174 Df kernelmanager_helper[288:761] [com.apple.kernelmanagerd.logging:LoadRequestResolution] checking bundle path /Users/zekri/Downloads/hackintosh-skills-id/rtl8188eu-airport/src/driver/build/RTL8188EUM1.kext for Kext io.github.zekri.RTL8188EUM1 v0.2.0 in executable kext bundle io.github.zekri.RTL8188EUM1 at /Users/zekri/Downloads/hackintosh-skills-id/rtl8188eu-airport/src/driver/build/RTL8188EUM1.kext
+2026-10-21 03:11:14.174 Df kernelmanager_helper[288:761] [com.apple.kernelmanagerd.logging:LoadRequestResolution] checking unstaged bundle path /Users/zekri/Downloads/hackintosh-skills-id/rtl8188eu-airport/src/driver/build/RTL8188EUM1.kext for Kext io.github.zekri.RTL8188EUM1 v0.2.0 in executable kext bundle io.github.zekri.RTL8188EUM1 at /Users/zekri/Downloads/hackintosh-skills-id/rtl8188eu-airport/src/driver/build/RTL8188EUM1.kext
+2026-10-21 03:11:14.328 Df kernelmanager_helper[288:761] finding bundles at additional paths: 
+	/Library/Extensions/Astris-IOUSBHostFamily.kext
+	/Library/Extensions/AppleKIS.kext/Contents/PlugIns/AppleRSMHost.kext
+	/Users/zekri/Downloads/hackintosh-skills-id/rtl8188eu-airport/src/driver/build/RTL8188EUM1.kext
+	/Library/Extensions/AppleKIS.kext
+2026-10-21 03:13:06.348 Df log[883:2043] [com.apple.log:] log run noninteractively, parent: 854 (bash), args: 'log' 'show' '--last' '45m' '--style' 'compact' '--predicate' 'eventMessage CONTAINS "RTL8188EUM1" OR eventMessage CONTAINS "RTL8188EU:"'
+2026-10-21 03:15:03.608 Df kernel[0:367e] [com.apple.sandbox.reporting:violation] System Policy: rm(4452) allow file-write-unlink /private/var/db/KernelExtensionManagement/AuxKC/CurrentAuxKC/StashedExtensions/55303139-B3F7-4E20-8718-D1052E98CD32/RTL8188EUM1.kext/Contents/_CodeSignature/CodeResources
+2026-10-21 03:15:03.608 Df kernel[0:367e] [com.apple.sandbox.reporting:violation] System Policy: rm(4452) allow file-write-unlink /private/var/db/KernelExtensionManagement/AuxKC/CurrentAuxKC/StashedExtensions/55303139-B3F7-4E20-8718-D1052E98CD32/RTL8188EUM1.kext/Contents/_CodeSignature
+2026-10-21 03:15:03.608 Df kernel[0:367e] [com.apple.sandbox.reporting:violation] System Policy: rm(4452) allow file-write-unlink /private/var/db/KernelExtensionManagement/AuxKC/CurrentAuxKC/StashedExtensions/55303139-B3F7-4E20-8718-D1052E98CD32/RTL8188EUM1.kext/Contents/MacOS/RTL8188EUM1
+2026-10-21 03:15:03.608 Df kernel[0:367e] [com.apple.sandbox.reporting:violation] System Policy: rm(4452) allow file-write-unlink /private/var/db/KernelExtensionManagement/AuxKC/CurrentAuxKC/StashedExtensions/55303139-B3F7-4E20-8718-D1052E98CD32/RTL8188EUM1.kext/Contents/MacOS
+2026-10-21 03:15:03.608 Df kernel[0:367e] [com.apple.sandbox.reporting:violation] System Policy: rm(4452) allow file-write-unlink /private/var/db/KernelExtensionManagement/AuxKC/CurrentAuxKC/StashedExtensions/55303139-B3F7-4E20-8718-D1052E98CD32/RTL8188EUM1.kext/Contents/Info.plist
+2026-10-21 03:15:03.608 Df kernel[0:367e] [com.apple.sandbox.reporting:violation] System Policy: rm(4452) allow file-write-unlink /private/var/db/KernelExtensionManagement/AuxKC/CurrentAuxKC/StashedExtensions/55303139-B3F7-4E20-8718-D1052E98CD32/RTL8188EUM1.kext/Contents
+2026-10-21 03:15:03.608 Df kernel[0:367e] [com.apple.sandbox.reporting:violation] System Policy: rm(4452) allow file-write-unlink /private/var/db/KernelExtensionManagement/AuxKC/CurrentAuxKC/StashedExtensions/55303139-B3F7-4E20-8718-D1052E98CD32/RTL8188EUM1.kext
+2026-10-21 03:19:06.874 Df kernelmanager_helper[288:4986] finding bundles at additional paths: 
+	/Library/Extensions/Astris-IOUSBHostFamily.kext
+	/Library/Extensions/AppleKIS.kext
+	/Users/zekri/Downloads/hackintosh-skills-id/rtl8188eu-airport/src/driver/build/RTL8188EUM1.kext
+	/Library/Extensions/AppleKIS.kext/Contents/PlugIns/AppleRSMHost.kext
+2026-10-21 03:24:33.555 Df kernelmanagerd[117:76a] Received kext load notification: io.github.zekri.RTL8188EUM1
+2026-10-21 03:24:33.555 E  kernelmanager_helper[327:7ce] Could not process load notification in helper: Could not find: Did not find identifier (io.github.zekri.RTL8188EUM1) in helper to process load notification
+2026-10-21 03:25:19.225 Df log[732:17db] [com.apple.log:] log run noninteractively, parent: 718 (bash), args: 'log' 'show' '--last' '45m' '--style' 'compact' '--predicate' 'eventMessage CONTAINS "RTL8188EUM1" OR eventMessage CONTAINS "RTL8188EU:"'
+2026-10-21 03:29:47.436 Df kernelmanagerd[117:7c0] Received kext load notification: io.github.zekri.RTL8188EUM1
+2026-10-21 03:29:47.436 E  kernelmanager_helper[293:68b] Could not process load notification in helper: Could not find: Did not find identifier (io.github.zekri.RTL8188EUM1) in helper to process load notification
+2026-10-21 03:30:30.748 Df log[712:17b9] [com.apple.log:] log run noninteractively, parent: 698 (bash), args: 'log' 'show' '--last' '45m' '--style' 'compact' '--predicate' 'eventMessage CONTAINS "RTL8188EUM1" OR eventMessage CONTAINS "RTL8188EU:"'
+2026-10-21 10:49:26.980 Df kernel[0:2c7] (IOUSBHostFamily) 802.11n NIC@14800000: IOUSBHostDevice::setConfigurationGated: RTL8188EUM1 selected configuration 1
+2026-10-21 10:49:35.826 Df kernelmanagerd[117:42d] Received kext load notification: io.github.zekri.RTL8188EUM1
+2026-10-21 10:49:35.826 E  kernelmanager_helper[322:7b9] Could not process load notification in helper: Could not find: Did not find identifier (io.github.zekri.RTL8188EUM1) in helper to process load notification
+2026-10-21 03:50:56.511 Df log[831:1e79] [com.apple.log:] log run noninteractively, parent: 817 (bash), args: 'log' 'show' '--last' '45m' '--style' 'compact' '--predicate' 'eventMessage CONTAINS "RTL8188EUM1" OR eventMessage CONTAINS "RTL8188EU:"'

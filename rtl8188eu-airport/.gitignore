@@ -1,0 +1,12 @@
+# Build artifacts
+src/driver/build/
+src/build-test/
+src/build/
+tools/rtwn_probe
+tools/t_diff
+tools/t_syn
+tools/t_usb
+tools/t_seq
+*.o
+*.logarchive
+logs/
