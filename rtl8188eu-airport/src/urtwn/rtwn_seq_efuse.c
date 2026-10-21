@@ -342,8 +342,17 @@ int rtwn_seq_read_efuse_offload(rtwn_seq_result_t *r, rtwn_read_fn rd,
 		    (uint8_t)(v & 0x7f));
 		efuse_8051_reset(rd, wr, ctx);
 
-		/* MAC(all-FF) berarti data tidak terbaca → coba mode lain. */
-		if (r->mac[0] != 0xff && r->mac[0] != 0x00) {
+		/*
+		 * Validasi hasil (dari decompilation vendor):
+		 *   if (*out_rom == ')')            → byte pertama image = 0x29
+		 *   dan sc[199] == 0x81
+		 * Kalau byte pertama bukan 0x29 → image EFUSE tidak valid
+		 * → coba mode berikutnya (0xaa / 0xf4).
+		 *
+		 * Ini MUCH lebih kuat daripada mengecek MAC != 0xff:
+		 * MAC bisa saja valid-looking walau segmentnya salah.
+		 */
+		if (rom[0] == 0x29 && r->mac[0] != 0xff && r->mac[0] != 0x00) {
 			return 0;
 		}
 		memset(r->mac, 0, sizeof(r->mac));

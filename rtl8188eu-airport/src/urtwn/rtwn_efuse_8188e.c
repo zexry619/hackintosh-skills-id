@@ -145,6 +145,15 @@ int rtwn_seq_read_efuse_direct_8188e(rtwn_seq_result_t *r, rtwn_read_fn rd,
 	memset(rom, 0xff, sizeof(rom));
 	rtwn_seq_efuse_parse(raw, (uint16_t)sizeof(raw), rom);
 
+	/*
+	 * Validasi (dari decompilation vendor InitOffload_ReadEfuse_8188EU):
+	 * byte pertama image ROM hasil parse harus 0x29 (' )').
+	 * Kalau tidak → image tidak valid (EFUSE tidak terbaca / mode salah).
+	 */
+	if (rom[0] != 0x29) {
+		return -1;
+	}
+
 	memcpy(r->mac, rom + 215, 6);
 	r->xtal = rom[185];
 	r->channel_plan = rom[184];
