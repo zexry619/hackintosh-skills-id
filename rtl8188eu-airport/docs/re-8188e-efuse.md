@@ -307,7 +307,7 @@ Langkah vendor yang masih perlu diimplementasikan:
 | 19 | `_InitTxBufferBoundary_8188E` | `0xb2faf` |
 
 Estimasi: masing-masing comprise puluhan-seratus write register → **ribuan
-baris** port. Ini、消费 the biggest chunk of remaining work.
+baris** port. Ini、porsi terbesar of remaining work.
 
 ---
 
