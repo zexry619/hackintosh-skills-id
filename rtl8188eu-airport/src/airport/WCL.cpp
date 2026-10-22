@@ -162,14 +162,6 @@ void AirportItlwmSkywalkInterface::free()
 {
     if (joinTimer)
         stopWCL();
-    if (mExpansionData && mExpansionData->fRegistrationInfo) {
-        IOFree(mExpansionData->fRegistrationInfo, sizeof(struct IOSkywalkNetworkInterface::RegistrationInfo));
-        mExpansionData->fRegistrationInfo = nullptr;
-    }
-    if (mExpansionData2 && mExpansionData2->fRegistrationInfo) {
-        IOFree(mExpansionData2->fRegistrationInfo, sizeof(struct IOSkywalkEthernetInterface::RegistrationInfo));
-        mExpansionData2->fRegistrationInfo = nullptr;
-    }
     IO80211InfraProtocol::free();
 }
 
@@ -291,6 +283,8 @@ IOReturn AirportItlwmSkywalkInterface::beginWCLScan(apple80211ScanRequest *reque
             scanSource->cancelTimeout();
             return kIOReturnError;
         }
+    } else {
+        ieee80211_begin_scan(&ic->ic_if);
     }
     return kIOReturnSuccess;
 }
@@ -536,6 +530,12 @@ IOReturn AirportItlwmSkywalkInterface::startWCLJoin(AirportWCL::JoinRequest &joi
     memcpy(ic->ic_des_essid, join.ssid, sizeof(ic->ic_des_essid));
     memcpy(ic->ic_des_bssid, join.bssid, 6);
     memcpy(joinBSSID, join.bssid, 6);
+    if (join.rsnLength >= 2 && join.rsn[0] == IEEE80211_ELEMID_RSN && join.rsnLength <= sizeof(ic->ic_rsn_ie_override)) {
+        memcpy(ic->ic_rsn_ie_override, join.rsn, join.rsnLength);
+        IOLog("RTL8188E: startWCLJoin using macOS RSN IE override (len=%u)\n", (unsigned)join.rsnLength);
+    } else {
+        ic->ic_rsn_ie_override[1] = 0;
+    }
     ic->ic_flags |= IEEE80211_F_DESBSSID;
     ic->ic_wcl_join_requested = true;
     ic->ic_wcl_scan_requested = false;
@@ -834,6 +834,8 @@ void AirportItlwmSkywalkInterface::handleWCLEvent(int code, void *data)
                 memcpy(event.bssid, joinBSSID, 6);
                 event.driverStatus = event.status ? kIOReturnError : kIOReturnSuccess;
                 assocNotified = !event.status;
+                IOLog("RTL8188E: WCL AssocComplete: status=%u driverStatus=0x%x bssid=%s\n",
+                      event.status, event.driverStatus, ether_sprintf(joinBSSID));
                 instance->postMessage(this, AirportWCL::AssocComplete, &event, sizeof(event), true);
                 if (event.status)
                     finishWCLJoin(event.status, 0, kIOReturnError);

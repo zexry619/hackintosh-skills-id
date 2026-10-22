@@ -25,6 +25,7 @@ typedef struct {
 	bool     crcError;
 	bool     icvError;
 	bool     hasPhyStatus;
+	uint8_t  shift;		/* 2-bit alignment shift (0..3) */
 	uint32_t headerLen;	/* 26 */
 } rtwn_usb_rxinfo_t;
 

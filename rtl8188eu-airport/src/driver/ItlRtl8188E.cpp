@@ -607,6 +607,22 @@ int ItlRtl8188E::newstateCb(struct ieee80211com *ic,
 			halWrite(me, R92C_BSSID + 0, &b0, 4);
 			halWrite(me, R92C_BSSID + 4, &b4, 2);
 		}
+		for (int i = 0; i < IEEE80211_ADDR_LEN; i++) {
+			uint8_t b = ic->ic_myaddr[i];
+			halWrite(me, R92C_MACID + i, &b, 1);
+		}
+		if (nstate == IEEE80211_S_RUN) {
+			uint8_t msr = R92C_MSR_NETTYPE_INFRA;
+			halWrite(me, R92C_MSR, &msr, 1);
+			uint16_t flt2 = 0xffff;
+			halWrite(me, R92C_RXFLTMAP2, &flt2, 2);
+			uint8_t txpause = 0x00;
+			halWrite(me, R92C_TXPAUSE, &txpause, 1);
+			if (ic->ic_bss) {
+				uint16_t bcn_int = ic->ic_bss->ni_intval ? ic->ic_bss->ni_intval : 100;
+				halWrite(me, R92C_BCN_INTERVAL, &bcn_int, 2);
+			}
+		}
 		break;
 	}
 	case IEEE80211_S_INIT:
@@ -979,7 +995,7 @@ rxSlotOk(const uint8_t *buf, uint32_t len, uint32_t off)
 		return false;
 	if (info.pktlen == 0 || info.pktlen > 2048)
 		return false;
-	foff = off + RTWN_USB_RX_DESC_SIZE + info.infosz;
+	foff = off + RTWN_USB_RX_DESC_SIZE + info.infosz + info.shift;
 	if (foff + info.pktlen > len ||
 	    info.pktlen < sizeof(struct ieee80211_frame))
 		return false;
@@ -996,6 +1012,7 @@ rxSlotOk(const uint8_t *buf, uint32_t len, uint32_t off)
 void ItlRtl8188E::handleRx(const uint8_t *buf, uint32_t len)
 {
 	struct _ifnet *ifp = &fIc.ic_if;
+	struct mbuf_list ml = MBUF_LIST_INITIALIZER();
 	uint32_t off = 0;
 	uint32_t npkts = 0;
 	uint32_t slot = 0;
@@ -1031,7 +1048,7 @@ void ItlRtl8188E::handleRx(const uint8_t *buf, uint32_t len)
 		}
 		slot++;
 
-		foff = off + RTWN_USB_RX_DESC_SIZE + info.infosz;
+		foff = off + RTWN_USB_RX_DESC_SIZE + info.infosz + info.shift;
 		if (foff + flen > len)
 			break;
 
@@ -1054,8 +1071,8 @@ void ItlRtl8188E::handleRx(const uint8_t *buf, uint32_t len)
 		 * Pilih kandidat yang benar-benar berisi descriptor +
 		 * frame valid supaya tidak salah saat npkts > 1.
 		 */
-		s4 = (RTWN_USB_RX_DESC_SIZE + info.infosz + flen + 3) & ~3u;
-		s128 = (RTWN_USB_RX_DESC_SIZE + info.infosz + flen + 127) &
+		s4 = (RTWN_USB_RX_DESC_SIZE + info.infosz + info.shift + flen + 3) & ~3u;
+		s128 = (RTWN_USB_RX_DESC_SIZE + info.infosz + info.shift + flen + 127) &
 		    ~127u;
 		next = off + s4;
 		if (slot < npkts) {
@@ -1147,7 +1164,7 @@ void ItlRtl8188E::handleRx(const uint8_t *buf, uint32_t len)
 						rxi.rxi_rssi = norm;
 					}
 					ieee80211_inputm(ifp, m, ni, &rxi,
-					    nullptr);
+					    &ml);
 					ieee80211_release_node(&fIc, ni);
 				} else {
 					mbuf_freem(m);
@@ -1160,6 +1177,8 @@ advance:
 			break;
 		off = next;
 	}
+
+	if_input(ifp, &ml);
 }
 
 /* ------------------------------------------------------------------ */
