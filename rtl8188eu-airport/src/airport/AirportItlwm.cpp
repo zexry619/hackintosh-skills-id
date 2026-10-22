@@ -499,8 +499,17 @@ void AirportItlwm::stop(IOService *provider)
     }
     struct _ifnet *ifp = &fHalService->get80211Controller()->ic_ac.ac_if;
 #ifdef AIRPORT_WCL
-    if (fNetIf)
+    if (fNetIf) {
         static_cast<AirportItlwmSkywalkInterface *>(fNetIf)->stopWCL();
+        if (fNetIf->mExpansionData && fNetIf->mExpansionData->fRegistrationInfo) {
+            IOFree(fNetIf->mExpansionData->fRegistrationInfo, sizeof(struct IOSkywalkNetworkInterface::RegistrationInfo));
+            fNetIf->mExpansionData->fRegistrationInfo = nullptr;
+        }
+        if (fNetIf->mExpansionData2 && fNetIf->mExpansionData2->fRegistrationInfo) {
+            IOFree(fNetIf->mExpansionData2->fRegistrationInfo, sizeof(struct IOSkywalkEthernetInterface::RegistrationInfo));
+            fNetIf->mExpansionData2->fRegistrationInfo = nullptr;
+        }
+    }
 #endif
     super::stop(provider);
     disableAdapter(bsdInterface);
@@ -869,11 +878,20 @@ IOReturn AirportItlwm::getHardwareAddress(IOEthernetAddress *addrP)
 
 IOReturn AirportItlwm::setHardwareAddress(const void *addrP, UInt32 addrBytes)
 {
-    if (!fNetIf || !addrP)
-        return kIOReturnError;
-#ifdef AIRPORT_WCL
+    if (!addrP)
+        return kIOReturnBadArgument;
+
     const UInt8 *address = static_cast<const UInt8 *>(addrP);
-    auto ic = fHalService->get80211Controller();
+    auto ic = fHalService ? fHalService->get80211Controller() : nullptr;
+    if (!ic)
+        return kIOReturnNotReady;
+
+    /* 1. Selalu sinkronkan alamat MAC ke ic_myaddr, ac_enaddr, dan register chip Realtek R92C_MACID */
+    IEEE80211_ADDR_COPY(ic->ic_myaddr, address);
+    if_setlladdr(&ic->ic_ac.ac_if, address);
+    fHalService->updateMACAddress(address);
+
+#ifdef AIRPORT_WCL
     bool initializing = (ic->ic_if.if_flags & IFF_UP) && !(ic->ic_if.if_flags & IFF_RUNNING);
     auto update = AirportWCL::planMacUpdate(ic->ic_myaddr, address, addrBytes, initializing);
     if (update == AirportWCL::MacUpdate::Invalid)
@@ -881,32 +899,27 @@ IOReturn AirportItlwm::setHardwareAddress(const void *addrP, UInt32 addrBytes)
     if (update == AirportWCL::MacUpdate::Busy) {
         return kIOReturnBusy;
     }
-    if (!bsdInterface || !bsdInterface->getIfnet())
-        return kIOReturnNotReady;
-    // WCL calls this directly, bypassing IOEthernetInterface's normal MAC ioctl.
-    // Update the BSD address used by DHCP/ARP as well as the firmware address.
-    errno_t error = ifnet_set_lladdr(bsdInterface->getIfnet(), address, addrBytes);
-    if (error)
-        return kIOReturnError;
-    bsdInterface->setProperty(kIOMACAddress, const_cast<UInt8 *>(address), addrBytes);
-    // WCL replays the current address after every driver-available notification.
-    // Keep BSD synchronized, but do not restart firmware for a replay.
+
+    ifnet_t ifnet = fNetIf ? fNetIf->getBSDInterface() : nullptr;
+    if (!ifnet && bsdInterface)
+        ifnet = bsdInterface->getIfnet();
+    if (ifnet) {
+        ifnet_set_lladdr(ifnet, address, addrBytes);
+    }
+    if (bsdInterface)
+        bsdInterface->setProperty(kIOMACAddress, const_cast<UInt8 *>(address), addrBytes);
+    setProperty(kIOMACAddress, const_cast<UInt8 *>(address), addrBytes);
+    if (fNetIf)
+        fNetIf->setProperty(kIOMACAddress, const_cast<UInt8 *>(address), addrBytes);
+
     if (update == AirportWCL::MacUpdate::Unchanged) {
         return kIOReturnSuccess;
     }
-#endif
-    IEEE80211_ADDR_COPY(fHalService->get80211Controller()->ic_myaddr, addrP);
-    if_setlladdr(&fHalService->get80211Controller()->ic_ac.ac_if, (const UInt8 *)addrP);
-    fHalService->updateMACAddress((const uint8_t *)addrP);
-#ifdef AIRPORT_WCL
-    if (ic->ic_if.if_flags & IFF_RUNNING) {
-        ic->ic_wcl_mac_reconfig = true;
 #else
-    if (fHalService->get80211Controller()->ic_state > IEEE80211_S_INIT) {
+    if (bsdInterface)
+        bsdInterface->setProperty(kIOMACAddress, const_cast<UInt8 *>(address), addrBytes);
+    setProperty(kIOMACAddress, const_cast<UInt8 *>(address), addrBytes);
 #endif
-        fHalService->disable(bsdInterface);
-        fHalService->enable(bsdInterface);
-    }
     return kIOReturnSuccess;
 }
 

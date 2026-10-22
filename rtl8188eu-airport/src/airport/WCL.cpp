@@ -536,9 +536,8 @@ IOReturn AirportItlwmSkywalkInterface::startWCLJoin(AirportWCL::JoinRequest &joi
             explicit_bzero(ic->ic_psk, sizeof(ic->ic_psk));
             return kIOReturnError;
         }
-    } else {
-        ieee80211_begin_scan(&ic->ic_if);
     }
+    ieee80211_begin_scan(&ic->ic_if);
     return kIOReturnSuccess;
 }
 

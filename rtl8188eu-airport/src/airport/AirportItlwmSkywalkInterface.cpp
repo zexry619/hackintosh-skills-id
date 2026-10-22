@@ -296,6 +296,23 @@ init(IOService *provider)
     return ret;
 }
 
+void AirportItlwmSkywalkInterface::
+stop(IOService *provider)
+{
+#ifdef AIRPORT_WCL
+    stopWCL();
+    if (mExpansionData && mExpansionData->fRegistrationInfo) {
+        IOFree(mExpansionData->fRegistrationInfo, sizeof(struct IOSkywalkNetworkInterface::RegistrationInfo));
+        mExpansionData->fRegistrationInfo = nullptr;
+    }
+    if (mExpansionData2 && mExpansionData2->fRegistrationInfo) {
+        IOFree(mExpansionData2->fRegistrationInfo, sizeof(struct IOSkywalkEthernetInterface::RegistrationInfo));
+        mExpansionData2->fRegistrationInfo = nullptr;
+    }
+#endif
+    super::stop(provider);
+}
+
 //ifnet_t AirportItlwmSkywalkInterface::
 //getBSDInterface()
 //{

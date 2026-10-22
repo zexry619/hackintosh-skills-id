@@ -113,6 +113,7 @@ public:
 #endif
 
     virtual bool init(IOService *) AIRPORT_SKYWALK_OVERRIDE;
+    virtual void stop(IOService *) AIRPORT_SKYWALK_OVERRIDE;
 //    virtual ifnet_t getBSDInterface(void) AIRPORT_SKYWALK_OVERRIDE;
     
     void associateSSID(uint8_t *ssid, uint32_t ssid_len, const struct ether_addr &bssid, uint32_t authtype_lower, uint32_t authtype_upper, uint8_t *key, uint32_t key_len, int key_index);
