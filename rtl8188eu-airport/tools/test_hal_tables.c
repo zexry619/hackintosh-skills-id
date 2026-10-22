@@ -63,8 +63,6 @@ static void test_table_content(void)
 	    "mac_reg: 106 entri (sesuai loop vendor 0..0xD3)");
 	CHECK(sizeof(rtwn_mp_8188e_phy_reg) / sizeof(rtwn_mp_8188e_phy_reg[0]) == 704,
 	    "phy_reg: 704 entri");
-	CHECK(sizeof(rtwn_mp_8188e_phy_reg_pg) / sizeof(rtwn_mp_8188e_phy_reg_pg[0]) == 18,
-	    "phy_reg_pg: 18 entri");
 	CHECK(sizeof(rtwn_mp_8188e_agc_tab) / sizeof(rtwn_mp_8188e_agc_tab[0]) == 976,
 	    "agc_tab: 976 entri");
 	CHECK(sizeof(rtwn_mp_8188e_radioa) / sizeof(rtwn_mp_8188e_radioa[0]) == 660,
@@ -79,18 +77,40 @@ static void test_table_content(void)
 	    rtwn_mp_8188e_mac_reg[1].val == 0x35,
 	    "mac_reg[1] = reg 0x27 val 0x35");
 
-	/* Semua entri "tulis biasa" harus punya reg < 0x1000 (register
-	 * RTL8188E berada di bawah 0x1000). */
+	/*
+	 * GUARD PENTING: SEMUA entri "tulis biasa" di SEMUA tabel harus
+	 * punya reg < 0x1000 (register RTL8188E berada di bawah 0x1000).
+	 *
+	 * Ini menangkap tabel yang formatnya berbeda dan TIDAK boleh
+	 * diapplier — misalnya _array_mp_8188e_txpwr_lmt yang isinya
+	 * uint16 (0x8edd, 0x0024, ...) → kalau ikut diapplier, driver
+	 * akan menulis ke register 0x248edd = sampah.
+	 */
 	{
+		struct { const char *name; const rtwn_mp_entry_t *tab; size_t n; } all[] = {
+			{ "mac_reg",     rtwn_mp_8188e_mac_reg,
+			  sizeof(rtwn_mp_8188e_mac_reg)/sizeof(rtwn_mp_8188e_mac_reg[0]) },
+			{ "phy_reg",     rtwn_mp_8188e_phy_reg,
+			  sizeof(rtwn_mp_8188e_phy_reg)/sizeof(rtwn_mp_8188e_phy_reg[0]) },
+			{ "agc_tab",     rtwn_mp_8188e_agc_tab,
+			  sizeof(rtwn_mp_8188e_agc_tab)/sizeof(rtwn_mp_8188e_agc_tab[0]) },
+			{ "radioa",      rtwn_mp_8188e_radioa,
+			  sizeof(rtwn_mp_8188e_radioa)/sizeof(rtwn_mp_8188e_radioa[0]) },
+		};
 		int bad = 0;
-		size_t n = sizeof(rtwn_mp_8188e_mac_reg) / sizeof(rtwn_mp_8188e_mac_reg[0]);
-		for (size_t i = 0; i < n; i++) {
-			uint32_t o = rtwn_mp_8188e_mac_reg[i].odd;
-			if (o < RTWN_MP_PLAIN_MAX && o >= 0x1000) {
-				bad++;
+		for (size_t t = 0; t < sizeof(all)/sizeof(all[0]); t++) {
+			for (size_t i = 0; i < all[t].n; i++) {
+				uint32_t o = all[t].tab[i].odd;
+				if (o < RTWN_MP_PLAIN_MAX && o >= 0x1000) {
+					if (bad < 3) {
+						printf("     ⚠️  %s[%zu] reg=0x%x\n",
+						    all[t].name, i, o);
+					}
+					bad++;
+				}
 			}
 		}
-		CHECK(bad == 0, "semua entri tulis-biasa punya reg < 0x1000");
+		CHECK(bad == 0, "semua tabel: entri tulis-biasa punya reg < 0x1000");
 	}
 }
 

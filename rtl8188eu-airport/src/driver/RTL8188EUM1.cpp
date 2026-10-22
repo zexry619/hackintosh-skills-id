@@ -1351,8 +1351,14 @@ void RTL8188EUM1::runInitSequence()
 		    sizeof(rtwn_mp_8188e_mac_reg) / sizeof(rtwn_mp_8188e_mac_reg[0]));
 		applied += rtwn_hal_apply_table(&hc, rtwn_mp_8188e_phy_reg,
 		    sizeof(rtwn_mp_8188e_phy_reg) / sizeof(rtwn_mp_8188e_phy_reg[0]));
-		applied += rtwn_hal_apply_table(&hc, rtwn_mp_8188e_phy_reg_pg,
-		    sizeof(rtwn_mp_8188e_phy_reg_pg) / sizeof(rtwn_mp_8188e_phy_reg_pg[0]));
+		/*
+		 * phy_reg_pg & txpwr_lmt SENGAJA TIDAK diapplier:
+		 * formatnya bukan (reg, val) — phy_reg_pg berisi reg=0x000
+		 * dan entri 0xffffffff; txpwr_lmt berisi uint16. Keduanya
+		 * punya konsumen sendiri di vendor (PHY_InitTxPowerLimit)
+		 * dan perlu port terpisah. Menerapkannya apa adanya akan
+		 * menulis ke register sampah.
+		 */
 		applied += rtwn_hal_apply_table(&hc, rtwn_mp_8188e_agc_tab,
 		    sizeof(rtwn_mp_8188e_agc_tab) / sizeof(rtwn_mp_8188e_agc_tab[0]));
 		applied += rtwn_hal_apply_table(&hc, rtwn_mp_8188e_radioa,

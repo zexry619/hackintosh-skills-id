@@ -835,28 +835,6 @@ const rtwn_mp_entry_t rtwn_mp_8188e_phy_reg[704] = {
 	{ 0x00000f00u, 0x00u },
 };
 
-/* _array_mp_8188e_phy_reg_pg — 18 entri */
-const rtwn_mp_entry_t rtwn_mp_8188e_phy_reg_pg[18] = {
-	{ 0x00000000u, 0x00u },
-	{ 0x00000000u, 0x08u },
-	{ 0x0000ff00u, 0x00u },
-	{ 0x00000000u, 0x00u },
-	{ 0x00000000u, 0x6cu },
-	{ 0xffffff00u, 0x00u },
-	{ 0x00000000u, 0x00u },
-	{ 0x00000000u, 0x00u },
-	{ 0xffffffffu, 0x46u },
-	{ 0x00000000u, 0x00u },
-	{ 0x00000000u, 0x04u },
-	{ 0xffffffffu, 0x38u },
-	{ 0x00000000u, 0x00u },
-	{ 0x00000000u, 0x10u },
-	{ 0xffffffffu, 0x44u },
-	{ 0x00000000u, 0x00u },
-	{ 0x00000000u, 0x14u },
-	{ 0xffffffffu, 0x36u },
-};
-
 /* _array_mp_8188e_agc_tab — 976 entri */
 const rtwn_mp_entry_t rtwn_mp_8188e_agc_tab[976] = {
 	{ 0x88000001u, 0x00u },

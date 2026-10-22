@@ -19,7 +19,6 @@ typedef struct {
 
 extern const rtwn_mp_entry_t rtwn_mp_8188e_mac_reg[106];
 extern const rtwn_mp_entry_t rtwn_mp_8188e_phy_reg[704];
-extern const rtwn_mp_entry_t rtwn_mp_8188e_phy_reg_pg[18];
 extern const rtwn_mp_entry_t rtwn_mp_8188e_agc_tab[976];
 extern const rtwn_mp_entry_t rtwn_mp_8188e_radioa[660];
 

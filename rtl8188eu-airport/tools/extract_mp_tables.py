@@ -38,9 +38,16 @@ TABLES = [
     # (nama_s-simbol, nama_C, tipe entri)
     ("_array_mp_8188e_mac_reg",     "rtwn_mp_8188e_mac_reg",     "u32"),
     ("_array_mp_8188e_phy_reg",     "rtwn_mp_8188e_phy_reg",     "u32"),
-    ("_array_mp_8188e_phy_reg_pg",  "rtwn_mp_8188e_phy_reg_pg",  "u32"),
+    # CATATAN: _array_mp_8188e_phy_reg_pg (144 B) TIDAK ikut diekstrak
+    # sebagai tabel tulis-MP. Isinya reg=0x000 + nilai + entri 0xffffffff
+    # → itu tabel "Power Group" dengan format & konsumen sendiri.
     ("_array_mp_8188e_agc_tab",     "rtwn_mp_8188e_agc_tab",     "u32"),
     ("_array_mp_8188e_radioa",      "rtwn_mp_8188e_radioa",      "u32"),
+    # CATATAN: _array_mp_8188e_txpwr_lmt (31584 B) TIDAK ikut diekstrak
+    # sebagai tabel tulis-MP. Isinya uint16 (0x8edd, 0x0024, ...) — itu
+    # tabel "TX power limit" dengan format & konsumen sendiri
+    # (PHY_InitTxPowerLimit), BUKAN daftar (reg, val).
+    # Kalau ikut diapplier → menulis ke register 0x248edd = sampah.
 ]
 
 
