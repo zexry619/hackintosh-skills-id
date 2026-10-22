@@ -49,8 +49,13 @@ run "Keseimbangan lock/unlock (regression PANIC #4)" bash -c \
 run "Tabel & applier HAL 8188E (ekstraksi vendor)" bash -c \
 	'clang -O2 -o /tmp/t_hal tools/test_hal_tables.c src/urtwn/rtwn_hal_8188e.c src/urtwn/rtwn_mp_8188e.c -Isrc/urtwn && /tmp/t_hal'
 
-run "Build kext (AMAN, inert)" bash -c './scripts/build-m1.sh | tail -3'
-run "Build probe (user space)" bash -c './scripts/build-probe.sh | tail -1'
+# Catatan (23 Okt 2026): build M1 dihentikan dari suite — M1 sudah digantikan
+# M4 dan header net80211-nya tidak lagi memuat event DRIVER_* yang dipakai
+# ItlRtl8188E.cpp. Yang wajib hijau sekarang adalah build M4.
+# `set -o pipefail` penting: tanpa itu `build | tail` selalu rc=0 dan
+# kegagalan build tidak pernah terdeteksi.
+run "Build kext M4" bash -c 'set -o pipefail; ./scripts/build-m4.sh | tail -3'
+run "Build probe (user space)" bash -c 'set -o pipefail; ./scripts/build-probe.sh | tail -1'
 
 if [[ $fail -eq 0 ]]; then
 	echo "✅ SEMUA TEST LULUS"

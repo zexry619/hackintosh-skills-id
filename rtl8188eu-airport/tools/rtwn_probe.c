@@ -14,6 +14,9 @@
  *   sudo ./tools/rtwn_probe                     # info + baca register
  *   sudo ./tools/rtwn_probe --efuse-all         # semua jalur EFUSE + diag
  *   sudo ./tools/rtwn_probe --full              # power-on + LLT + firmware
+ *   sudo ./tools/rtwn_probe --scan 1 13         # scan 2,4 GHz
+ *   sudo ./tools/rtwn_probe --join ZEKRI.NET --txnull
+ *                                               # auth+assoc+uji TX data
  *   sudo ./tools/rtwn_probe --peek 0x610 6      # baca mentah
  *   sudo ./tools/rtwn_probe --poke 0x100 0xdeadbeef
  *   sudo ./tools/rtwn_probe --dump 0x000 0x40
@@ -726,12 +729,493 @@ static uint32_t hexarg(const char *s)
 	return (uint32_t)strtoul(s, NULL, 0);
 }
 
+/* ── M3 userspace lab: join + uji TX data ───────────────────────────── */
+
+struct rxframe {
+	const uint8_t *p;
+	uint32_t len;
+	uint32_t dw3;
+	bool txrep;
+};
+
+struct rxstat {
+	int transfers;
+	int frames;
+	int txrep;
+	int crc;
+};
+
+/*
+ * Ambil frame dari satu transfer RX.
+ *
+ * Offset frame = 24 (descriptor) + infosz (PHY status) + shift.
+ * Vendor kadang menambah 2 byte; kalau frame di offset utama tidak masuk
+ * akal, coba kandidat lain.
+ */
+static const uint8_t *
+frame_in_slot(const uint8_t *b, uint32_t len, const rtwn_usb_rxinfo_t *info,
+    uint32_t *foff)
+{
+	static const int32_t adj[] = { 0, 2, -2 };
+	size_t k;
+
+	for (k = 0; k < sizeof(adj) / sizeof(adj[0]); k++) {
+		int32_t off = (int32_t)(RTWN_USB_RX_DESC_SIZE + info->infosz) +
+		    adj[k];
+		if (off < 0 || (uint32_t)off + 24 > len) {
+			continue;
+		}
+		if ((b[off] & 0x03) == 0 &&
+		    ((b[off] >> 2) & 0x03) <= 2) {
+			*foff = (uint32_t)off;
+			return b + off;
+		}
+	}
+	/* fallback: tanpa infosz */
+	if (RTWN_USB_RX_DESC_SIZE + 24 <= len) {
+		*foff = RTWN_USB_RX_DESC_SIZE;
+		return b + RTWN_USB_RX_DESC_SIZE;
+	}
+	return NULL;
+}
+
+/*
+ * Baca satu transfer, kembalikan frame yang ditemukan.
+ * Return jumlah frame (0 kalau timeout/kosong), -1 kalau error.
+ */
+static int
+rx_collect(uint8_t *buf, uint32_t bufsz, uint32_t timeout_ms,
+    struct rxframe *out, int max, struct rxstat *st)
+{
+	uint32_t len = bufsz, want = 0;
+	int rc, n = 0;
+
+	rc = bulk_read(buf, &len, timeout_ms);
+	if (rc == 1 || len == 0) {
+		return 0;
+	}
+	if (rc < 0) {
+		return -1;
+	}
+	if (st) {
+		st->transfers++;
+	}
+
+	while (want + RTWN_USB_RX_DESC_SIZE <= len && n < max) {
+		rtwn_usb_rxinfo_t info;
+		const uint8_t *f;
+		uint32_t foff = 0, stride;
+
+		if (!rtwn_usb_parse_rx_desc(buf + want, len - want, &info)) {
+			break;
+		}
+		if (info.pktlen == 0 || info.pktlen > 3000) {
+			break;
+		}
+
+		if (st && (info.crcError || info.icvError)) {
+			st->crc++;
+		}
+
+		f = frame_in_slot(buf + want, len - want, &info, &foff);
+		if (f && info.pktlen >= 10) {
+			uint32_t dw3 = (uint32_t)buf[want + 12] |
+			    ((uint32_t)buf[want + 13] << 8) |
+			    ((uint32_t)buf[want + 14] << 16) |
+			    ((uint32_t)buf[want + 15] << 24);
+
+			out[n].p = f;
+			out[n].len = info.pktlen;
+			out[n].dw3 = dw3;
+			out[n].txrep = ((dw3 >> 14) & 0x3) != 0;
+			if (st) {
+				st->frames++;
+				if (out[n].txrep) {
+					st->txrep++;
+				}
+			}
+			n++;
+		}
+
+		stride = RTWN_USB_RX_DESC_SIZE + info.infosz + info.shift +
+		    info.pktlen;
+		stride = (stride + 3) & ~3u;
+		if (stride == 0 || want + stride > len) {
+			break;
+		}
+		want += stride;
+	}
+	return n;
+}
+
+/* Init chip lengkap (sama dengan jalur kernel, kode portabel). */
+static int
+chip_bringup(rtwn_seq_result_t *res)
+{
+	rtwn_seq_result_t ef;
+
+	memset(res, 0, sizeof(*res));
+
+	if (rtwn_seq_power_on(res, probe_read, probe_write, NULL) != 0) {
+		printf("  ✗ power-on gagal\n");
+		return -1;
+	}
+	if (rtwn_seq_dma_init(res, probe_read, probe_write, NULL, 3) != 0) {
+		printf("  ✗ DMA/LLT gagal\n");
+		return -1;
+	}
+	if (rtwn_seq_load_firmware(res, probe_read, probe_write, NULL,
+	    rtl8188eufw_bin, rtl8188eufw_bin_len) != 0) {
+		printf("  ✗ firmware gagal\n");
+		return -1;
+	}
+
+	memset(&ef, 0, sizeof(ef));
+	if (rtwn_seq_read_efuse_offload(&ef, probe_read, probe_write, NULL) == 0 &&
+	    ef.efuse_ok) {
+		memcpy(res->mac, ef.mac, 6);
+		res->xtal = ef.xtal;
+	} else if (rtwn_seq_read_efuse_direct_8188e(&ef, probe_read,
+	    probe_write, NULL) == 0 && ef.efuse_ok) {
+		memcpy(res->mac, ef.mac, 6);
+		res->xtal = ef.xtal;
+	} else {
+		res->mac[0] = 0x02;
+		res->mac[5] = 0x01;
+		res->xtal = 0x20;
+	}
+
+	rtwn_init_mac_8188e(probe_read, probe_write, NULL);
+	rtwn_init_bb_8188e(probe_read, probe_write, NULL, res->xtal);
+	rtwn_init_rf_8188e(probe_read, probe_write, NULL);
+	rtwn_core_config_8188e(probe_read, probe_write, NULL, res->mac);
+
+	usleep(20 * 1000);
+	printf("  chip siap: MAC %02x:%02x:%02x:%02x:%02x:%02x xtal=0x%02x\n",
+	    res->mac[0], res->mac[1], res->mac[2], res->mac[3], res->mac[4],
+	    res->mac[5], res->xtal);
+	return 0;
+}
+
+static int
+parse_mac(const char *s, uint8_t mac[6])
+{
+	unsigned v[6];
+	int i;
+
+	if (sscanf(s, "%x:%x:%x:%x:%x:%x", &v[0], &v[1], &v[2], &v[3], &v[4],
+	    &v[5]) != 6) {
+		return -1;
+	}
+	for (i = 0; i < 6; i++) {
+		mac[i] = (uint8_t)v[i];
+	}
+	return 0;
+}
+
+/* Cari BSSID + kanal untuk SSID tertentu lewat directed probe. */
+static int
+find_target(const char *ssid, const uint8_t sta[6], uint8_t bssid[6],
+    int *chan_out)
+{
+	uint8_t txbuf[RTWN_USB_TX_DESC_SIZE + 128];
+	uint8_t rbuf[16384];
+	uint8_t target_len = (uint8_t)strlen(ssid);
+	int chan;
+
+	for (chan = 1; chan <= 13; chan++) {
+		struct rxframe fr[16];
+		struct rxstat st;
+		size_t flen = 0;
+		int k, i;
+
+		if (rtwn_set_chan_8188e(probe_read, probe_write, NULL,
+		    (uint8_t)chan) != 0) {
+			continue;
+		}
+		usleep(12 * 1000);
+
+		for (i = 0; i < 3; i++) {
+			uint32_t dl = sizeof(rbuf);
+			if (bulk_read(rbuf, &dl, 5) != 0 || dl == 0) {
+				break;
+			}
+		}
+
+		if (!rtwn_build_probe_request(
+		    (const uint8_t *)"\xff\xff\xff\xff\xff\xff", sta, ssid,
+		    target_len, (uint8_t)chan,
+		    txbuf + RTWN_USB_TX_DESC_SIZE, 128, &flen)) {
+			continue;
+		}
+		if (!rtwn_usb_build_mgmt_tx_desc(txbuf, RTWN_USB_TX_DESC_SIZE,
+		    (uint16_t)flen, true)) {
+			continue;
+		}
+		if (bulk_write(txbuf, RTWN_USB_TX_DESC_SIZE + (uint32_t)flen,
+		    300) != 0) {
+			continue;
+		}
+
+		memset(&st, 0, sizeof(st));
+		for (i = 0; i < 4; i++) {
+			int n = rx_collect(rbuf, sizeof(rbuf), 40, fr, 16, &st);
+
+			if (n <= 0) {
+				continue;
+			}
+			for (k = 0; k < n; k++) {
+				char got[33];
+				uint8_t got_len = 0;
+				uint8_t b[6];
+
+				if (fr[k].txrep) {
+					continue;
+				}
+				if (!rtwn_parse_ssid(fr[k].p, fr[k].len, got,
+				    &got_len) || !rtwn_parse_bssid(fr[k].p,
+				    fr[k].len, b)) {
+					continue;
+				}
+				if (got_len == target_len &&
+				    memcmp(got, ssid, got_len) == 0) {
+					memcpy(bssid, b, 6);
+					*chan_out = chan;
+					return 0;
+				}
+			}
+		}
+	}
+	return -1;
+}
+
+/*
+ * Join (open auth + assoc) lalu — kalau diminta — kirim QoS-Null untuk
+ * membuktikan jalur TX data. Tidak ada kripto di sini: tujuan tes ini
+ * memisahkan "TX data rusak" dari "WPA2 gagal".
+ */
+static int
+run_join(const char *ssid, const char *bssid_opt, int force_chan, int doTxNull)
+{
+	rtwn_seq_result_t res;
+	uint8_t bssid[6] = { 0 };
+	uint8_t txbuf[RTWN_USB_TX_DESC_SIZE + 256];
+	uint8_t rbuf[16384];
+	int chan = force_chan, attempt, ret = 1;
+	uint16_t seq = 0x10;
+
+	printf("── Bring-up chip ──\n");
+	if (chip_bringup(&res) != 0) {
+		return -1;
+	}
+
+	if (bssid_opt != NULL) {
+		if (parse_mac(bssid_opt, bssid) != 0) {
+			printf("!! --bssid tidak valid\n");
+			return -1;
+		}
+		printf("── BSSID diberikan: %s\n", bssid_opt);
+	} else {
+		printf("── Cari \"%s\" di kanal 1..13 ──\n", ssid);
+		if (find_target(ssid, res.mac, bssid, &chan) != 0) {
+			printf("  ✗ SSID tidak ditemukan (AP mati / di luar jangkauan)\n");
+			return -1;
+		}
+	}
+
+	if (chan == 0) {
+		chan = 1;
+		printf("  ! kanal tidak diketahui, pakai 1 (sebut --chan untuk memaksa)\n");
+	}
+	printf("  target %02x:%02x:%02x:%02x:%02x:%02x kanal %d\n",
+	    bssid[0], bssid[1], bssid[2], bssid[3], bssid[4], bssid[5], chan);
+
+	if (rtwn_set_chan_8188e(probe_read, probe_write, NULL,
+	    (uint8_t)chan) != 0) {
+		printf("  ✗ set kanal gagal\n");
+		return -1;
+	}
+	usleep(15 * 1000);
+
+	/* ── auth open ── */
+	printf("── Auth (open) ──\n");
+	for (attempt = 0; attempt < 3; attempt++) {
+		size_t flen = 0;
+		int i, got = 0;
+
+		if (!rtwn_build_auth_req(bssid, res.mac, seq++, 0, 1,
+		    txbuf + RTWN_USB_TX_DESC_SIZE, 128, &flen)) {
+			break;
+		}
+		if (!rtwn_usb_build_mgmt_tx_desc(txbuf, RTWN_USB_TX_DESC_SIZE,
+		    (uint16_t)flen, false)) {
+			break;
+		}
+		if (bulk_write(txbuf, RTWN_USB_TX_DESC_SIZE + (uint32_t)flen,
+		    300) != 0) {
+			continue;
+		}
+
+		for (i = 0; i < 8 && !got; i++) {
+			struct rxframe fr[16];
+			int n = rx_collect(rbuf, sizeof(rbuf), 40, fr, 16, NULL);
+			int k;
+
+			if (n <= 0) {
+				continue;
+			}
+			for (k = 0; k < n; k++) {
+				uint16_t status = 0;
+
+				if (fr[k].txrep ||
+				    !rtwn_frame_for(fr[k].p, fr[k].len, res.mac)) {
+					continue;
+				}
+				if (rtwn_parse_auth_resp(fr[k].p, fr[k].len,
+				    &status)) {
+					printf("  ← auth resp status=%u\n",
+					    status);
+					got = 1;
+					break;
+				}
+			}
+		}
+		if (got) {
+			break;
+		}
+		printf("  (percobaan %d: tidak ada jawaban)\n", attempt + 1);
+	}
+	if (attempt == 3) {
+		printf("  ✗ auth gagal — AP tidak menjawab\n");
+		return -1;
+	}
+
+	/* ── assoc ── */
+	printf("── Assoc ──\n");
+	for (attempt = 0; attempt < 3; attempt++) {
+		size_t flen = 0;
+		bool privacy = attempt > 0;	/* coba tanpa lalu dengan Privacy */
+		int i, got = 0;
+
+		if (!rtwn_build_assoc_req(bssid, res.mac, ssid,
+		    (uint8_t)strlen(ssid), (uint8_t)chan, privacy, seq++,
+		    txbuf + RTWN_USB_TX_DESC_SIZE, 256, &flen)) {
+			break;
+		}
+		if (!rtwn_usb_build_mgmt_tx_desc(txbuf, RTWN_USB_TX_DESC_SIZE,
+		    (uint16_t)flen, false)) {
+			break;
+		}
+		if (bulk_write(txbuf, RTWN_USB_TX_DESC_SIZE + (uint32_t)flen,
+		    300) != 0) {
+			continue;
+		}
+
+		for (i = 0; i < 10 && !got; i++) {
+			struct rxframe fr[16];
+			int n = rx_collect(rbuf, sizeof(rbuf), 50, fr, 16, NULL);
+			int k;
+
+			if (n <= 0) {
+				continue;
+			}
+			for (k = 0; k < n; k++) {
+				uint16_t status = 0;
+
+				if (fr[k].txrep ||
+				    !rtwn_frame_for(fr[k].p, fr[k].len, res.mac)) {
+					continue;
+				}
+				if (rtwn_parse_assoc_resp(fr[k].p, fr[k].len,
+				    &status)) {
+					printf("  ← assoc resp status=%u%s\n",
+					    status, status == 0 ? " (OK)" : "");
+					got = 1;
+					ret = (status == 0) ? 0 : 1;
+					break;
+				}
+			}
+		}
+		if (got) {
+			break;
+		}
+		printf("  (percobaan %d: tidak ada jawaban)\n", attempt + 1);
+	}
+	if (ret != 0) {
+		printf("  ✗ assoc gagal\n");
+		return ret;
+	}
+
+	/* ── uji TX data ── */
+	if (doTxNull) {
+		struct rxstat st;
+		int round, k;
+
+		memset(&st, 0, sizeof(st));
+		printf("── Uji TX data (QoS-Null × 5) ──\n");
+		for (round = 0; round < 5; round++) {
+			size_t flen = 0;
+
+			if (!rtwn_build_null_data(bssid, res.mac, true, seq++,
+			    txbuf + RTWN_USB_TX_DESC_SIZE, 128, &flen)) {
+				break;
+			}
+			if (!rtwn_usb_build_tx_desc(txbuf,
+			    RTWN_USB_TX_DESC_SIZE, (uint16_t)flen,
+			    RTWN_USB_TX_DESC_SIZE, false, true, 6, false,
+			    false, 0)) {
+				break;
+			}
+			/* samakan dengan jalur kernel: QoS + HWSEQ off */
+			txbuf[16] = 0x40;
+			txbuf[17] = 0x01;
+			rtwn_usb_tx_checksum(txbuf, RTWN_USB_TX_DESC_SIZE);
+
+			if (bulk_write(txbuf,
+			    RTWN_USB_TX_DESC_SIZE + (uint32_t)flen, 300) != 0) {
+				printf("  round %d: bulk OUT gagal\n", round);
+				continue;
+			}
+			usleep(20 * 1000);
+
+			{
+				struct rxframe fr[16];
+				int n = rx_collect(rbuf, sizeof(rbuf), 30, fr,
+				    16, &st);
+
+				for (k = 0; k < n; k++) {
+					if (fr[k].txrep) {
+						printf("  round %d: TX report "
+						    "dw3=0x%08x\n", round,
+						    fr[k].dw3);
+					}
+				}
+			}
+		}
+		printf("── Hasil ──\n");
+		printf("  transfer=%d frame=%d txreport=%d crc=%d\n",
+		    st.transfers, st.frames, st.txrep, st.crc);
+		if (st.txrep > 0) {
+			printf("  ✓ chip melaporkan status TX untuk frame data "
+			    "→ jalur data hidup\n");
+		} else {
+			printf("  ✗ tidak ada TX report: frame data tidak "
+			    "dikirim/di-ACK\n");
+		}
+	}
+
+	return ret;
+}
+
 int main(int argc, char **argv)
+
 {
 	rtwn_seq_result_t res;
 	int doEfuseAll = 0, doFull = 0, doWrite = 0;
 	int doPeek = 0, doPoke = 0, doDump = 0, doScan = 0;
 	int scanCh1 = 1, scanCh2 = 13;
+	const char *joinSsid = NULL, *joinBssid = NULL;
+	int doTxNull = 0, joinChan = 0;
 	uint32_t a1 = 0, a2 = 0;
 	int i, ret = 0;
 
@@ -740,6 +1224,13 @@ int main(int argc, char **argv)
 			doEfuseAll = 1;
 		else if (strcmp(argv[i], "--full") == 0) { doEfuseAll = 1; doFull = 1; }
 		else if (strcmp(argv[i], "--write-test") == 0) doWrite = 1;
+		else if (strcmp(argv[i], "--txnull") == 0) doTxNull = 1;
+		else if (strcmp(argv[i], "--join") == 0 && i + 1 < argc)
+			joinSsid = argv[++i];
+		else if (strcmp(argv[i], "--bssid") == 0 && i + 1 < argc)
+			joinBssid = argv[++i];
+		else if (strcmp(argv[i], "--chan") == 0 && i + 1 < argc)
+			joinChan = (int)hexarg(argv[++i]);
 		else if (strcmp(argv[i], "--scan") == 0) {
 			doScan = 1;
 			if (i + 1 < argc && argv[i + 1][0] != '-') {
@@ -769,6 +1260,17 @@ int main(int argc, char **argv)
 	}
 
 	memset(&res, 0, sizeof(res));
+
+	/* ── join + uji TX data (M3 userspace lab) ──────────────────── */
+	if (joinSsid != NULL) {
+		if (open_interface() != 0) {
+			ret = 1;
+			goto done;
+		}
+		ret = run_join(joinSsid, joinBssid, joinChan, doTxNull);
+		close_interface();
+		goto done;
+	}
 
 	/* ── scan M2 ────────────────────────────────────────────────── */
 	if (doScan) {

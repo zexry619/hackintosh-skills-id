@@ -10,6 +10,26 @@ IO80211Family/IOSkywalkFamily/IOUSBHostFamily — hanya kebijakan
 M1 (chip hidup) ✅ · M1c (MAC/xtal dari EFUSE) ✅ · M2 (scan) ✅ ·
 **M4 (kext IO80211 utuh) ✅ build** · uji menu Wi-Fi ⏳ satu reboot.
 
+> **Update 23 Okt 06:30 — M4 sudah terbukti di hardware.** `en2` terdaftar
+> sebagai Wi-Fi (fw `rtl8188eufw 1.28`, kanal 1–14), scan + beacon + asosiasi
+> WPA2 jalan (`RTL8188E-stage=state-run`, `mac=98:03:8e:9e:bc:24`).
+> **Yang belum: DHCP** (`State: INIT`, `no server`) dan sinkronisasi status ke
+> `airportd` (*not associated*). Daftar perbaikan + cara iterasi **tanpa
+> reboot**: **[`docs/fix-plan.md`](docs/fix-plan.md)**.
+>
+> **Update 23 Okt 06:40 — F0 selesai, menunggu 1 reboot.** ESP sudah bersih:
+> `RTL8188EAirport.kext` dihapus, `Kernel->Add` 12 → 11, `plutil -lint` OK,
+> backup di `backup/EFI-pre-restore.20261023-062756.tar.gz`.
+> `kmutil unload` ditolak (`kext is in use or retained`) selama kext masih
+> dipegang interface — jadi reboot ini yang terakhir untuk urusan pasang-copot.
+> Setelah reboot: dongle bebas →
+> `sudo ./tools/rtwn_probe --join ZEKRI.NET --txnull`.
+> Iterasi berikutnya: `./scripts/dev-loop-m4.sh` (hot-load, tanpa reboot).
+> ⚠️ Driver vendor Realtek **tidak** kembali otomatis: `mkdir` di
+> `/Library/Extensions` ditolak TCC. Wi-Fi harian sementara lewat USB
+> tethering; kalau perlu vendor lagi, jalankan dari Terminal yang punya
+> izin App Management.
+
 **Terobosan metode:** `tools/rtwn_probe` sekarang bisa membuka device dari
 **user space** (API IOKit yang benar). Iterasi jadi hitungan detik —
 **tanpa reboot, tanpa kernel, tanpa risiko panic**.

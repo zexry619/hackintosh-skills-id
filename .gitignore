@@ -7,3 +7,6 @@ dist/
 # M4 build + ESP backups (besar, lokal)
 rtl8188eu-airport/src/driver/build-m4/
 rtl8188eu-airport/backup/
+
+# Catatan kerja agent (lokal, bukan bagian dari skill)
+.workbuddy-ai/
