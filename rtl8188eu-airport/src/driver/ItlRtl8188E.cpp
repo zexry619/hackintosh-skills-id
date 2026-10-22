@@ -574,48 +574,21 @@ int ItlRtl8188E::newstateCb(struct ieee80211com *ic,
 
 	switch (nstate) {
 	case IEEE80211_S_SCAN: {
-		uint8_t ch = 1;
-		int dwell;
+		int dwell = 30;
 
 		me->fScanning = true;
-		if (ic->ic_bss && ic->ic_bss->ni_chan) {
+		if (ic->ic_bss && ic->ic_bss->ni_chan)
 			me->setChannel(ic->ic_bss->ni_chan);
-			ch = (uint8_t)ieee80211_chan2ieee(ic, ic->ic_bss->ni_chan);
-		}
-#ifdef AIRPORT_WCL
-		if (ic->ic_wcl_scan_requested || ic->ic_wcl_join_requested) {
-			/* Active user scan/join: rapid channel hopping (35ms), no pause */
-			dwell = 35;
-		} else
-#endif
-		{
-			dwell = 80;
-			if (ch >= 1 && ch <= 14) {
-				if (ch == 1 && me->fScanSeen)
-					dwell = 800;
-				if (ch > 1)
-					me->fScanSeen = true;
-			}
+		if (ic->ic_flags & IEEE80211_F_ASCAN) {
+			dwell = 30;
+		} else {
+			dwell = 50;
 		}
 		timeout_add_msec(&me->fScanTo, dwell);
 		break;
 	}
 	case IEEE80211_S_AUTH:
-		me->fScanning = false;
-		me->fScanSeen = false;
-		if (me->fScanTo)
-			timeout_del(&me->fScanTo);
-		if (ic->ic_bss && ic->ic_bss->ni_chan)
-			me->setChannel(ic->ic_bss->ni_chan);
-		break;
 	case IEEE80211_S_ASSOC:
-		me->fScanning = false;
-		me->fScanSeen = false;
-		if (me->fScanTo)
-			timeout_del(&me->fScanTo);
-		if (ic->ic_bss && ic->ic_bss->ni_chan)
-			me->setChannel(ic->ic_bss->ni_chan);
-		break;
 	case IEEE80211_S_RUN: {
 		me->fScanning = false;
 		me->fScanSeen = false;

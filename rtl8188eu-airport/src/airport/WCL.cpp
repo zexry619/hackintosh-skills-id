@@ -162,6 +162,14 @@ void AirportItlwmSkywalkInterface::free()
 {
     if (joinTimer)
         stopWCL();
+    if (mExpansionData && mExpansionData->fRegistrationInfo) {
+        IOFree(mExpansionData->fRegistrationInfo, sizeof(struct IOSkywalkNetworkInterface::RegistrationInfo));
+        mExpansionData->fRegistrationInfo = nullptr;
+    }
+    if (mExpansionData2 && mExpansionData2->fRegistrationInfo) {
+        IOFree(mExpansionData2->fRegistrationInfo, sizeof(struct IOSkywalkEthernetInterface::RegistrationInfo));
+        mExpansionData2->fRegistrationInfo = nullptr;
+    }
     IO80211InfraProtocol::free();
 }
 
@@ -333,7 +341,7 @@ void AirportItlwmSkywalkInterface::publishWCLBeacon(const ieee80211_node *node, 
     metadata->ieLength = uint32_t(AirportWCL::selectWPA2TransitionMode(
         reinterpret_cast<uint8_t *>(metadata + 1), length));
     size_t messageSize = sizeof(*metadata) + metadata->ieLength;
-    if (assocNotified && IEEE80211_ADDR_EQ(node->ni_bssid, joinBSSID)) {
+    if ((assocNotified || joinPending) && IEEE80211_ADDR_EQ(node->ni_bssid, joinBSSID)) {
         wclBssValid = messageSize <= sizeof(wclBssInfo);
         if (wclBssValid) {
             bzero(wclBssInfo, sizeof(wclBssInfo));
@@ -509,6 +517,7 @@ IOReturn AirportItlwmSkywalkInterface::startWCLJoin(AirportWCL::JoinRequest &joi
             return kIOReturnBadArgument;
         }
     }
+    uint8_t joinChannel = (uint8_t)(join.channelSpec & 0xff);
     ic->ic_des_esslen = join.ssidLength;
     memcpy(ic->ic_des_essid, join.ssid, sizeof(ic->ic_des_essid));
     memcpy(ic->ic_des_bssid, join.bssid, 6);
@@ -526,6 +535,31 @@ IOReturn AirportItlwmSkywalkInterface::startWCLJoin(AirportWCL::JoinRequest &joi
     bzero(wclBeaconInfo, sizeof(wclBeaconInfo));
     disassocIsVoluntary = false;
     joinTimer->setTimeoutMS(30000);
+
+    /*
+     * Optimasi Asosiasi Kilat:
+     * Jika AP sudah pernah terdeteksi di pohon scan (ic->ic_tree), langsung
+     * lakukan auth/assoc tanpa perlu scan ulang semua kanal. Ini memangkas
+     * jeda dari >6 detik (yang memicu timeout airportd -3909) menjadi <50ms.
+     */
+    struct ieee80211_node *target = ieee80211_find_node(ic, joinBSSID);
+    if (target != nullptr && target->ni_chan != nullptr && target->ni_chan != IEEE80211_CHAN_ANYC) {
+        XYLog("%s: node %s ditemukan di pohon kanal %u, asosiasi instan\n",
+            __FUNCTION__, ether_sprintf(joinBSSID), (unsigned)ieee80211_chan2ieee(ic, target->ni_chan));
+        if (ic->ic_state != IEEE80211_S_SCAN) {
+            ic->ic_newstate(ic, IEEE80211_S_SCAN, -1);
+        }
+        ieee80211_node_join_bss(ic, target, 0);
+        return kIOReturnSuccess;
+    }
+
+    XYLog("%s: node %s belum ada di pohon, scan terarah kanal %u\n",
+        __FUNCTION__, ether_sprintf(joinBSSID), (unsigned)joinChannel);
+    if (joinChannel >= 1 && joinChannel <= 14) {
+        memset(ic->ic_chan_scan, 0, sizeof(ic->ic_chan_scan));
+        setbit(ic->ic_chan_scan, joinChannel);
+        ic->ic_bss->ni_chan = &ic->ic_channels[joinChannel];
+    }
     if (ic->ic_state != IEEE80211_S_SCAN) {
         if (ic->ic_newstate(ic, IEEE80211_S_SCAN, -1)) {
             joinPending = false;

@@ -215,7 +215,7 @@ file "$KEXT/Contents/MacOS/$KEXT_NAME" | grep -q 'Mach-O 64-bit kext bundle x86_
 echo "[m4] sign (ad-hoc)"
 codesign -f -s - "$KEXT" >/dev/null 2>&1
 codesign --verify --deep --strict "$KEXT"
-chown -R root:wheel "$KEXT"
+chown -R root:wheel "$KEXT" 2>/dev/null || true
 
 echo "[m4] OK: $KEXT"
 echo "[m4] undefined: $(nm -u "$KEXT/Contents/MacOS/$KEXT_NAME" | wc -l | tr -d ' ')"
