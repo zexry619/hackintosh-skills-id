@@ -34,6 +34,10 @@
 #include <CoreFoundation/CoreFoundation.h>
 
 #include "rtwn_seq.h"
+#include "rtwn_init_8188e.h"
+#include "rtwn_chan.h"
+#include "rtwn_80211.h"
+#include "rtwn_usb.h"
 
 /* Firmware 8188E (dari linux-firmware), disematkan. */
 extern const unsigned char rtl8188eufw_bin[];
@@ -207,6 +211,516 @@ static void close_device(void)
 	}
 }
 
+/* ── bulk pipe (interface 0) ─────────────────────────────────────────── */
+
+static IOUSBInterfaceInterface **gIf = NULL;
+static UInt8 gPipeIn = 0;	/* pipeRef untuk ReadPipe  */
+static UInt8 gPipeOut = 0;	/* pipeRef untuk WritePipe */
+static UInt8 gEpIn = 0, gEpOut = 0;
+static UInt16 gMpsIn = 0, gMpsOut = 0;
+
+static int
+get_int_prop(io_service_t svc, CFStringRef key, int *out)
+{
+	CFTypeRef ref;
+	CFNumberRef num;
+	int v = 0;
+	int ok = 0;
+
+	ref = IORegistryEntryCreateCFProperty(svc, key, kCFAllocatorDefault, 0);
+	if (ref == NULL) {
+		return -1;
+	}
+	if (CFGetTypeID(ref) == CFNumberGetTypeID()) {
+		num = (CFNumberRef)ref;
+		if (CFNumberGetValue(num, kCFNumberIntType, &v)) {
+			*out = v;
+			ok = 1;
+		}
+	}
+	CFRelease(ref);
+	return ok ? 0 : -1;
+}
+
+/*
+ * Buka interface 0 dan cari pipe bulk IN/OUT.
+ *
+ * Harus dipanggil SETELAH open_device() (yang melakukan SetConfiguration).
+ * Memakai API legacy IOUSBInterfaceInterface — API yang sama dipakai
+ * IOUSBDeviceInterface di atas, dan masih berfungsi di macOS 15.
+ */
+static int
+open_interface(void)
+{
+	CFMutableDictionaryRef match;
+	io_iterator_t iter = 0;
+	io_service_t svc = 0;
+	IOCFPlugInInterface **plug = NULL;
+	SInt32 score = 0;
+	IOReturn kr;
+	int found = 0, vid = 0, pid = 0;
+	UInt8 numEp = 0, i;
+
+	match = IOServiceMatching("IOUSBInterface");
+	if (IOServiceGetMatchingServices(kIOMainPortDefault, match, &iter) !=
+	    KERN_SUCCESS) {
+		printf("!! IOServiceGetMatchingServices(IOUSBInterface) gagal\n");
+		return -1;
+	}
+
+	while ((svc = IOIteratorNext(iter)) != 0) {
+		if (get_int_prop(svc, CFSTR("idVendor"), &vid) != 0 ||
+		    get_int_prop(svc, CFSTR("idProduct"), &pid) != 0 ||
+		    vid != VID || pid != PID) {
+			IOObjectRelease(svc);
+			continue;
+		}
+		/* interface 0 = vendor specific (bInterfaceNumber 0) */
+		{
+			int ifno = -1;
+			if (get_int_prop(svc, CFSTR("bInterfaceNumber"),
+			    &ifno) == 0 && ifno != 0) {
+				IOObjectRelease(svc);
+				continue;
+			}
+		}
+
+		kr = IOCreatePlugInInterfaceForService(svc,
+		    kIOUSBInterfaceUserClientTypeID, kIOCFPlugInInterfaceID,
+		    &plug, &score);
+		if (kr != KERN_SUCCESS || plug == NULL) {
+			IOObjectRelease(svc);
+			continue;
+		}
+		kr = (*plug)->QueryInterface(plug,
+		    CFUUIDGetUUIDBytes(kIOUSBInterfaceInterfaceID),
+		    (LPVOID *)&gIf);
+		(*plug)->Release(plug);
+		plug = NULL;
+		if (kr != KERN_SUCCESS || gIf == NULL) {
+			IOObjectRelease(svc);
+			continue;
+		}
+
+		kr = (*gIf)->USBInterfaceOpen(gIf);
+		if (kr == kIOReturnExclusiveAccess) {
+			kr = (*gIf)->USBInterfaceOpenSeize(gIf);
+		}
+		if (kr != kIOReturnSuccess) {
+			printf("  USBInterfaceOpen: 0x%08x\n", kr);
+			(*gIf)->Release(gIf);
+			gIf = NULL;
+			IOObjectRelease(svc);
+			continue;
+		}
+		found = 1;
+		IOObjectRelease(svc);
+		break;
+	}
+	IOObjectRelease(iter);
+
+	if (!found || gIf == NULL) {
+		printf("!! interface 0 tidak bisa dibuka\n");
+		return -2;
+	}
+
+	kr = (*gIf)->GetNumEndpoints(gIf, &numEp);
+	if (kr != kIOReturnSuccess) {
+		printf("!! GetNumEndpoints: 0x%08x\n", kr);
+		return -3;
+	}
+	printf("  interface 0 dibuka ✓ (%u endpoint)\n", numEp);
+
+	for (i = 1; i <= numEp; i++) {
+		UInt8 dir = 0, num = 0, type = 0, interval = 0;
+		UInt16 mps = 0;
+
+		kr = (*gIf)->GetPipeProperties(gIf, i, &dir, &num, &type,
+		    &mps, &interval);
+		if (kr != kIOReturnSuccess) {
+			continue;
+		}
+		printf("    pipe %u: ep=0x%02x dir=%s type=%u mps=%u\n", i, num,
+		    dir == kUSBIn ? "IN" : "OUT", type, mps);
+		if (type != kUSBBulk) {
+			continue;
+		}
+		if (dir == kUSBIn && gPipeIn == 0) {
+			gPipeIn = i;
+			gEpIn = num;
+			gMpsIn = mps;
+		} else if (dir == kUSBOut && gPipeOut == 0) {
+			gPipeOut = i;
+			gEpOut = num;
+			gMpsOut = mps;
+		}
+	}
+
+	if (gPipeIn == 0 || gPipeOut == 0) {
+		printf("!! pipe bulk tidak lengkap (in=%u out=%u)\n", gPipeIn,
+		    gPipeOut);
+		return -4;
+	}
+	printf("  bulk: IN ep=0x%02x (pipe %u, mps %u), OUT ep=0x%02x "
+	    "(pipe %u, mps %u)\n", gEpIn, gPipeIn, gMpsIn, gEpOut, gPipeOut,
+	    gMpsOut);
+	return 0;
+}
+
+static void
+close_interface(void)
+{
+	if (gIf) {
+		(*gIf)->USBInterfaceClose(gIf);
+		(*gIf)->Release(gIf);
+		gIf = NULL;
+	}
+}
+
+static int
+bulk_write(const void *buf, uint32_t len, uint32_t timeout_ms)
+{
+	IOReturn kr;
+
+	if (gIf == NULL || gPipeOut == 0) {
+		return -1;
+	}
+	kr = (*gIf)->WritePipeTO(gIf, gPipeOut, (void *)buf, len, 0, timeout_ms);
+	if (kr != kIOReturnSuccess) {
+		printf("    bulk OUT gagal: 0x%08x\n", kr);
+		return -1;
+	}
+	return 0;
+}
+
+static int
+bulk_read(void *buf, uint32_t *len, uint32_t timeout_ms)
+{
+	IOReturn kr;
+
+	if (gIf == NULL || gPipeIn == 0) {
+		return -1;
+	}
+	kr = (*gIf)->ReadPipeTO(gIf, gPipeIn, buf, len, 0, timeout_ms);
+	if (kr == kIOReturnTimeout || kr == kIOUSBTransactionTimeout) {
+		return 1;	/* timeout, bukan error */
+	}
+	if (kr != kIOReturnSuccess) {
+		return -1;
+	}
+	return 0;
+}
+
+/* ── scan M2 ─────────────────────────────────────────────────────────── */
+
+static void
+hexdump(const char *tag, const uint8_t *b, uint32_t n)
+{
+	uint32_t i;
+
+	printf("      %s (%u):", tag, n);
+	for (i = 0; i < n && i < 48; i++) {
+		printf(" %02x", b[i]);
+	}
+	if (n > 48) {
+		printf(" ...");
+	}
+	printf("\n");
+}
+
+/* Apakah frame ini beacon / probe response yang masuk akal? */
+static bool
+looks_like_beacon(const uint8_t *f, uint32_t len)
+{
+	uint32_t n, end;
+	int subtypes;
+
+	if (len < 36) {
+		return false;
+	}
+	if ((f[0] & 0x03) != 0) {	/* version 0 */
+		return false;
+	}
+	if (((f[0] >> 2) & 0x03) != 0) {	/* management */
+		return false;
+	}
+	subtypes = f[0] & 0xf0;
+	if (subtypes != 0x80 && subtypes != 0x50) {
+		return false;
+	}
+
+	/* Body beacon = 24 header + 12 fixed. Elemen mulai di 36. */
+	n = 36;
+	end = len;
+	while (n + 2 <= end) {
+		uint8_t id = f[n];
+		uint8_t elen = f[n + 1];
+		if (n + 2 + elen > end) {
+			return false;
+		}
+		if (id == 0x00 && elen <= 32) {
+			return true;
+		}
+		n += 2 + elen;
+	}
+	return false;
+}
+
+/*
+ * Coba beberapa offset frame di dalam buffer RX.
+ *
+ * Descriptor 24 byte, lalu PHY status (infosz), lalu frame. Vendor
+ * menambahkan 2 byte lain (rfd[0x2F2] + rfd[0x2F3]); kita coba semua
+ * kandidat dan pilih yang benar-benar berisi beacon.
+ */
+static const uint8_t *
+find_frame(const uint8_t *buf, uint32_t len, const rtwn_usb_rxinfo_t *info,
+    uint32_t *foff_out)
+{
+	static const uint32_t extra[] = { 0, 2 };
+	uint32_t base, k;
+	size_t i;
+
+	for (k = 0; k < 2; k++) {
+		base = RTWN_USB_RX_DESC_SIZE + info->infosz + extra[k];
+		if (base > len) {
+			continue;
+		}
+		if (looks_like_beacon(buf + base, len - base)) {
+			*foff_out = base;
+			return buf + base;
+		}
+		/* Kalau descriptor tidak melaporkan infosz, coba tanpa itu. */
+		base = RTWN_USB_RX_DESC_SIZE + extra[k];
+		if (base <= len && looks_like_beacon(buf + base, len - base)) {
+			*foff_out = base;
+			return buf + base;
+		}
+	}
+	(void)i;
+	return NULL;
+}
+
+static void
+print_ssid(const char *ssid, uint8_t len)
+{
+	uint8_t i;
+
+	if (len == 0) {
+		printf("<hidden>");
+		return;
+	}
+	for (i = 0; i < len; i++) {
+		unsigned char c = (unsigned char)ssid[i];
+		if (c >= 0x20 && c < 0x7f) {
+			putchar(c);
+		} else {
+			printf("\\x%02x", c);
+		}
+	}
+}
+
+static int
+run_scan(int ch_start, int ch_end)
+{
+	rtwn_seq_result_t res, ef;
+	uint8_t txdesc[RTWN_USB_TX_DESC_SIZE];
+	uint8_t txbuf[RTWN_USB_TX_DESC_SIZE + 128];
+	uint8_t rbuf[16384];
+	char ssid[33];
+	uint8_t ssid_len, bssid[6];
+	int chan, i, seen = 0, frames = 0, probes = 0;
+	int verbose = 0;
+
+	if (ch_start < 1) ch_start = 1;
+	if (ch_end > 14) ch_end = 14;
+	if (ch_end < ch_start) ch_end = ch_start;
+
+	memset(&res, 0, sizeof(res));
+
+	printf("── Init untuk scan ──\n");
+	if (rtwn_seq_power_on(&res, probe_read, probe_write, NULL) != 0) {
+		printf("  ✗ power-on gagal\n");
+		return -1;
+	}
+	printf("  power-on ✓\n");
+	if (rtwn_seq_dma_init(&res, probe_read, probe_write, NULL, 3) != 0) {
+		printf("  ✗ DMA/LLT gagal\n");
+		return -1;
+	}
+	printf("  DMA/LLT ✓\n");
+	if (rtwn_seq_load_firmware(&res, probe_read, probe_write, NULL,
+	    rtl8188eufw_bin, rtl8188eufw_bin_len) != 0) {
+		printf("  ✗ firmware gagal\n");
+		return -1;
+	}
+	printf("  firmware ✓ (%u byte)\n", res.fwlen);
+
+	/* MAC + xtal dari EFUSE (butuh firmware). */
+	memset(&ef, 0, sizeof(ef));
+	if (rtwn_seq_read_efuse_offload(&ef, probe_read, probe_write, NULL) == 0 &&
+	    ef.efuse_ok) {
+		res.mac[0] = ef.mac[0]; res.mac[1] = ef.mac[1];
+		res.mac[2] = ef.mac[2]; res.mac[3] = ef.mac[3];
+		res.mac[4] = ef.mac[4]; res.mac[5] = ef.mac[5];
+		res.xtal = ef.xtal;
+		printf("  EFUSE ✓ MAC=%02x:%02x:%02x:%02x:%02x:%02x xtal=0x%02x\n",
+		    res.mac[0], res.mac[1], res.mac[2], res.mac[3], res.mac[4],
+		    res.mac[5], res.xtal);
+	} else {
+		printf("  ! EFUSE gagal — pakai MAC default 02:00:00:00:00:01\n");
+		res.mac[0] = 0x02; res.mac[5] = 0x01;
+		res.xtal = 0x20;
+	}
+
+	printf("── MAC/BB/RF init (tabel OpenBSD) ──\n");
+	printf("  MAC: %d register\n",
+	    rtwn_init_mac_8188e(probe_read, probe_write, NULL));
+	printf("  BB : %d register\n",
+	    rtwn_init_bb_8188e(probe_read, probe_write, NULL, res.xtal));
+	printf("  RF : %d register\n",
+	    rtwn_init_rf_8188e(probe_read, probe_write, NULL));
+	printf("  core config: %d\n",
+	    rtwn_core_config_8188e(probe_read, probe_write, NULL, res.mac));
+
+	usleep(20 * 1000);
+
+	printf("── Scan kanal %d..%d ──\n", ch_start, ch_end);
+	for (chan = ch_start; chan <= ch_end; chan++) {
+		size_t flen = 0;
+		uint32_t want;
+
+		if (rtwn_set_chan_8188e(probe_read, probe_write, NULL,
+		    (uint8_t)chan) != 0) {
+			printf("  ch %2d: set kanal gagal\n", chan);
+			continue;
+		}
+		{
+			uint32_t rfv = rtwn_rf_read_8188e(probe_read,
+			    probe_write, NULL, 0, 0x18);
+			printf("  ch %2d  RF18=0x%06x\n", chan, rfv);
+		}
+		usleep(15 * 1000);
+
+		/* Buang paket sisa kanal sebelumnya (RX aggregation). */
+		for (i = 0; i < 4; i++) {
+			uint32_t dl = sizeof(rbuf);
+			if (bulk_read(rbuf, &dl, 20) != 0 || dl == 0) {
+				break;
+			}
+		}
+
+		/* Probe request wildcard (scan semua SSID). */
+		if (!rtwn_build_probe_request(
+		    (const uint8_t *)"\xff\xff\xff\xff\xff\xff", res.mac,
+		    "", 0, (uint8_t)chan, txbuf + RTWN_USB_TX_DESC_SIZE, 128,
+		    &flen)) {
+			printf("  ch %2d: gagal bangun frame\n", chan);
+			continue;
+		}
+		if (!rtwn_usb_build_mgmt_tx_desc(txdesc, sizeof(txdesc),
+		    (uint16_t)flen, true)) {
+			continue;
+		}
+		memcpy(txbuf, txdesc, RTWN_USB_TX_DESC_SIZE);
+
+		if (bulk_write(txbuf, RTWN_USB_TX_DESC_SIZE + (uint32_t)flen,
+		    500) != 0) {
+			printf("  ch %2d: TX gagal\n", chan);
+			continue;
+		}
+		probes++;
+
+		/* Baca hasil selama ±300 ms. */
+		for (i = 0; i < 6; i++) {
+			uint8_t *b = rbuf;
+			uint32_t len = sizeof(rbuf);
+			int rc;
+
+			rc = bulk_read(b, &len, 60);
+			if (rc == 1 || len == 0) {
+				continue;
+			}
+			if (rc < 0) {
+				printf("  ch %2d: RX error\n", chan);
+				break;
+			}
+
+			/* Satu transfer bisa berisi beberapa paket. */
+			want = 0;
+			while (want + RTWN_USB_RX_DESC_SIZE <= len) {
+				rtwn_usb_rxinfo_t info;
+				const uint8_t *f;
+				uint32_t foff = 0, plen;
+
+				if (!rtwn_usb_parse_rx_desc(b + want,
+				    len - want, &info)) {
+					break;
+				}
+				plen = info.pktlen;
+				if (plen == 0 || plen > 3000) {
+					break;
+				}
+				if (verbose < 4) {
+					printf("    rx len=%u pktlen=%u "
+					    "infosz=%u rate=%u crc=%d\n",
+					    len, info.pktlen, info.infosz,
+					    info.rate, info.crcError);
+					hexdump("desc+", b + want,
+					    len - want);
+					verbose++;
+				}
+				f = find_frame(b + want, len - want, &info,
+				    &foff);
+				if (f != NULL) {
+					uint32_t flen2 = len - want - foff;
+					if (verbose < 6) {
+						printf("      frame @%u: "
+						    "%02x %02x %02x %02x | "
+						    "%02x %02x %02x %02x "
+						    "%02x %02x %02x %02x\n",
+						    foff, f[0], f[1], f[2], f[3],
+						    f[4], f[5], f[6], f[7],
+						    f[8], f[9], f[10], f[11]);
+						if (getenv("RTWN_DUMPFRAME") != NULL) {
+							uint32_t z;
+							printf("      RAWFRAME:");
+							for (z = 0; z < flen2 && z < 400; z++)
+								printf(" %02x", f[z]);
+							printf("\n");
+						}
+						verbose++;
+					}
+					frames++;
+					if (rtwn_parse_ssid(f, flen2, ssid,
+					    &ssid_len) &&
+					    rtwn_parse_bssid(f, flen2,
+					    bssid)) {
+						printf("  ch %2d  %02x:%02x:%02x:"
+						    "%02x:%02x:%02x  ", chan,
+						    bssid[0], bssid[1],
+						    bssid[2], bssid[3],
+						    bssid[4], bssid[5]);
+						print_ssid(ssid, ssid_len);
+						printf("\n");
+						seen++;
+					}
+				}
+				want += RTWN_USB_RX_DESC_SIZE + info.infosz +
+				    plen;
+				if (want & 3) {
+					want = (want + 3) & ~3u;
+				}
+			}
+		}
+		usleep(40 * 1000);
+	}
+
+	printf("── Hasil: %d probe TX, %d frame, %d SSID ──\n", probes,
+	    frames, seen);
+	return seen > 0 ? 0 : 1;
+}
+
 static uint32_t hexarg(const char *s)
 {
 	return (uint32_t)strtoul(s, NULL, 0);
@@ -216,7 +730,8 @@ int main(int argc, char **argv)
 {
 	rtwn_seq_result_t res;
 	int doEfuseAll = 0, doFull = 0, doWrite = 0;
-	int doPeek = 0, doPoke = 0, doDump = 0;
+	int doPeek = 0, doPoke = 0, doDump = 0, doScan = 0;
+	int scanCh1 = 1, scanCh2 = 13;
 	uint32_t a1 = 0, a2 = 0;
 	int i, ret = 0;
 
@@ -225,6 +740,16 @@ int main(int argc, char **argv)
 			doEfuseAll = 1;
 		else if (strcmp(argv[i], "--full") == 0) { doEfuseAll = 1; doFull = 1; }
 		else if (strcmp(argv[i], "--write-test") == 0) doWrite = 1;
+		else if (strcmp(argv[i], "--scan") == 0) {
+			doScan = 1;
+			if (i + 1 < argc && argv[i + 1][0] != '-') {
+				scanCh1 = (int)hexarg(argv[++i]);
+				scanCh2 = scanCh1;
+				if (i + 1 < argc && argv[i + 1][0] != '-') {
+					scanCh2 = (int)hexarg(argv[++i]);
+				}
+			}
+		}
 		else if (strcmp(argv[i], "--peek") == 0 && i + 1 < argc) {
 			doPeek = 1; a1 = hexarg(argv[++i]);
 			if (i + 1 < argc && argv[i + 1][0] != '-') a2 = hexarg(argv[++i]);
@@ -244,6 +769,17 @@ int main(int argc, char **argv)
 	}
 
 	memset(&res, 0, sizeof(res));
+
+	/* ── scan M2 ────────────────────────────────────────────────── */
+	if (doScan) {
+		if (open_interface() != 0) {
+			ret = 1;
+			goto done;
+		}
+		ret = run_scan(scanCh1, scanCh2);
+		close_interface();
+		goto done;
+	}
 
 	/* ── mode mentah ────────────────────────────────────────────── */
 	if (doPeek) {

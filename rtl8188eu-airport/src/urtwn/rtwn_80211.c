@@ -132,6 +132,7 @@ rtwn_parse_ssid(const uint8_t *frame, size_t frame_len, char *ssid_out,
 {
 	size_t n;
 	size_t end;
+	uint8_t subtype;
 
 	if (!frame || !ssid_out || !ssid_len) {
 		return false;
@@ -145,7 +146,18 @@ rtwn_parse_ssid(const uint8_t *frame, size_t frame_len, char *ssid_out,
 		return false;
 	}
 
-	n = 24;
+	/*
+	 * Beacon (0x80) dan Probe Response (0x50) punya 12 byte field
+	 * tetap (timestamp 8 + interval 2 + capability 2) sebelum elemen.
+	 * Probe Request (0x40) dan frame mgmt lain langsung elemen.
+	 */
+	subtype = frame[0] & 0xf0;
+	if (subtype == 0x80 || subtype == 0x50) {
+		n = 24 + 12;
+	} else {
+		n = 24;
+	}
+
 	end = frame_len;
 
 	while (n + 2 <= end) {

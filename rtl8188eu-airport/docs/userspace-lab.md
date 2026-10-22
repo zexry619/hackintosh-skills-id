@@ -107,22 +107,29 @@ Lalu `--efuse-all`:
 
 ---
 
-## 5. Yang bisa diuji berikutnya (tanpa reboot)
+## 5. Scan 802.11 (M2) — ✅ terbukti
 
-| Komponen | Fungsi | Bisa dari user space? |
+Bulk pipe sudah didukung. Perintah:
+
+```bash
+sudo ./tools/rtwn_probe --scan 1 13     # semua kanal 2,4 GHz
+sudo ./tools/rtwn_probe --scan 6        # satu kanal
+sudo env RTWN_DUMPFRAME=1 ./tools/rtwn_probe --scan 6 6   # dump frame
+```
+
+Hasil nyata (22 Okt 2026): probe request terkirim, beacon/probe response
+diterima, SSID terbaca (ZEKRI.NET, KUSUMU, RIYAN, Ramodal, Sutopo, Vii, …).
+
+Detail arsitektur, format descriptor, dan bug yang diperbaiki ada di
+[`m2-scan.md`](m2-scan.md).
+
+| Komponen | Fungsi | Status |
 |---|---|---|
-| EFUSE | `rtwn_seq_read_efuse_offload` | ✅ sudah |
+| EFUSE | `rtwn_seq_read_efuse_offload` | ✅ |
 | HAL tables | `rtwn_hal_apply_table` | ✅ (register write) |
-| Set kanal | `rtwn_set_chan_8188e` | ✅ (RF write) |
-| TX/RX 802.11 | `rtwn_build_probe_request` | ⚠️ butuh bulk pipe |
-| Scan | beacon RX | ⚠️ butuh bulk pipe + DMA |
-
-Untuk TX/RX perlu menambah dukungan **bulk transfer** di probe
-(`IOUSBInterfaceInterface` → `ReadPipe`/`WritePipe`), ditambah init
-queue/DMA. Itu langkah berikutnya — tapi sekarang bisa diiterasi tanpa
-reboot.
-
----
+| Set kanal | `rtwn_set_chan_8188e` | ✅ (RF18 berubah per kanal) |
+| TX/RX 802.11 | `rtwn_usb_build_mgmt_tx_desc` + bulk | ✅ |
+| Scan | beacon RX + parser SSID | ✅ |
 
 ## 6. Catatan keamanan
 

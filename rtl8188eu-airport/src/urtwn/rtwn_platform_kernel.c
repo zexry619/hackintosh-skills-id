@@ -24,4 +24,23 @@ void rtwn_sleep_ms(uint32_t ms)
 	IOSleep(ms);
 }
 
+/*
+ * Delay mikrodetik untuk timing register RF/LSSI.
+ *
+ * Untuk < 1 ms dipakai IODelay() — busy-wait singkat (≤ 50 µs) memang
+ * diperlukan agar urutan akses RF tidak digeser penjadwal. Untuk nilai
+ * besar tetap pakai IOSleep() agar tidak memblok CPU.
+ */
+void rtwn_delay_us(uint32_t us)
+{
+	if (us == 0) {
+		return;
+	}
+	if (us >= 1000) {
+		IOSleep(us / 1000);
+		return;
+	}
+	IODelay(us);
+}
+
 #endif /* KERNEL */

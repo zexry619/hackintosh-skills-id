@@ -57,6 +57,23 @@ bool rtwn_usb_build_tx_desc(uint8_t *desc, uint16_t desclen, uint16_t pktlen,
     uint16_t offset, bool isBroadcast, bool isData, uint8_t raid,
     bool useCts, bool useRts, uint8_t ackRate);
 
+/*
+ * Bangun descriptor TX untuk frame MANAGEMENT (probe request, auth, ...).
+ *
+ * Mengikuti urtwn_tx_fill_desc() cabang non-data:
+ *   - QSEL = MGNT (0x12), RAID = 11B (6), MACID = 0
+ *   - DRVRATE + DATARATE CCK1 (0) — paling andal untuk scan
+ *   - HWSEQ (nomor urut diisi hardware)
+ *
+ * Checksum descriptor dihitung dan ditulis ke word 14 (byte 28).
+ */
+bool rtwn_usb_build_mgmt_tx_desc(uint8_t *desc, uint16_t desclen,
+    uint16_t pktlen, bool broadcast);
+
+/* Hitung checksum descriptor USB (XOR 16 word pertama, simpan di word 14). */
+void rtwn_usb_tx_checksum(uint8_t *desc, uint16_t desclen);
+
+
 /* Parse descriptor RX 8188E. */
 bool rtwn_usb_parse_rx_desc(const uint8_t *buf, uint32_t bufLen,
     rtwn_usb_rxinfo_t *info);

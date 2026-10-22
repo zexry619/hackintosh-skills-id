@@ -100,11 +100,94 @@ bool rtwn_usb_build_tx_desc(uint8_t *desc, uint16_t desclen, uint16_t pktlen,
 }
 
 /*
+ * Bangun descriptor TX untuk frame management.
+ *
+ * Layout descriptor 32 byte (r92c_tx_desc_usb):
+ *   0  txdw0   PKTLEN | OFFSET=32 | OWN | FSG | LSG | BMCAST
+ *   4  txdw1   MACID=0 | QSEL=MGNT | RAID=11B
+ *   8  txdw2   0
+ *   12 txdw3   0
+ *   14 txdseq  HWSEQEN (0x8000)
+ *   16 txdw4   DRVRATE | HWSEQ
+ *   20 txdw5   DATARATE = 0 (CCK 1 Mb/s)
+ *   28 txdsum  checksum
+ */
+bool
+rtwn_usb_build_mgmt_tx_desc(uint8_t *desc, uint16_t desclen, uint16_t pktlen,
+    bool broadcast)
+{
+	uint32_t dw0 = 0, dw1 = 0, dw4 = 0;
+	uint16_t seq = 0x8000;	/* R92C_TXDW3_HWSEQEN */
+
+	if (!desc || desclen < RTWN_USB_TX_DESC_SIZE) {
+		return false;
+	}
+	memset(desc, 0, RTWN_USB_TX_DESC_SIZE);
+
+	dw0 = (uint32_t)(pktlen & 0xffff);
+	dw0 |= (uint32_t)RTWN_USB_TX_DESC_SIZE << 16;	/* OFFSET */
+	dw0 |= 0x80000000u;	/* OWN  */
+	dw0 |= 0x08000000u;	/* FSG  */
+	dw0 |= 0x04000000u;	/* LSG  */
+	if (broadcast) {
+		dw0 |= 0x01000000u;	/* BMCAST */
+	}
+
+	dw1 = (uint32_t)(0x12u << 8);		/* QSEL = MGNT */
+	dw1 |= (uint32_t)(0x06u << 16);		/* RAID = 11B */
+
+	dw4 = 0x00000100u | 0x00000080u;	/* DRVRATE | HWSEQ */
+
+	desc[0] = (uint8_t)(dw0 & 0xff);
+	desc[1] = (uint8_t)((dw0 >> 8) & 0xff);
+	desc[2] = (uint8_t)((dw0 >> 16) & 0xff);
+	desc[3] = (uint8_t)((dw0 >> 24) & 0xff);
+	desc[4] = (uint8_t)(dw1 & 0xff);
+	desc[5] = (uint8_t)((dw1 >> 8) & 0xff);
+	desc[6] = (uint8_t)((dw1 >> 16) & 0xff);
+	desc[7] = (uint8_t)((dw1 >> 24) & 0xff);
+	desc[14] = (uint8_t)(seq & 0xff);
+	desc[15] = (uint8_t)((seq >> 8) & 0xff);
+	desc[16] = (uint8_t)(dw4 & 0xff);
+	desc[17] = (uint8_t)((dw4 >> 8) & 0xff);
+	desc[18] = (uint8_t)((dw4 >> 16) & 0xff);
+	desc[19] = (uint8_t)((dw4 >> 24) & 0xff);
+
+	rtwn_usb_tx_checksum(desc, RTWN_USB_TX_DESC_SIZE);
+	return true;
+}
+
+/*
+ * Checksum descriptor TX: XOR seluruh 16 word pertama, hasil di word 14.
+ * (OpenBSD if_urtwn.c:1683)
+ */
+void
+rtwn_usb_tx_checksum(uint8_t *desc, uint16_t desclen)
+{
+	uint16_t sum = 0;
+	int i;
+
+	if (!desc || desclen < RTWN_USB_TX_DESC_SIZE) {
+		return;
+	}
+	for (i = 0; i < 16; i++) {
+		uint16_t w = (uint16_t)desc[i * 2] |
+		    ((uint16_t)desc[i * 2 + 1] << 8);
+		if (i == 14) {
+			w = 0;	/* field checksum sendiri = 0 saat hitung */
+		}
+		sum ^= w;
+	}
+	desc[28] = (uint8_t)(sum & 0xff);
+	desc[29] = (uint8_t)((sum >> 8) & 0xff);
+}
+
+/*
  * Parse descriptor RX 8188E.
  *
  * rxdw0: PKTLEN(0-13) | CRCERR(14) | ICVERR(15) | INFOSZ(16-19) | PHYST(20)
  * rxdw3: RATE(0-4) | …
- * Header total = 24 byte + 2 byte.
+ * Header = 24 byte descriptor + INFOSZ byte PHY status.
  */
 bool rtwn_usb_parse_rx_desc(const uint8_t *buf, uint32_t bufLen,
     rtwn_usb_rxinfo_t *info)

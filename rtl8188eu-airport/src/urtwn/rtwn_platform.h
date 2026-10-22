@@ -41,17 +41,21 @@
  * dipakai thread lain.
  */
 void rtwn_sleep_ms(uint32_t ms);
+void rtwn_delay_us(uint32_t us);
 
 #define RTWN_DELAY_MS(ms) rtwn_sleep_ms((uint32_t)(ms))
+#define RTWN_DELAY_US(us) rtwn_delay_us((uint32_t)(us))
 
 #elif defined(__APPLE__)
 
 #include <unistd.h>
 #define RTWN_DELAY_MS(ms) usleep((useconds_t)((ms) * 1000))
+#define RTWN_DELAY_US(us) usleep((useconds_t)(us))
 
 #else
 
 #define RTWN_DELAY_MS(ms) ((void)(ms))
+#define RTWN_DELAY_US(us) ((void)(us))
 
 #endif
 

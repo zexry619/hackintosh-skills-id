@@ -14,7 +14,7 @@ io.open('/tmp/fw_as_c.c', 'w', encoding='utf-8').write(src)
 PY
 
 clang -O2 -o tools/rtwn_probe \
-	tools/rtwn_probe.c src/urtwn/rtwn_seq.c src/urtwn/rtwn_seq_efuse.c src/urtwn/rtwn_flow.c src/urtwn/rtwn_efuse_8188e.c src/urtwn/rtwn_usb.c /tmp/fw_as_c.c \
+	tools/rtwn_probe.c src/urtwn/rtwn_seq.c src/urtwn/rtwn_seq_efuse.c src/urtwn/rtwn_flow.c src/urtwn/rtwn_efuse_8188e.c src/urtwn/rtwn_usb.c src/urtwn/rtwn_init_8188e.c src/urtwn/rtwn_chan.c src/urtwn/rtwn_80211.c /tmp/fw_as_c.c \
 	-Isrc/urtwn \
 	-framework IOKit -framework CoreFoundation
 echo "[probe] OK → tools/rtwn_probe"

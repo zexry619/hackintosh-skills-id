@@ -84,32 +84,66 @@ static void test_beacon_parse(void)
 	uint8_t slen = 0;
 	uint8_t bssid[6];
 	const char *net = "TokoWiFi";
+	size_t el;
 
 	printf("\n── Beacon: parser SSID & BSSID ──\n");
 
-	/* Bangun beacon manual: header mgmt + SSID element */
+	/*
+	 * Beacon nyata: header 24 byte + field tetap 12 byte
+	 * (timestamp 8, interval 2, capability 2) + elemen.
+	 * Offset 36 inilah yang salah sebelumnya (dulu 24).
+	 */
 	memset(beacon, 0, sizeof(beacon));
 	beacon[0] = 0x80;		/* mgmt / beacon */
 	beacon[1] = 0x00;
 	memcpy(beacon + 4, bcast, 6);
 	memcpy(beacon + 10, src_mac, 6);
 	memcpy(beacon + 16, src_mac, 6);	/* BSSID = src */
-	beacon[24] = 0x00;		/* SSID element */
-	beacon[25] = (uint8_t)strlen(net);
-	memcpy(beacon + 26, net, strlen(net));
-	beacon[26 + strlen(net)] = 0x01;	/* Supported rates (dipotros) */
-	beacon[27 + strlen(net)] = 0x04;
-	blen = 28 + strlen(net) + 4;
+	beacon[32] = 0x64;		/* beacon interval 100 */
+	beacon[34] = 0x31;		/* capability: ESS */
+	beacon[35] = 0x04;
+	el = 36;
+	beacon[el++] = 0x00;		/* SSID element */
+	beacon[el++] = (uint8_t)strlen(net);
+	memcpy(beacon + el, net, strlen(net));
+	el += strlen(net);
+	beacon[el++] = 0x01;		/* Supported rates */
+	beacon[el++] = 0x04;
+	beacon[el++] = 0x82; beacon[el++] = 0x84;
+	beacon[el++] = 0x8b; beacon[el++] = 0x96;
+	blen = el;
 
 	CHECK(rtwn_parse_ssid(beacon, blen, ssid, &slen), "SSID ditemukan");
 	CHECK(slen == strlen(net) && strcmp(ssid, net) == 0, "isi SSID benar");
 	CHECK(rtwn_parse_bssid(beacon, blen, bssid), "BSSID diambil");
 	CHECK(memcmp(bssid, src_mac, 6) == 0, "BSSID benar");
+
+	/* Probe response: layout fixed 12 byte sama seperti beacon. */
+	beacon[0] = 0x50;
+	CHECK(rtwn_parse_ssid(beacon, blen, ssid, &slen), "probe response: SSID ditemukan");
+	CHECK(slen == strlen(net) && strcmp(ssid, net) == 0,
+	    "probe response: isi SSID benar");
+}
+
+static void test_probe_request_parse(void)
+{
+	uint8_t buf[128];
+	size_t len = 0;
+	char ssid[33];
+	uint8_t slen = 0;
+
+	printf("\n── Probe request: parser (tanpa field tetap) ──\n");
+
+	CHECK(rtwn_build_probe_request(bcast, src_mac, "ScanMe", 6, 1, buf,
+	    sizeof(buf), &len), "frame terbangun");
+	CHECK(rtwn_parse_ssid(buf, len, ssid, &slen),
+	    "SSID dibaca dari probe request (body mulai offset 24)");
+	CHECK(slen == 6 && strcmp(ssid, "ScanMe") == 0, "isi SSID benar");
 }
 
 static void test_parse_edges(void)
 {
-	uint8_t beacon[64];
+	uint8_t beacon[96];
 	char ssid[33];
 	uint8_t slen = 0;
 
@@ -121,21 +155,29 @@ static void test_parse_edges(void)
 	/* frame terlalu pendek */
 	CHECK(!rtwn_parse_ssid(beacon, 10, ssid, &slen), "frame pendek DITOLAK");
 
-	/* element terpotong (len lebih besar dari sisa frame) */
-	beacon[24] = 0x00;
-	beacon[25] = 0x20;		/* klaim 32 byte SSID */
-	CHECK(!rtwn_parse_ssid(beacon, 30, ssid, &slen),
+	/* element terpotong: SSID klaim 32 byte, frame cuma 40 */
+	beacon[36] = 0x00;
+	beacon[37] = 0x20;
+	CHECK(!rtwn_parse_ssid(beacon, 40, ssid, &slen),
 	    "element terpotong DITOLAK");
 
 	/* bukan frame management → ditolak */
 	beacon[0] = 0x08;		/* type = data */
-	CHECK(!rtwn_parse_ssid(beacon, 40, ssid, &slen), "frame non-management DITOLAK");
+	CHECK(!rtwn_parse_ssid(beacon, 60, ssid, &slen), "frame non-management DITOLAK");
 
 	/* tanpa SSID → ditolak (tidak ada elemen 0x00) */
 	beacon[0] = 0x80;
-	beacon[24] = 0x01;		/* supported rates, bukan SSID */
-	beacon[25] = 0x02;
-	CHECK(!rtwn_parse_ssid(beacon, 28, ssid, &slen), "tanpa SSID → tidak ditemukan");
+	beacon[36] = 0x01;		/* supported rates, bukan SSID */
+	beacon[37] = 0x02;
+	beacon[38] = 0x82;
+	beacon[39] = 0x84;
+	CHECK(!rtwn_parse_ssid(beacon, 40, ssid, &slen), "tanpa SSID → tidak ditemukan");
+
+	/* SSID tersembunyi (length 0) → dianggap valid, panjang 0 */
+	beacon[36] = 0x00;
+	beacon[37] = 0x00;
+	CHECK(rtwn_parse_ssid(beacon, 40, ssid, &slen), "SSID hidden diterima");
+	CHECK(slen == 0, "SSID hidden panjang 0");
 }
 
 int main(void)
@@ -145,6 +187,7 @@ int main(void)
 	test_probe_request();
 	test_probe_request_bounds();
 	test_beacon_parse();
+	test_probe_request_parse();
 	test_parse_edges();
 
 	printf("\n%s\n", fails == 0 ? "✅ semua uji lulus" : "❌ ada kegagalan");

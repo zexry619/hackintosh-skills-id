@@ -919,7 +919,7 @@ Lihat [`userspace-lab.md`](userspace-lab.md).
 | M1 — chip hidup (power-on, LLT, firmware) | ✅ |
 | M1c — MAC/xtal dari EFUSE | ✅ **22 Okt 2026** |
 | M1d — HAL tables (2.446 entri) | ✅ siap (belum dijalankan di chip) |
-| M2 — scan (probe request + RX beacon) | 🟡 kode siap, perlu bulk pipe di lab |
+| M2 — scan (probe request + RX beacon) | ✅ **22 Okt 2026 — terbukti di hardware** |
 | M3 — assoc/WPA2 | ⬜ |
 | M4 — integrasi IO80211 | 🟡 peta + template `upstream/Airport_RTW88` |
 
@@ -929,3 +929,57 @@ Lihat [`userspace-lab.md`](userspace-lab.md).
 - **DIRECT = cadangan** — kadang gagal 1 byte (flaky); jangan dijadikan
   satu-satunya sumber.
 - `MACID` register `0x610` = `00:00:00:00:00:00` (kosong; bukan sumber MAC).
+
+
+---
+
+## 17. ⭐⭐ M2 **SELESAI** — scan 802.11 nyata dari user space (22 Okt 2026)
+
+**Hasil:** `sudo ./tools/rtwn_probe --scan 1 13` mengirim probe request lewat
+bulk OUT dan menerima beacon/probe response lewat bulk IN. SSID nyata terbaca:
+
+```
+ch  1  90:56:de:46:a7:24  ZEKRI.NET
+ch  1  28:6e:da:06:4e:18  Homesans
+ch  4  50:5b:1d:b6:0c:32  KUSUMA
+ch  5  a4:f3:3b:14:d9:b4  Qurha.com
+ch  6  24:46:e4:e2:cd:cc  RIYAN
+ch  7  0c:37:47:9c:62:77  Ramodal
+ch  9  50:5b:1d:b6:ab:fa  Sutopo
+ch 11  a6:d9:90:4d:91:33  Vii
+```
+
+TX terbukti (bukan hanya mendengar pasif): probe response tertangkap dengan
+`addr1 = 98:03:8e:9e:bc:24` (MAC kita), `addr2` = BSSID AP.
+
+### Yang ditambahkan
+
+| File | Isi |
+|---|---|
+| `src/urtwn/rtwn_init_8188e.{h,c}` | init MAC (91 reg) + BB/AGC (320 reg) + RF chain 0 (91 reg) + core config, semua dari tabel OpenBSD `r92creg.h` |
+| `src/urtwn/rtwn_usb.c` | `rtwn_usb_build_mgmt_tx_desc` (QSEL=MGNT, RAID=11B, HWSEQ, DRVRATE) + `rtwn_usb_tx_checksum` |
+| `tools/rtwn_probe.c` | buka `IOUSBInterface`, pipe bulk IN/OUT, `--scan [ch1] [ch2]`, dump frame |
+| `src/urtwn/rtwn_platform.h` | `RTWN_DELAY_US` (LSSI butuh timing µs) |
+
+### Bug yang diperbaiki
+
+1. **Parser SSID** — elemen beacon mulai offset **36** (24 header + 12 field
+   tetap), bukan 24. Probe request tetap 24.
+2. **Checksum descriptor TX** — XOR 16 word pertama, simpan di word 14.
+3. **Offset frame RX** — pakai `infosz` dari descriptor (nyata: 32), frame
+   mulai 24+32 = 56. Satu transfer bisa berisi beberapa paket (agregasi).
+4. **Sisa paket kanal lama** — drain bulk IN setelah ganti kanal.
+
+### ⚠️ Risiko: dongle lepas dari bus
+
+Saat uji berulang, macOS mencatat
+`AppleUSBHostPort::terminateDevice ... hardware connection lost`.
+Perangkat hilang dari bus (bukan panic). Dugaan: TX power default terlalu
+tinggi (tabel `phy_reg_pg`/`txpwr_lmt` belum diterapkan) atau firmware
+di-upload ulang setiap run. Mitigasi ada di `docs/m2-scan.md` §5.
+Sementara: jangan scan berulang tanpa jeda; siapkan colok ulang fisik.
+
+### Rujukan
+
+- [`m2-scan.md`](m2-scan.md) — arsitektur, format descriptor, bukti, risiko.
+- [`userspace-lab.md`](userspace-lab.md) §5 — cara pakai.

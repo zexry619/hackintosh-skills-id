@@ -1,8 +1,11 @@
 # LANJUTKAN PROYEK INI — panduan cepat
 
-**Status (22 Okt 2026, sore):** **M1c SELESAI** — MAC terbaca dari chip:
-`98:03:8e:9e:bc:24`, xtal `0x2f`, channel_plan `0xa1`.
-M1 (chip hidup) + M1d (HAL tables) + M2 kode (802.11/kanal) siap.
+**Status (22 Okt 2026, malam):** **M2 SELESAI & TERBUKTI DI HARDWARE.**
+Scan 802.11 dari user space berjalan: probe request TX, beacon/probe response
+RX, SSID terbaca (ZEKRI.NET, RIYAN, Ramodal, Sutopo, Vii, …).
+
+M1 (chip hidup) ✅ · M1c (MAC/xtal dari EFUSE) ✅ · M2 (scan) ✅
+Berikutnya: M3/M4 (integrasi IO80211).
 
 **Terobosan metode:** `tools/rtwn_probe` sekarang bisa membuka device dari
 **user space** (API IOKit yang benar). Iterasi jadi hitungan detik —
@@ -11,6 +14,7 @@ M1 (chip hidup) + M1d (HAL tables) + M2 kode (802.11/kanal) siap.
 ```bash
 sudo ./tools/rtwn_probe --efuse-all     # MAC + diagnostik lengkap
 sudo ./tools/rtwn_probe --full          # power-on + LLT + firmware
+sudo ./tools/rtwn_probe --scan 1 13     # scan 2,4 GHz (M2)
 sudo ./tools/rtwn_probe --peek 0x610 6  # baca register mentah
 ```
 
@@ -20,8 +24,10 @@ sudo ./tools/rtwn_probe --peek 0x610 6  # baca register mentah
 2. Parser EFUSE: `ri++` ganda + bit mask SET berarti **ABSENT (0 byte)**,
    bukan 1 byte.
 
-**Langkah berikutnya:** tambahkan bulk pipe ke `rtwn_probe` → uji M2
-(TX probe request, RX beacon) dari user space, lalu integrasi IO80211 (M4).
+**Langkah berikutnya:** integrasi M4 — hasil scan M2 disambungkan ke
+`IO80211Controller`/AirportItlwm agar interface muncul di menu Wi-Fi.
+Risiko terbuka: dongle pernah lepas dari bus (`hardware connection lost`)
+→ perlu batas TX power + quiesce sebelum uji berulang (lihat `docs/m2-scan.md` §5).
 
 **Rujukan:** `docs/HANDOVER.md` §16, `docs/userspace-lab.md`,
 `docs/re-8188e-efuse.md` §4b/§4c.
@@ -128,7 +134,7 @@ varian UJI (bug yang sudah diperbaiki 22 Okt).
 | **M1** | power-on + DMA + firmware + bulk pipe | ✅ (MAC dari EFUSE belum) |
 | **M1c** | MAC + xtal dari EFUSE | ⏳ (offload harus jalan setelah firmware) |
 | **M1d** | HAL init lengkap vendor (langkah #11–#42: RDG, InitHalDm, FW_InitializeHALVars, PHY_MACConfig, PHY_BBConfig, PHY_RFConfig8188E, InitQueueReservedPage, _InitTxBufferBoundary, …) | ⬜ **TERBESAR** |
-| **M2** | bulk TX/RX: kirim probe request, terima beacon, baca SSID | ⬜ kode ada, belum tervalidasi |
+| **M2** | bulk TX/RX: kirim probe request, terima beacon, baca SSID | ✅ **terbukti 22 Okt 2026** |
 | **M3a** | net80211 scan | ⬜ |
 | **M3b** | net80211 join + WPA2 | ⬜ |
 | **M4** | IO80211 interface → menu Wi-Fi native | ⬜ |
