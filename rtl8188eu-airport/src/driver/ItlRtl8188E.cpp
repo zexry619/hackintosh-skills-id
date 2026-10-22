@@ -428,6 +428,8 @@ void ItlRtl8188E::detach(IOPCIDevice *device)
 	}
 	fBulkReady = false;
 	stopChip();
+	if (fIc.ic_event_handler)
+		fIc.ic_event_handler(&fIc, IEEE80211_EVT_DRIVER_STOPPED, NULL);
 	fEnabled = false;
 }
 
@@ -443,8 +445,16 @@ IOReturn ItlRtl8188E::enable(IONetworkInterface *interface)
 	fEnabled = true;
 	fRxRunning = true;
 	setDiag("RTL8188E-stage", "enabled");
+
+	if (fIc.ic_event_handler)
+		fIc.ic_event_handler(&fIc, IEEE80211_EVT_DRIVER_RESET_BEGIN, NULL);
+
 	if (fIc.ic_state == IEEE80211_S_INIT)
 		ieee80211_new_state(&fIc, IEEE80211_S_SCAN, -1);
+
+	if (fIc.ic_event_handler)
+		fIc.ic_event_handler(&fIc, IEEE80211_EVT_DRIVER_READY, NULL);
+
 	return kIOReturnSuccess;
 }
 
@@ -464,6 +474,10 @@ IOReturn ItlRtl8188E::disable(IONetworkInterface *interface)
 		timeout_del(&fScanTo);
 	if (fIc.ic_state != IEEE80211_S_INIT)
 		ieee80211_new_state(&fIc, IEEE80211_S_INIT, -1);
+
+	if (fIc.ic_event_handler)
+		fIc.ic_event_handler(&fIc, IEEE80211_EVT_DRIVER_STOPPED, NULL);
+
 	return kIOReturnSuccess;
 }
 

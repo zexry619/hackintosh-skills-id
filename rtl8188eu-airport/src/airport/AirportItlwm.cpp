@@ -281,7 +281,7 @@ initCCLogs()
 bool AirportItlwm::start(IOService *provider)
 {
 #if __IO80211_TARGET == __MAC_15_2
-    if (version_major != 24 || version_minor < 2)
+    if (version_major < 24 || (version_major == 24 && version_minor < 2))
         return false;
 #endif
     XYLog("%s\n", __PRETTY_FUNCTION__);
