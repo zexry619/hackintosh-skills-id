@@ -87,6 +87,21 @@ public:
 	char         fFirmwareVersion[32];
 	char         fCountryCode[8];
 
+	/*
+	 * Penghitung diagnostik. Dipublikasikan sebagai properti ioreg
+	 * (RTL8188E-stat) supaya satu reboot langsung memberi jawaban:
+	 * frame data benar-benar dikirim? EAPOL masuk/keluar? enkripsi gagal?
+	 */
+	uint32_t     fTxMgmt;
+	uint32_t     fTxData;
+	uint32_t     fTxEapol;
+	uint32_t     fTxFail;
+	uint32_t     fRxMgmt;
+	uint32_t     fRxData;
+	uint32_t     fRxEapol;
+	uint32_t     fEncryptFail;
+	void publishStats(void);
+
 	/* net80211 */
 	struct ieee80211com fIc;
 	CTimeout           *fScanTo;

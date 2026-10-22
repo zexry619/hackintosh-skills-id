@@ -531,6 +531,19 @@ void ItlRtl8188E::setDiag(const char *key, const char *value)
 		provider->setProperty(key, value);
 }
 
+void ItlRtl8188E::publishStats(void)
+{
+	char s[192];
+
+	snprintf(s, sizeof(s),
+	    "txm=%u txd=%u txe=%u txf=%u rxm=%u rxd=%u rxe=%u encf=%u pipe=%d",
+	    (unsigned)fTxMgmt, (unsigned)fTxData, (unsigned)fTxEapol,
+	    (unsigned)fTxFail, (unsigned)fRxMgmt, (unsigned)fRxData,
+	    (unsigned)fRxEapol, (unsigned)fEncryptFail,
+	    fChip.usb.txPipeCount());
+	setDiag("RTL8188E-stat", s);
+}
+
 void ItlRtl8188E::setChannel(struct ieee80211_channel *chan)
 {
 	if (!chan)
@@ -655,6 +668,8 @@ void ItlRtl8188E::scanTimeoutCb(void *arg)
  */
 void ItlRtl8188E::watchdogCb(struct _ifnet *ifp)
 {
+	ItlRtl8188E *me = ifp ? (ItlRtl8188E *)ifp->if_softc : nullptr;
+
 	/*
 	 * Bukan sekadar membersihkan if_timer: net80211 memakai watchdog
 	 * ini untuk retry auth/assoc dan memaksa scan ulang kalau AP diam.
@@ -662,6 +677,10 @@ void ItlRtl8188E::watchdogCb(struct _ifnet *ifp)
 	 */
 	if (ifp)
 		ieee80211_watchdog(ifp);
+
+	/* Satu kali per detik: publikasikan penghitung ke ioreg. */
+	if (me)
+		me->publishStats();
 }
 
 /* ------------------------------------------------------------------ */
@@ -749,6 +768,7 @@ void ItlRtl8188E::sendFrame(mbuf_t m, struct ieee80211_node *ni, bool isMgmt)
 				 * ieee80211_encrypt() sudah membebaskan m
 				 * (baik sukses maupun gagal). Jangan free lagi.
 				 */
+				fEncryptFail++;
 				if (ni)
 					ieee80211_release_node(&fIc, ni);
 				return;
@@ -763,85 +783,133 @@ void ItlRtl8188E::sendFrame(mbuf_t m, struct ieee80211_node *ni, bool isMgmt)
 		size_t llcOff = (wh[0] & IEEE80211_FC0_SUBTYPE_QOS) ? 26 : 24;
 		if (len >= llcOff + 8) {
 			uint16_t et = ((uint16_t)wh[llcOff + 6] << 8) | wh[llcOff + 7];
-			if (et == 0x888e)
+			if (et == 0x888e) {
+				fTxEapol++;
 				IOLog(LOGP "TX EAPOL handshake frame (len %u)\n", (unsigned)len);
+			}
 		}
 	}
 
 	bcast = IEEE80211_IS_MULTICAST(wh + 4);
 	raid = 6;	/* RAID 11B — terbukti di M2 */
 
-	total = RTWN_USB_TX_DESC_SIZE + len;
-	buf = (uint8_t *)IOMalloc(total);
-	if (!buf) {
-		mbuf_freem(m);
-		if (ni)
-			ieee80211_release_node(&fIc, ni);
-		return;
-	}
+	/*
+	 * Pilih queue TX (dan bulk-out pipe) sesuai access category.
+	 *
+	 * 8188EU memetakan endpoint USB ke queue hardware: 0 = VO/mgmt,
+	 * 1 = VI, 2 = BE/BK. Sebelumnya semua frame — termasuk data —
+	 * dikirim lewat pipe 0 dengan QSEL=BE. Chip memasukkannya ke queue
+	 * mgmt, sehingga frame data tidak pernah keluar dan DHCP selalu
+	 * "no server". Ini yang diperbaiki di sini.
+	 */
+	{
+		uint8_t qsel = 0x00;	/* BE */
+		int pipe = 2;
 
-	if (isMgmt) {
-		rtwn_usb_build_mgmt_tx_desc(buf, RTWN_USB_TX_DESC_SIZE, (uint16_t)len,
-		    bcast);
-	} else {
-		bool qos = (wh[0] & IEEE80211_FC0_SUBTYPE_QOS) != 0;
-		uint16_t seq = ((uint16_t)wh[22] |
-		    ((uint16_t)wh[23] << 8)) >> IEEE80211_SEQ_SEQ_SHIFT;
+		if (isMgmt) {
+			qsel = 0x12;	/* MGNT */
+			pipe = 0;
+		} else if (wh[0] & IEEE80211_FC0_SUBTYPE_QOS) {
+			uint8_t tid = wh[24] & 0x0f;
 
-		rtwn_usb_build_tx_desc(buf, RTWN_USB_TX_DESC_SIZE, (uint16_t)len,
-		    RTWN_USB_TX_DESC_SIZE, bcast, true, raid, false, false, 0);
-		/*
-		 * Layout r92c_tx_desc_usb:
-		 *   12 txdw3 (16 bit)  14 txdseq  16 txdw4  20 txdw5
-		 * DRVRATE/HWSEQ ada di txdw4, BUKAN txdw3. Samakan dengan
-		 * mgmt builder yang sudah terbukti di M2.
-		 */
-		if (qos) {
-			/* QoS: nomor urut dari net80211 (field 12 bit). */
-			buf[14] = (uint8_t)(seq & 0xff);
-			buf[15] = (uint8_t)((seq >> 8) & 0xff);
-			buf[16] = 0x40;	/* QOS */
-			buf[17] = 0x01;	/* DRVRATE */
-		} else {
-			/* Non-QoS: chip yang memberi nomor urut. */
-			buf[14] = 0x00;
-			buf[15] = 0x80;	/* txdseq: HWSEQEN */
-			buf[16] = 0x80;	/* HWSEQ */
-			buf[17] = 0x01;	/* DRVRATE */
+			if (tid >= 1 && tid <= 2) {
+				qsel = 0x02;	/* BK */
+				pipe = 2;
+			} else if (tid >= 4 && tid <= 5) {
+				qsel = 0x05;	/* VI */
+				pipe = 1;
+			} else if (tid >= 6) {
+				qsel = 0x07;	/* VO */
+				pipe = 0;
+			}
 		}
-		buf[18] = 0x00;
-		buf[19] = 0x00;
-		/* txdw5: DATARATE=0 → CCK 1 Mb/s; tanpa SGI. */
-		buf[20] = 0x00;
-		buf[21] = 0x00;
-		buf[22] = 0x00;
-		buf[23] = 0x00;
-		/*
-		 * CCX_RPT dimatikan: kita belum memproses laporan TX (C2H),
-		 * dan laporan itu bisa disalahartikan sebagai frame 802.11.
-		 * AGGBK tetap. */
-		buf[10] &= (uint8_t)~0x08;
-		rtwn_usb_tx_checksum(buf, RTWN_USB_TX_DESC_SIZE);
-	}
 
-	pktlen = len;
-	if (mbuf_copydata(m, 0, pktlen, buf + RTWN_USB_TX_DESC_SIZE) != 0) {
+		total = RTWN_USB_TX_DESC_SIZE + len;
+		buf = (uint8_t *)IOMalloc(total);
+		if (!buf) {
+			mbuf_freem(m);
+			if (ni)
+				ieee80211_release_node(&fIc, ni);
+			return;
+		}
+
+		if (isMgmt) {
+			rtwn_usb_build_mgmt_tx_desc(buf, RTWN_USB_TX_DESC_SIZE,
+			    (uint16_t)len, bcast);
+		} else {
+			bool qos = (wh[0] & IEEE80211_FC0_SUBTYPE_QOS) != 0;
+			uint16_t seq = ((uint16_t)wh[22] |
+			    ((uint16_t)wh[23] << 8)) >> IEEE80211_SEQ_SEQ_SHIFT;
+
+			rtwn_usb_build_tx_desc(buf, RTWN_USB_TX_DESC_SIZE,
+			    (uint16_t)len, RTWN_USB_TX_DESC_SIZE, bcast, true,
+			    raid, false, false, 0);
+			/* QSEL (txdw1 bit 8-12) harus sama dengan queue pipe. */
+			buf[5] = (uint8_t)((buf[5] & 0xe0) | (qsel & 0x1f));
+			/*
+			 * Layout r92c_tx_desc_usb:
+			 *   12 txdw3 (16 bit)  14 txdseq  16 txdw4  20 txdw5
+			 * DRVRATE/HWSEQ ada di txdw4, BUKAN txdw3.
+			 */
+			if (qos) {
+				buf[14] = (uint8_t)(seq & 0xff);
+				buf[15] = (uint8_t)((seq >> 8) & 0xff);
+				buf[16] = 0x40;	/* QOS */
+				buf[17] = 0x01;	/* DRVRATE */
+			} else {
+				buf[14] = 0x00;
+				buf[15] = 0x80;	/* txdseq: HWSEQEN */
+				buf[16] = 0x80;	/* HWSEQ */
+				buf[17] = 0x01;	/* DRVRATE */
+			}
+			buf[18] = 0x00;
+			buf[19] = 0x00;
+			/*
+			 * txdw5: DATARATE=0 (CCK 1 Mb/s) + batas retry.
+			 * Tanpa batas retry (0x0001ff00 seperti urtwn), frame
+			 * yang sekali bertabrakan langsung dibuang — cukup
+			 * untuk membuat handshake WPA2 gagal di band 2,4 GHz.
+			 */
+			buf[20] = 0x00;
+			buf[21] = 0xff;
+			buf[22] = 0x01;
+			buf[23] = 0x00;
+			/*
+			 * CCX_RPT dimatikan: laporan TX (C2H) belum diproses
+			 * dan bisa disalahartikan sebagai frame 802.11.
+			 */
+			buf[10] &= (uint8_t)~0x08;
+			rtwn_usb_tx_checksum(buf, RTWN_USB_TX_DESC_SIZE);
+		}
+
+		pktlen = len;
+		if (mbuf_copydata(m, 0, pktlen, buf + RTWN_USB_TX_DESC_SIZE) != 0) {
+			IOFree(buf, total);
+			mbuf_freem(m);
+			if (ni)
+				ieee80211_release_node(&fIc, ni);
+			return;
+		}
+
+		if (!fChip.usb.bulkSend(buf, (uint32_t)total, nullptr, nullptr,
+		    pipe)) {
+			IOLog(LOGP "bulkSend gagal (%u byte, pipe %d)\n",
+			    (unsigned)total, pipe);
+			fTxFail++;
+		} else if (isMgmt) {
+			fTxMgmt++;
+		} else {
+			fTxData++;
+		}
+
 		IOFree(buf, total);
 		mbuf_freem(m);
+
+		/* net80211 menyerahkan referensi node ke driver. */
 		if (ni)
 			ieee80211_release_node(&fIc, ni);
 		return;
 	}
-
-	if (!fChip.usb.bulkSend(buf, (uint32_t)total, nullptr, nullptr))
-		IOLog(LOGP "bulkSend gagal (%u byte)\n", (unsigned)total);
-
-	IOFree(buf, total);
-	mbuf_freem(m);
-
-	/* net80211 menyerahkan referensi node ke driver. */
-	if (ni)
-		ieee80211_release_node(&fIc, ni);
 }
 
 void ItlRtl8188E::txStart(struct _ifnet *ifp)
@@ -1110,12 +1178,19 @@ void ItlRtl8188E::handleRx(const uint8_t *buf, uint32_t len)
 
 			if ((wh->i_fc[0] & IEEE80211_FC0_TYPE_MASK) == IEEE80211_FC0_TYPE_DATA) {
 				size_t llcOff = (wh->i_fc[0] & IEEE80211_FC0_SUBTYPE_QOS) ? 26 : 24;
+
+				fRxData++;
 				if (flen >= llcOff + 8) {
 					const uint8_t *p = buf + foff + llcOff;
 					uint16_t et = ((uint16_t)p[6] << 8) | p[7];
-					if (et == 0x888e)
+					if (et == 0x888e) {
+						fRxEapol++;
 						IOLog(LOGP "RX EAPOL handshake frame (len %u)\n", (unsigned)flen);
+					}
 				}
+			} else if ((wh->i_fc[0] & IEEE80211_FC0_TYPE_MASK) ==
+			    IEEE80211_FC0_TYPE_MGT) {
+				fRxMgmt++;
 			}
 
 			/* RSSI dari PHY status (rtwn_r88e_get_rssi). */

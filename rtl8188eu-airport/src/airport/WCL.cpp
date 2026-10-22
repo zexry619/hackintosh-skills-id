@@ -17,6 +17,30 @@
 
 extern IOCommandGate *_fCommandGate;
 
+/*
+ * Penghitung diagnostik WCL.
+ *
+ * Kalau "airportd bilang not associated" padahal net80211 RUN, kita perlu
+ * tahu di mana rantainya putus: assoc event masuk? LinkStatus diposting?
+ * ConnectComplete dikirim? Angka ini dipublikasikan ke ioreg sebagai
+ * RTL8188E-wcl, jadi tidak perlu `log show` (yang di mesin ini sering
+ * kosong).
+ */
+static uint32_t gWclAssoc, gWclLink, gWclConnect, gWclDeauth, gWclBeacon;
+
+static void
+publishWclStats(AirportItlwmSkywalkInterface *self)
+{
+    char b[128];
+
+    if (!self)
+        return;
+    snprintf(b, sizeof(b), "assoc=%u link=%u conn=%u deauth=%u bcn=%u",
+        (unsigned)gWclAssoc, (unsigned)gWclLink, (unsigned)gWclConnect,
+        (unsigned)gWclDeauth, (unsigned)gWclBeacon);
+    self->setProperty("RTL8188E-wcl", b);
+}
+
 struct AirportItlwmSkywalkInterface::CountryUpdate {
     AirportItlwmSkywalkInterface *interface;
     AirportItlwm *controller;
@@ -618,6 +642,9 @@ void AirportItlwmSkywalkInterface::finishWCLJoin(uint16_t status, uint16_t reaso
     joinDeferred = false;
     explicit_bzero(&deferredJoin, sizeof(deferredJoin));
     joinTimer->cancelTimeout();
+    if (status == 0)
+        ++gWclConnect;
+    publishWclStats(this);
     instance->postMessage(this, AirportWCL::ConnectComplete, &event, sizeof(event), true);
     if (status) {
         portAuthorized = false;
@@ -758,6 +785,9 @@ void AirportItlwmSkywalkInterface::handleWCLEvent(int code, void *data)
             auto beacon = static_cast<ieee80211_beacon_event *>(data);
             if (!beacon)
                 break;
+            ++gWclBeacon;
+            if ((gWclBeacon & 0x1f) == 0)
+                publishWclStats(this);
             // Retain the actual associated beacon, including its advancing TSF.
             // WCL polls BEACON_INFO to distinguish fresh reception from a stale BSS.
             if (assocNotified && (joinPending || portAuthorized) &&
@@ -810,6 +840,8 @@ void AirportItlwmSkywalkInterface::handleWCLEvent(int code, void *data)
                 link.up = 1;
                 link.reason = 255;
                 wclLinkIndicated = true;
+                gWclLink++;
+                publishWclStats(this);
                 instance->postMessage(this, AirportWCL::LinkStatus, &link, sizeof(link), true);
                 instance->postMessage(this, AirportWCL::FirstBeacon, &event, sizeof(event), true);
                 if (portAuthorized)
@@ -834,6 +866,8 @@ void AirportItlwmSkywalkInterface::handleWCLEvent(int code, void *data)
                 memcpy(event.bssid, joinBSSID, 6);
                 event.driverStatus = event.status ? kIOReturnError : kIOReturnSuccess;
                 assocNotified = !event.status;
+                gWclAssoc++;
+                publishWclStats(this);
                 IOLog("RTL8188E: WCL AssocComplete: status=%u driverStatus=0x%x bssid=%s\n",
                       event.status, event.driverStatus, ether_sprintf(joinBSSID));
                 instance->postMessage(this, AirportWCL::AssocComplete, &event, sizeof(event), true);
@@ -843,6 +877,8 @@ void AirportItlwmSkywalkInterface::handleWCLEvent(int code, void *data)
             break;
         case IEEE80211_EVT_STA_DEAUTH: {
             portAuthorized = false;
+            ++gWclDeauth;
+            publishWclStats(this);
             updateWCLLinkQuality(true);
             AirportWCL::DeauthEvent event = {};
             event.reason = ic->ic_deauth_reason;

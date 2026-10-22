@@ -218,7 +218,9 @@ static void close_device(void)
 
 static IOUSBInterfaceInterface **gIf = NULL;
 static UInt8 gPipeIn = 0;	/* pipeRef untuk ReadPipe  */
-static UInt8 gPipeOut = 0;	/* pipeRef untuk WritePipe */
+static UInt8 gPipeOut = 0;	/* pipeRef untuk WritePipe (prioritas tertinggi) */
+static UInt8 gPipeOutAll[3];	/* semua bulk OUT, urutan descriptor */
+static int gNumOut = 0;
 static UInt8 gEpIn = 0, gEpOut = 0;
 static UInt16 gMpsIn = 0, gMpsOut = 0;
 
@@ -352,10 +354,15 @@ open_interface(void)
 			gPipeIn = i;
 			gEpIn = num;
 			gMpsIn = mps;
-		} else if (dir == kUSBOut && gPipeOut == 0) {
-			gPipeOut = i;
-			gEpOut = num;
-			gMpsOut = mps;
+		} else if (dir == kUSBOut && gNumOut < 3) {
+			/* Urutan endpoint = queue: 0 VO/mgmt, 1 VI, 2 BE/BK. */
+			gPipeOutAll[gNumOut] = i;
+			if (gNumOut == 0) {
+				gPipeOut = i;
+				gEpOut = num;
+				gMpsOut = mps;
+			}
+			gNumOut++;
 		}
 	}
 
@@ -364,9 +371,9 @@ open_interface(void)
 		    gPipeOut);
 		return -4;
 	}
-	printf("  bulk: IN ep=0x%02x (pipe %u, mps %u), OUT ep=0x%02x "
-	    "(pipe %u, mps %u)\n", gEpIn, gPipeIn, gMpsIn, gEpOut, gPipeOut,
-	    gMpsOut);
+	printf("  bulk: IN ep=0x%02x (pipe %u, mps %u), OUT %d pipe "
+	    "(ep0=0x%02x, pipe %u, mps %u)\n", gEpIn, gPipeIn, gMpsIn,
+	    gNumOut, gEpOut, gPipeOut, gMpsOut);
 	return 0;
 }
 
@@ -381,19 +388,34 @@ close_interface(void)
 }
 
 static int
-bulk_write(const void *buf, uint32_t len, uint32_t timeout_ms)
+bulk_write_pipe(int idx, const void *buf, uint32_t len, uint32_t timeout_ms)
 {
 	IOReturn kr;
+	UInt8 pipe;
 
-	if (gIf == NULL || gPipeOut == 0) {
+	if (gIf == NULL || gNumOut <= 0) {
 		return -1;
 	}
-	kr = (*gIf)->WritePipeTO(gIf, gPipeOut, (void *)buf, len, 0, timeout_ms);
+	if (idx < 0) {
+		idx = 0;
+	}
+	if (idx >= gNumOut) {
+		idx = gNumOut - 1;
+	}
+	pipe = gPipeOutAll[idx];
+
+	kr = (*gIf)->WritePipeTO(gIf, pipe, (void *)buf, len, 0, timeout_ms);
 	if (kr != kIOReturnSuccess) {
-		printf("    bulk OUT gagal: 0x%08x\n", kr);
+		printf("    bulk OUT gagal (pipe %u): 0x%08x\n", pipe, kr);
 		return -1;
 	}
 	return 0;
+}
+
+static int
+bulk_write(const void *buf, uint32_t len, uint32_t timeout_ms)
+{
+	return bulk_write_pipe(0, buf, len, timeout_ms);
 }
 
 static int
@@ -1166,14 +1188,21 @@ run_join(const char *ssid, const char *bssid_opt, int force_chan, int doTxNull)
 			    false, 0)) {
 				break;
 			}
-			/* samakan dengan jalur kernel: QoS + HWSEQ off */
+			/* samakan dengan jalur kernel: QoS + HWSEQ off + retry */
+			txbuf[5] = (uint8_t)(txbuf[5] & 0xe0);	/* QSEL = BE */
 			txbuf[16] = 0x40;
 			txbuf[17] = 0x01;
+			txbuf[20] = 0x00;
+			txbuf[21] = 0xff;
+			txbuf[22] = 0x01;
+			txbuf[23] = 0x00;
 			rtwn_usb_tx_checksum(txbuf, RTWN_USB_TX_DESC_SIZE);
 
-			if (bulk_write(txbuf,
+			/* Data WAJIB lewat pipe BE (index 2), bukan pipe mgmt. */
+			if (bulk_write_pipe(2, txbuf,
 			    RTWN_USB_TX_DESC_SIZE + (uint32_t)flen, 300) != 0) {
-				printf("  round %d: bulk OUT gagal\n", round);
+				printf("  round %d: bulk OUT gagal (pipe BE)\n",
+				    round);
 				continue;
 			}
 			usleep(20 * 1000);

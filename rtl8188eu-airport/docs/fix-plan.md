@@ -129,6 +129,25 @@ interface (`kext is in use or retained`). Karena itu F0.4 wajib lebih dulu —
 selama kext masih di ESP, binary terkunci sejak boot dan setiap perubahan
 butuh reboot.
 
+**Diagnostik baru (23 Okt):** dua properti ioreg menjawab pertanyaan inti
+tanpa `log show` (yang di mesin ini kosong):
+
+```bash
+ioreg -l -w0 | grep -E "RTL8188E-(stat|wcl)"
+```
+
+| Properti | Arti |
+|---|---|
+| `RTL8188E-stat` | `txm` tx mgmt · `txd` tx data · `txe` tx EAPOL · `txf` gagal kirim · `rxm` rx mgmt · `rxd` rx data · `rxe` rx EAPOL · `encf` enkripsi gagal · `pipe` jumlah bulk-out |
+| `RTL8188E-wcl` | `assoc` event assoc · `link` LinkStatus diposting · `conn` ConnectComplete · `deauth` · `bcn` beacon |
+
+Cara baca:
+- `txd` naik tapi `rxe` 0 → frame data keluar, AP tidak menjawab (rate/queue).
+- `txd` 0 → frame data tidak pernah sampai ke `sendFrame` (jalur stack/WCL).
+- `txe` naik, `rxe` 0 → EAPOL keluar tapi msg1 tidak masuk (RX atau AP menolak).
+- `rxe` naik, `txe` naik, `conn` 0 → handshake jalan tapi WCL tidak menutup join.
+- `assoc` 0 → event assoc tidak sampai ke WCL (rantai net80211→WCL putus).
+
 ### F1 — Jalur data (P0, ini penyebab DHCP "no server")
 
 Bukti: mgmt TX terbukti (M2: probe request → beacon masuk), tapi data TX tidak.
@@ -136,12 +155,13 @@ Bukti: mgmt TX terbukti (M2: probe request → beacon masuk), tapi data TX tidak
 
 | # | Dugaan akar masalah | Bukti pendukung | Perbaikan | Verifikasi tanpa reboot |
 |---|---|---|---|---|
-| F1.1 | **Queue data belum aktif.** Frame mgmt lewat QSEL `0x12` (MGNT) yang selalu hidup; frame data lewat QSEL `0` (BE) yang mungkin belum di-enable di `R92C_TXQ_CTRL`/mapping 8188E | mgmt jalan, data tidak; `R92C_TXPAUSE=0` saja tidak cukup | set `R92C_TXQ_CTRL` (enable BE/BK/VI/VO + mapping), baca balik; eksperimen pembanding: kirim 1 frame data lewat QSEL MGNT | `--txraw` + TX report; di kernel: counter TX naik |
-| F1.2 | **RAID/rate hardcode.** `raid = 6` untuk semua frame, `txdw5 = 0` (1 Mb/s), tanpa rate control | `ItlRtl8188E.cpp:772`, `:791` | tabel rate 8188E yang benar; pilih RAID dari `ni_txrate`; minimal CCK 1/2/5.5/11 + OFDM 6–54 | kirim probe dengan tiap RAID di userspace, lihat mana yang dijawab |
-| F1.3 | **QoS/TID tidak dipetakan.** QSEL selalu 0 padahal frame membawa TID | `build_tx_desc`: QSEL = 0 | map TID→AC→QSEL; kalau AP tanpa WMM, jangan kirim QoS | assoc + kirim UDP, cek AP menerima |
-| F1.4 | **Panjang frame setelah enkripsi.** `len` diambil dari `mbuf_pkthdr_len()` setelah `ieee80211_encrypt()`; kalau pkthdr tidak ikut diperbarui, frame CCMP terpotong | `sendFrame` setelah encrypt | assert `pkthdr_len == mbuf_len`, log sekali; hitung ulang dari header | `--join` WPA2 di userspace |
-| F1.5 | **TX report dimatikan** (`CCX_RPT` di-clear) → tidak ada retry feedback, tidak tahu frame benar-benar terkirim | `ItlRtl8188E.cpp:823` | aktifkan TX report, parse C2H dengan benar (RXDW3 bit 14–15), hitung retry | counter retry di ioreg |
-| F1.6 | **Tanpa backpressure TX.** `bulkSend` async tanpa batas antrean | `usb_compat.cpp:647` | antrean berbatas + `ifq_stop` saat penuh | kirim flood, cek tidak menumpuk |
+| F1.0 | **Frame data dikirim lewat bulk-out pipe yang salah.** 8188EU memetakan endpoint USB → queue TX (0 = VO/mgmt, 1 = VI, 2 = BE/BK). Driver hanya membuka satu pipe (yang pertama) dan memakai QSEL=BE untuk semua frame data | mgmt TX terbukti (probe request → beacon), data TX tidak; DHCP "no server" | ✅ **diperbaiki**: `bulkOpen` membuka sampai 3 bulk-out, `sendFrame` memilih pipe + QSEL sesuai AC/TID (BE→2, VI→1, VO→0) | `--txnull` di userspace (pipe 2) → TX report |
+| F1.1 | **Queue data belum aktif.** `R92C_TXPAUSE=0` saja tidak cukup kalau QSEL dan pipe tidak cocok | — | tercakup F1.0 (QSEL kini sama dengan pipe) | idem |
+| F1.2 | **RAID/rate hardcode.** `raid = 6`, `txdw5 = 0` tanpa batas retry | `ItlRtl8188E.cpp` | ✅ **diperbaiki**: `txdw5 = 0x0001ff00` (batas retry seperti urtwn) + DATARATE CCK1 | TX report / retry counter |
+| F1.3 | **QoS/TID tidak dipetakan.** QSEL selalu 0 | — | ✅ **diperbaiki**: TID→AC→QSEL→pipe | assoc + kirim UDP |
+| F1.4 | **Panjang frame setelah enkripsi** | `sendFrame` | belum diubah — `ieee80211_ccmp_encrypt` sudah menambah `pkthdr.len` (+8), jadi panjang sudah benar | `--join` WPA2 |
+| F1.5 | **TX report dimatikan** | `buf[10] &= ~0x08` | belum — sengaja, sampai parser C2H benar | counter |
+| F1.6 | **Tanpa backpressure TX** | `bulkSend` async | belum | flood test |
 
 ### F2 — Sinkronisasi state ke airportd (P0, ini penyebab "not associated")
 

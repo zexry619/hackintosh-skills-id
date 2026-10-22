@@ -559,6 +559,7 @@ bool RtwnUsb::bulkOpen(IOUSBHostInterface *interface)
 	}
 
 	const StandardUSB::EndpointDescriptor *ep = nullptr;
+	fNumOut = 0;
 	while ((ep = StandardUSB::getNextEndpointDescriptor(cd, id, ep)) != nullptr) {
 		uint8_t type = ep->bmAttributes & 0x03;
 		if (type != 0x02) {		/* bulk */
@@ -566,21 +567,40 @@ bool RtwnUsb::bulkOpen(IOUSBHostInterface *interface)
 		}
 		if (ep->bEndpointAddress & 0x80) {	/* IN */
 			fPipeIn = interface->copyPipe(ep->bEndpointAddress);
-		} else {
-			fPipeOut = interface->copyPipe(ep->bEndpointAddress);
+		} else if (fNumOut < 3) {
+			/*
+			 * 8188EU punya sampai 3 bulk-out. Urutannya menentukan
+			 * queue: 0 = VO/mgmt, 1 = VI, 2 = BE/BK. Frame data
+			 * WAJIB lewat pipe yang benar — kalau tidak, chip
+			 * memasukkannya ke queue mgmt dan frame tidak pernah
+			 * terkirim sebagai data.
+			 */
+			fPipeOutAll[fNumOut] =
+			    interface->copyPipe(ep->bEndpointAddress);
+			if (fPipeOutAll[fNumOut]) {
+				fNumOut++;
+			}
 		}
 	}
+	fPipeOut = fNumOut > 0 ? fPipeOutAll[0] : nullptr;
 
 	if (!fPipeIn || !fPipeOut) {
 		IOLog(LOGP "usb: pipe bulk tidak lengkap (in=%p out=%p)\n",
 		    (void *)fPipeIn, (void *)fPipeOut);
 		if (fPipeIn) { fPipeIn->release(); fPipeIn = nullptr; }
-		if (fPipeOut) { fPipeOut->release(); fPipeOut = nullptr; }
+		for (int i = 0; i < fNumOut; i++) {
+			if (fPipeOutAll[i]) {
+				fPipeOutAll[i]->release();
+				fPipeOutAll[i] = nullptr;
+			}
+		}
+		fNumOut = 0;
+		fPipeOut = nullptr;
 		return false;
 	}
 
-	IOLog(LOGP "usb: pipe bulk IN=%p OUT=%p siap\n",
-	    (void *)fPipeIn, (void *)fPipeOut);
+	IOLog(LOGP "usb: pipe bulk IN=%p OUT=%d (ep0=%p) siap\n",
+	    (void *)fPipeIn, fNumOut, (void *)fPipeOut);
 	return true;
 }
 
@@ -598,11 +618,15 @@ void RtwnUsb::bulkClose()
 		fPipeIn->release();
 		fPipeIn = nullptr;
 	}
-	if (fPipeOut) {
-		fPipeOut->abort(0, kIOReturnAborted);
-		fPipeOut->release();
-		fPipeOut = nullptr;
+	for (int i = 0; i < fNumOut; i++) {
+		if (fPipeOutAll[i]) {
+			fPipeOutAll[i]->abort(0, kIOReturnAborted);
+			fPipeOutAll[i]->release();
+			fPipeOutAll[i] = nullptr;
+		}
 	}
+	fNumOut = 0;
+	fPipeOut = nullptr;
 }
 
 bool RtwnUsb::bulkQueueRx(uint32_t count)
@@ -645,9 +669,21 @@ bool RtwnUsb::bulkQueueRx(uint32_t count)
 }
 
 bool RtwnUsb::bulkSend(const uint8_t *data, uint32_t len, rtwn_tx_cb cb,
-    void *ctx)
+    void *ctx, int pipeIdx)
 {
-	if (!fPipeOut || !data || len == 0 || fBulkClosing || !fAttached) {
+	IOUSBHostPipe *pipe;
+
+	if (!data || len == 0 || fBulkClosing || !fAttached || fNumOut <= 0) {
+		return false;
+	}
+	if (pipeIdx < 0) {
+		pipeIdx = 0;
+	}
+	if (pipeIdx >= fNumOut) {
+		pipeIdx = fNumOut - 1;
+	}
+	pipe = fPipeOutAll[pipeIdx];
+	if (!pipe) {
 		return false;
 	}
 
@@ -686,7 +722,7 @@ bool RtwnUsb::bulkSend(const uint8_t *data, uint32_t len, rtwn_tx_cb cb,
 	c->buf = (uint8_t *)c->md->getBytesNoCopy();
 	memcpy(c->buf, data, len);
 	c->self = this;
-	c->pipe = fPipeOut;
+	c->pipe = pipe;
 	c->cap = len;
 	c->isRx = false;
 	c->alive = fAlive;
@@ -700,7 +736,7 @@ bool RtwnUsb::bulkSend(const uint8_t *data, uint32_t len, rtwn_tx_cb cb,
 	completion.action = rtwnBulkComplete;
 	completion.parameter = c;
 
-	if (fPipeOut->io(c->md, len, &completion, 0) != kIOReturnSuccess) {
+	if (pipe->io(c->md, len, &completion, 0) != kIOReturnSuccess) {
 		/* Gagal antre → tidak ada completion yang akan datang,
 		 * jadi aman dibebaskan di sini. */
 		c->md->release();

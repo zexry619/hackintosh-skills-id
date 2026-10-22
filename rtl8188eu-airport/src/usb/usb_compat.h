@@ -130,8 +130,18 @@ public:
 
 	/* Queue N transfer RX. */
 	bool bulkQueueRx(uint32_t count);
-	/* Kirim satu frame (descriptor sudah disusun oleh pemanggil). */
-	bool bulkSend(const uint8_t *data, uint32_t len, rtwn_tx_cb cb, void *ctx);
+	/*
+	 * Kirim satu frame (descriptor sudah disusun oleh pemanggil).
+	 *
+	 * pipeIdx memilih bulk-out endpoint: 0 = prioritas tertinggi (VO/mgmt),
+	 * 1 = VI, 2 = BE/BK. 8188EU memetakan endpoint ke queue TX di hardware;
+	 * mengirim frame data lewat endpoint mgmt membuat frame tidak pernah
+	 * keluar sebagai data (gejala: DHCP "no server").
+	 */
+	bool bulkSend(const uint8_t *data, uint32_t len, rtwn_tx_cb cb, void *ctx,
+	    int pipeIdx = 0);
+	/* Jumlah bulk-out pipe yang berhasil dibuka (1..3). */
+	int txPipeCount() const { return fNumOut; }
 	/* Jumlah frame RX yang sudah diterima. */
 	uint32_t rxCount() const { return fRxCount; }
 	uint32_t txOk() const { return fTxOk; }
@@ -154,6 +164,9 @@ public:
 public:
 	IOUSBHostPipe      *fPipeIn;
 	IOUSBHostPipe      *fPipeOut;
+	/* Semua bulk-out, urutan sesuai descriptor (0 = prioritas tertinggi). */
+	IOUSBHostPipe      *fPipeOutAll[3];
+	int                 fNumOut;
 	rtwn_rx_cb          fRxCb;
 	void               *fRxCtx;
 	uint32_t            fRxCount;
