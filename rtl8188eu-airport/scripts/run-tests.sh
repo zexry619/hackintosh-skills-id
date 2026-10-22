@@ -35,6 +35,9 @@ run "Frame 802.11 — probe request & parser SSID/BSSID (M2)" bash -c \
 run "Set kanal 8188E — RF/BB register path (M2)" bash -c \
 	'clang -O2 -o /tmp/t_chan tools/test_chan.c src/urtwn/rtwn_chan.c src/urtwn/rtwn_seq.c src/urtwn/rtwn_seq_efuse.c src/urtwn/rtwn_efuse_8188e.c -Isrc/urtwn && /tmp/t_chan'
 
+run "Sequence pause/enable 8051 (regresi root cause EFUSE)" bash -c \
+	'clang -O2 -o /tmp/t_8051 tools/test_8051.c src/urtwn/rtwn_seq_efuse.c src/urtwn/rtwn_seq.c src/urtwn/rtwn_efuse_8188e.c -Isrc/urtwn && /tmp/t_8051'
+
 run "Keseimbangan lock/unlock (regression PANIC #4)" bash -c \
 	'python3 scripts/lint-locks.py'
 

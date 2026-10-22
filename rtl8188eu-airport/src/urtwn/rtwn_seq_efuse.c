@@ -22,6 +22,7 @@
  */
 
 #include "rtwn_seq.h"
+#include "rtwn_seq_efuse.h"
 #include "rtwn_platform.h"
 #include <string.h>
 
@@ -46,33 +47,102 @@
 /* 8051 reset: pause IO wrapper → delay 50 ms → enable IO wrapper.
  * Untuk 8188EUSB (tipe 0x32) vendor memakai register 0x093 & 0xFE/0x01
  * dan reg 0x003 & 0xFB/0x04. */
-static void efuse_8051_pause(rtwn_read_fn rd, rtwn_write_fn wr, void *ctx)
+/*
+ * Pause 8051 — versi vendor (HAL_8051PauseIOWrapper, 0x7169e).
+ *
+ * ROOT CAUSE EFUSE (ditemukan lewat RE, 22 Okt 2026):
+ *
+ * Fungsi vendor memilih register berdasarkan cardType
+ * (adapter + 0x3a0):
+ *
+ *   - cardType > 0x34            : tidak melakukan apa-apa
+ *   - cardType di maskA (0x0e)  : GRP A
+ *       0x1c &= ~0x02 ; 0x1d &= ~0x01 ; 0x03 &= ~0x04
+ *   - cardType di maskB (0x0f/0x10) : GRP B
+ *       0x1c &= ~0x02 ; 0x1d &= ~0x08 ; 0x03 &= ~0x04
+ *   - cardType == 0x32           : register 0x93 saja
+ *       0x93 &= ~0x01 ; return
+ *
+ * Implementasi lama kita memakai register 0x093 — itu CABANG chip 0x32,
+ * BUKAN 8188E (cardType 0x0e). Akibatnya 8051 tidak pernah di-reset dengan
+ * benar -> trigger offload tidak mengisi buffer -> EFUSE kosong (0xff).
+ *
+ * Sekarang kedua gaya (GRP A dan GRP B) didukung, dan percobaan offload
+ * mencoba keduanya.
+ */
+static void
+efuse_8051_pause_style(rtwn_read_fn rd, rtwn_write_fn wr, void *ctx, int style)
 {
 	uint8_t v;
 
-	v = rtwn_seq_raw_read1(rd, wr, ctx, 0x093);
-	rtwn_seq_raw_write1(rd, wr, ctx, 0x093, (uint8_t)(v & 0xfe));
+	if (style == RTWN_8051_STYLE_A || style == RTWN_8051_STYLE_B) {
+		v = rtwn_seq_raw_read1(rd, wr, ctx, 0x01c);
+		rtwn_seq_raw_write1(rd, wr, ctx, 0x01c, (uint8_t)(v & 0xfd));
+
+		v = rtwn_seq_raw_read1(rd, wr, ctx, 0x01d);
+		if (style == RTWN_8051_STYLE_A) {
+			v = (uint8_t)(v & 0xfe);
+		} else {
+			v = (uint8_t)(v & 0xf7);
+		}
+		rtwn_seq_raw_write1(rd, wr, ctx, 0x01d, v);
+	} else {
+		/* cardType == 0x32 (chip lain) */
+		v = rtwn_seq_raw_read1(rd, wr, ctx, 0x093);
+		rtwn_seq_raw_write1(rd, wr, ctx, 0x093, (uint8_t)(v & 0xfe));
+		return;
+	}
 
 	v = rtwn_seq_raw_read1(rd, wr, ctx, 0x003);
 	rtwn_seq_raw_write1(rd, wr, ctx, 0x003, (uint8_t)(v & 0xfb));
 }
 
-static void efuse_8051_enable(rtwn_read_fn rd, rtwn_write_fn wr, void *ctx)
+/* Enable 8051 — versi vendor (HAL_8051EnableIOWrapper, 0x71799). */
+static void
+efuse_8051_enable_style(rtwn_read_fn rd, rtwn_write_fn wr, void *ctx, int style)
 {
 	uint8_t v;
 
-	v = rtwn_seq_raw_read1(rd, wr, ctx, 0x093);
-	rtwn_seq_raw_write1(rd, wr, ctx, 0x093, (uint8_t)(v | 0x01));
+	if (style == RTWN_8051_STYLE_A || style == RTWN_8051_STYLE_B) {
+		v = rtwn_seq_raw_read1(rd, wr, ctx, 0x01c);
+		rtwn_seq_raw_write1(rd, wr, ctx, 0x01c, (uint8_t)(v & 0xfd));
+
+		v = rtwn_seq_raw_read1(rd, wr, ctx, 0x01d);
+		if (style == RTWN_8051_STYLE_A) {
+			v = (uint8_t)(v | 0x01);
+		} else {
+			v = (uint8_t)(v | 0x08);
+		}
+		rtwn_seq_raw_write1(rd, wr, ctx, 0x01d, v);
+	} else {
+		v = rtwn_seq_raw_read1(rd, wr, ctx, 0x093);
+		rtwn_seq_raw_write1(rd, wr, ctx, 0x093, (uint8_t)(v | 0x01));
+		return;
+	}
 
 	v = rtwn_seq_raw_read1(rd, wr, ctx, 0x003);
 	rtwn_seq_raw_write1(rd, wr, ctx, 0x003, (uint8_t)(v | 0x04));
 }
 
-static void efuse_8051_reset(rtwn_read_fn rd, rtwn_write_fn wr, void *ctx)
+/* Wrapper untuk pengujian offline (lihat tools/test_8051.c). */
+void
+rtwn_8051_pause_test(rtwn_read_fn rd, rtwn_write_fn wr, void *ctx, int style)
 {
-	efuse_8051_pause(rd, wr, ctx);
-	RTWN_DELAY_MS(1);
-	efuse_8051_enable(rd, wr, ctx);
+	efuse_8051_pause_style(rd, wr, ctx, style);
+}
+
+void
+rtwn_8051_enable_test(rtwn_read_fn rd, rtwn_write_fn wr, void *ctx, int style)
+{
+	efuse_8051_enable_style(rd, wr, ctx, style);
+}
+
+static void
+efuse_8051_reset_style(rtwn_read_fn rd, rtwn_write_fn wr, void *ctx, int style)
+{
+	efuse_8051_pause_style(rd, wr, ctx, style);
+	RTWN_DELAY_MS(1);		/* vendor: stall(0x32) = 50 us */
+	efuse_8051_enable_style(rd, wr, ctx, style);
 }
 
 /*
@@ -96,7 +166,7 @@ static int efuse_offload_block(rtwn_read_fn rd, rtwn_write_fn wr, void *ctx,
 	rtwn_seq_raw_write1(rd, wr, ctx, R92C_EFUSE_OFFLOAD_CTRL,
 	    (uint8_t)(v | 0x80));
 
-	efuse_8051_reset(rd, wr, ctx);
+	efuse_8051_reset_style(rd, wr, ctx, RTWN_8051_STYLE_A);
 
 	v = rtwn_seq_raw_read1(rd, wr, ctx, R92C_EFUSE_OFFLOAD_TRIG);
 	rtwn_seq_raw_write1(rd, wr, ctx, R92C_EFUSE_OFFLOAD_TRIG,
@@ -115,7 +185,7 @@ static int efuse_offload_block(rtwn_read_fn rd, rtwn_write_fn wr, void *ctx,
 		v = rtwn_seq_raw_read1(rd, wr, ctx, R92C_EFUSE_OFFLOAD_CTRL);
 		rtwn_seq_raw_write1(rd, wr, ctx, R92C_EFUSE_OFFLOAD_CTRL,
 		    (uint8_t)(v & 0x7f));
-		efuse_8051_reset(rd, wr, ctx);
+		efuse_8051_reset_style(rd, wr, ctx, RTWN_8051_STYLE_A);
 		return -1;
 	}
 
@@ -215,17 +285,24 @@ int rtwn_seq_read_efuse_offload(rtwn_seq_result_t *r, rtwn_read_fn rd,
 	 *      Ours: power-on dilakukan terpisah sebelum memanggil ini
 	 *      (pakai tabel flow yang identik) → setara.
 	 */
-	for (attempt = 0; attempt < 6; attempt++) {
+	for (attempt = 0; attempt < 8; attempt++) {
 		uint32_t hdr = 0, d1 = 0, hdr2 = 0, data = 0;
 		int nblocks, extra, total, k;
 		uint16_t i;
 		uint8_t v;
 		uint16_t rawlen;
+		int style;
 
 		memset(raw, 0xff, sizeof(raw));
 
-		/* Mode: 0xaa default; 0xf4 dicoba pada attempt kedua. */
+		/*
+		 * Kombinasi yang dicoba (8 attempt):
+		 *   mode 0xaa / 0xf4  ×  gaya reset 8051 GRP A / GRP B
+		 * Gaya reset 8051 menentukan register 0x1d yang dipakai
+		 * (lihat komentar di efuse_8051_pause_style).
+		 */
 		mode = (attempt % 2 == 0) ? 0xaa : 0xf4;
+		style = (attempt % 4 < 2) ? RTWN_8051_STYLE_A : RTWN_8051_STYLE_B;
 		rtwn_seq_raw_write1(rd, wr, ctx, R92C_EFUSE_OFFLOAD_MODE, mode);
 		base = (uint16_t)(mode * 0x10);
 
@@ -233,7 +310,7 @@ int rtwn_seq_read_efuse_offload(rtwn_seq_result_t *r, rtwn_read_fn rd,
 		v = rtwn_seq_raw_read1(rd, wr, ctx, R92C_EFUSE_OFFLOAD_CTRL);
 		rtwn_seq_raw_write1(rd, wr, ctx, R92C_EFUSE_OFFLOAD_CTRL,
 		    (uint8_t)(v | 0x80));
-		efuse_8051_reset(rd, wr, ctx);
+		efuse_8051_reset_style(rd, wr, ctx, style);
 		v = rtwn_seq_raw_read1(rd, wr, ctx, R92C_EFUSE_OFFLOAD_TRIG);
 		rtwn_seq_raw_write1(rd, wr, ctx, R92C_EFUSE_OFFLOAD_TRIG,
 		    (uint8_t)(v | 0x02));
@@ -250,7 +327,7 @@ int rtwn_seq_read_efuse_offload(rtwn_seq_result_t *r, rtwn_read_fn rd,
 			v = rtwn_seq_raw_read1(rd, wr, ctx, R92C_EFUSE_OFFLOAD_CTRL);
 			rtwn_seq_raw_write1(rd, wr, ctx, R92C_EFUSE_OFFLOAD_CTRL,
 			    (uint8_t)(v & 0x7f));
-			efuse_8051_reset(rd, wr, ctx);
+			efuse_8051_reset_style(rd, wr, ctx, style);
 			continue;
 		}
 
@@ -392,7 +469,7 @@ int rtwn_seq_read_efuse_offload(rtwn_seq_result_t *r, rtwn_read_fn rd,
 		v = rtwn_seq_raw_read1(rd, wr, ctx, R92C_EFUSE_OFFLOAD_CTRL);
 		rtwn_seq_raw_write1(rd, wr, ctx, R92C_EFUSE_OFFLOAD_CTRL,
 		    (uint8_t)(v & 0x7f));
-		efuse_8051_reset(rd, wr, ctx);
+		efuse_8051_reset_style(rd, wr, ctx, RTWN_8051_STYLE_A);
 
 		/*
 		 * Validasi hasil (dari decompilation vendor):

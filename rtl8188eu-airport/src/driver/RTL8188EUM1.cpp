@@ -1327,20 +1327,27 @@ void RTL8188EUM1::runInitSequence()
 	 * firmware, tapi perlu chip sudah berdaya (power-on) DAN mode EFUSE
 	 * aktif — dan power-on flow vendor me-clear bit mode EFUSE di 0x00f2.
 	 */
-	m1Mark(this, "M1State", "efuse-direct");
-	if (rtwn_seq_read_efuse_direct_8188e(&res, m1Read, m1Write, this) != 0) {
-		IOLog(LOGP "EFUSE direct gagal - coba jalur OFFLOAD\n");
-		m1Mark(this, "M1State", "efuse-direct-gagal");
-		m1Mark(this, "M1State", "efuse-offload");
-		if (rtwn_seq_read_efuse_offload(&res, m1Read, m1Write, this) != 0) {
-			IOLog(LOGP "EFUSE offload juga gagal - MAC tidak diketahui\n");
-			m1Mark(this, "M1State", "efuse-offload-gagal");
+	/*
+	 * Urutan mengikuti vendor: OFFLOAD (jalur HAL) dulu, baru direct
+	 * (jalur register) sebagai cadangan.
+	 *
+	 * Vendor: EFUSE_OneByteRead() -> coba HAL_MAC_EFUSE_Read1Byte()
+	 * (untuk 8188E = offload 8051) dulu; register-level baru fallback.
+	 */
+	m1Mark(this, "M1State", "efuse-offload");
+	if (rtwn_seq_read_efuse_offload(&res, m1Read, m1Write, this) != 0) {
+		IOLog(LOGP "EFUSE offload gagal - coba jalur DIRECT\n");
+		m1Mark(this, "M1State", "efuse-offload-gagal");
+		m1Mark(this, "M1State", "efuse-direct");
+		if (rtwn_seq_read_efuse_direct_8188e(&res, m1Read, m1Write, this) != 0) {
+			IOLog(LOGP "EFUSE direct juga gagal - MAC tidak diketahui\n");
+			m1Mark(this, "M1State", "efuse-direct-gagal");
 			memset(&res, 0, sizeof(res));
 		} else {
-			m1Mark(this, "M1State", "efuse-offload-ok");
+			m1Mark(this, "M1State", "efuse-direct-ok");
 		}
 	} else {
-		m1Mark(this, "M1State", "efuse-direct-ok");
+		m1Mark(this, "M1State", "efuse-offload-ok");
 	}
 	/*
 	 * Sumber MAC alternatif: register MACID (0x610) di chip.
