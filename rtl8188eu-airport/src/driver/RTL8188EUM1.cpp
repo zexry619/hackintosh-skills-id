@@ -222,6 +222,41 @@ static void m1LogResult(const char *state, const char *mac, const char *xtal,
 	    state, mac ? mac : "-", xtal ? xtal : "-", cr, ok, fail);
 }
 
+
+
+/* Format 6 byte MAC sebagai string hex (tanpa stdio). */
+static void
+m1_hex_str(char *dst, size_t cap, const uint8_t *src, size_t n)
+{
+	static const char hx[] = "0123456789abcdef";
+	size_t i;
+
+	if (!dst || !src || cap < n * 2 + 1) {
+		return;
+	}
+	for (i = 0; i < n; i++) {
+		dst[i * 2] = hx[(src[i] >> 4) & 0xf];
+		dst[i * 2 + 1] = hx[src[i] & 0xf];
+	}
+	dst[n * 2] = 0;
+}
+
+static void m1Mark(RTL8188EUM1 *me, const char *key, const char *value);
+
+/*
+ * Callback diagnostik: lapisan portabel melaporkan string diagnostik
+ * (kode C murni tidak boleh tahu-menahu IOKit).
+ */
+static void
+m1Diag(void *ctx, const char *key, const char *val)
+{
+	RTL8188EUM1 *me = (RTL8188EUM1 *)ctx;
+
+	if (me && key && val) {
+		m1Mark(me, key, val);
+	}
+}
+
 static void m1Mark(RTL8188EUM1 *me, const char *key, const char *value)
 {
 	if (!me || !key || !value) {
@@ -616,6 +651,9 @@ bool RTL8188EUM1::start(IOService *provider)
 		fStateLock = IOLockAlloc();
 	}
 	fDetaching = false;
+
+	/* Daftarkan hook diagnostik lapisan portabel. */
+	rtwn_seq_diag_register(m1Diag);
 
 	/*
 	 * Trigger eksplisit: bila properti "M1Trigger" = "run" diset dari
@@ -1013,7 +1051,9 @@ void RTL8188EUM1::runInitSequence()
 	 *     memaksa READONLY; tanpa boot-arg → FULL.
 	 */
 	int mode = m1EffectiveMode(M1_ALLOW_USB_TRAFFIC);
-	m1Mark(this, "M1Mode", mode == M1_MODE_FULL ? "full" : "readonly");
+	m1Mark(this, "M1Mode",
+	    mode == M1_MODE_FULL ? "full" :
+	    mode == M1_MODE_POWERON ? "poweron" : "readonly");
 	IOLog(LOGP "start() dipanggil — provider: %s\n",
 	    getProvider() ? getProvider()->getMetaClass()->getClassName() : "null");
 	m1Mark(this, "M1State", "start-called");
@@ -1302,6 +1342,25 @@ void RTL8188EUM1::runInitSequence()
 	} else {
 		m1Mark(this, "M1State", "efuse-direct-ok");
 	}
+	/*
+	 * Sumber MAC alternatif: register MACID (0x610) di chip.
+	 *
+	 * Driver vendor menulis MAC hasil baca EFUSE ke register ini saat
+	 * inisialisasi. Kalau chip belum di-reset (tidak dicabut), nilainya
+	 * masih ada. dipakai sebagai cadangan + pembanding silang dengan
+	 * hasil EFUSE.
+	 */
+	{
+		char macbuf[32];
+		int i2;
+
+		for (i2 = 0; i2 < 6; i2++) {
+			res.mac[i2] = rtwn_m1_read_1(&fChip, R92C_MACID + i2);
+		}
+		m1_hex_str(macbuf, sizeof(macbuf), res.mac, 6);
+		m1Mark(this, "M1MacIdReg", macbuf);
+	}
+
 	if (res.efuse_ok) {
 		IOLog(LOGP "EFUSE OK: MAC=%02x:%02x:%02x:%02x:%02x:%02x xtal=0x%02x\n",
 		    res.mac[0], res.mac[1], res.mac[2], res.mac[3], res.mac[4],

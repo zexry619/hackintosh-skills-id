@@ -106,6 +106,26 @@ int rtwn_efuse_read1_8188e(rtwn_read_fn rd, rtwn_write_fn wr, void *ctx,
  *
  * Return 0 = sukses.
  */
+
+/*
+ * Formatter hex tanpa stdio (kernel tidak boleh pakai stdio.h).
+ */
+static void
+m1_hex(char *dst, size_t cap, const uint8_t *src, size_t n)
+{
+	static const char hx[] = "0123456789abcdef";
+	size_t i;
+
+	if (!dst || !src || cap < n * 2 + 1) {
+		return;
+	}
+	for (i = 0; i < n; i++) {
+		dst[i * 2] = hx[(src[i] >> 4) & 0xf];
+		dst[i * 2 + 1] = hx[src[i] & 0xf];
+	}
+	dst[n * 2] = 0;
+}
+
 int rtwn_seq_read_efuse_direct_8188e(rtwn_seq_result_t *r, rtwn_read_fn rd,
     rtwn_write_fn wr, void *ctx)
 {
@@ -133,6 +153,21 @@ int rtwn_seq_read_efuse_direct_8188e(rtwn_seq_result_t *r, rtwn_read_fn rd,
 			break;
 		}
 		raw[i] = v;
+	}
+	/*
+	 * DIAGNOSTIK (22 Okt 2026): berapa byte yang berhasil terbaca?
+	 * Data ini diperlukan untuk membedakan:
+	 *   - chip tidak merespons sama sekali (0 byte)
+	 *   - chip merespons sebagian lalu macet (N byte)
+	 */
+	{
+		char dbg[32];
+		uint8_t cnt = (uint8_t)i;
+
+		m1_hex(dbg, sizeof(dbg), &cnt, 1);
+		rtwn_seq_diag_set(ctx, "efuse-direct-bytes", dbg);
+		m1_hex(dbg, sizeof(dbg), raw, 8);
+		rtwn_seq_diag_set(ctx, "efuse-direct-head", dbg);
 	}
 
 	/* Kembalikan akses EFUSE. */

@@ -38,6 +38,21 @@ typedef int (*rtwn_write_fn)(void *ctx, uint16_t addr, const void *buf,
 #define RTWN_REG_EFUSE_CTRL  0x030
 #define RTWN_REG_EFUSE_ACCESS 0x0cf
 
+
+/*
+ * Hook diagnostik.
+ *
+ * Lapisan portabel (C murni) tidak boleh tahu-menahu tentang IOKit.
+ * Untuk diagnostik, driver mendaftarkan callback; lapisan portabel
+ * cukup memanggil rtwn_seq_diag_set() dengan ctx milik driver.
+ *
+ * Dipakai sejak 22 Okt 2026 untuk menelusuri kegagalan baca EFUSE.
+ */
+typedef void (*rtwn_diag_fn)(void *ctx, const char *key, const char *val);
+
+void rtwn_seq_diag_register(rtwn_diag_fn fn);
+void rtwn_seq_diag_set(void *ctx, const char *key, const char *val);
+
 /* Hasil tiap tahap. */
 typedef struct {
 	int	step;		/* tahap terakhir yang berhasil */

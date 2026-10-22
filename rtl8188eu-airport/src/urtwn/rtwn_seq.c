@@ -164,6 +164,26 @@ static void wr32(rtwn_read_fn rd, rtwn_write_fn wr, void *ctx, uint16_t a,
 	wr(ctx, a, b, 4);
 }
 
+
+/* ── Hook diagnostik (lihat rtwn_seq.h) ──────────────────────────── */
+
+static rtwn_diag_fn g_rtwn_diag_fn = NULL;
+
+void
+rtwn_seq_diag_register(rtwn_diag_fn fn)
+{
+	g_rtwn_diag_fn = fn;
+}
+
+void
+rtwn_seq_diag_set(void *ctx, const char *key, const char *val)
+{
+	if (g_rtwn_diag_fn && key && val) {
+		g_rtwn_diag_fn(ctx, key, val);
+	}
+}
+
+
 /* ------------------------------------------------------------------ */
 /* 1. Baca register dasar                                              */
 /* ------------------------------------------------------------------ */

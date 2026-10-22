@@ -160,6 +160,26 @@ static int efuse_offload_block(rtwn_read_fn rd, rtwn_write_fn wr, void *ctx,
  * Mengisi result->mac / xtal / regulatory / channel_plan.
  * Return 0 = sukses.
  */
+
+/*
+ * Formatter hex tanpa stdio (kernel tidak boleh pakai stdio.h).
+ */
+static void
+m1_hex(char *dst, size_t cap, const uint8_t *src, size_t n)
+{
+	static const char hx[] = "0123456789abcdef";
+	size_t i;
+
+	if (!dst || !src || cap < n * 2 + 1) {
+		return;
+	}
+	for (i = 0; i < n; i++) {
+		dst[i * 2] = hx[(src[i] >> 4) & 0xf];
+		dst[i * 2 + 1] = hx[src[i] & 0xf];
+	}
+	dst[n * 2] = 0;
+}
+
 int rtwn_seq_read_efuse_offload(rtwn_seq_result_t *r, rtwn_read_fn rd,
     rtwn_write_fn wr, void *ctx)
 {
@@ -328,6 +348,38 @@ int rtwn_seq_read_efuse_offload(rtwn_seq_result_t *r, rtwn_read_fn rd,
 		/* ── Parse (panjang stream = hdr & 0xffff, bukan 256) ───── */
 		memset(rom, 0xff, sizeof(rom));
 		rtwn_seq_efuse_parse(raw, rawlen, rom);
+
+		/*
+		 * DIAGNOSTIK (22 Okt 2026): kenapa offload ditolak?
+		 */
+		{
+			char dbg[48];
+			uint8_t meta[8];
+
+			meta[0] = mode;
+			meta[1] = (uint8_t)(hdr >> 24);
+			meta[2] = (uint8_t)(hdr >> 16);
+			meta[3] = (uint8_t)(hdr >> 8);
+			meta[4] = (uint8_t)hdr;
+			meta[5] = (uint8_t)(rawlen >> 8);
+			meta[6] = (uint8_t)rawlen;
+			meta[7] = 0;
+			m1_hex(dbg, sizeof(dbg), meta, 7);
+			rtwn_seq_diag_set(ctx, "efuse-offload-hdr", dbg);
+			m1_hex(dbg, sizeof(dbg), raw, 8);
+			rtwn_seq_diag_set(ctx, "efuse-offload-raw", dbg);
+			{
+				uint8_t r[5];
+
+				r[0] = rom[0];
+				r[1] = rom[0xD0];
+				r[2] = rom[0xD1];
+				r[3] = rom[0xD2];
+				r[4] = rom[0xD3];
+				m1_hex(dbg, sizeof(dbg), r, 5);
+				rtwn_seq_diag_set(ctx, "efuse-offload-rom", dbg);
+			}
+		}
 
 		memcpy(r->mac, rom + 215, 6);
 		r->xtal = rom[185];
