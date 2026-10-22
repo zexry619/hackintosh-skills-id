@@ -25,6 +25,6 @@ while [ "$(date +%s)" -lt "$end" ]; do
 		printf '[%s] %s\n' "$(date +%H:%M:%S)" "$cur"
 		last="$cur"
 	fi
-	sleep 0.1
+	sleep 0.2
 done
 echo "selesai → $OUT"

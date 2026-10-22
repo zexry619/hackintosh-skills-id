@@ -68,6 +68,7 @@ SOURCES=(
 	"$SRC/urtwn/rtwn_flow.c"
 	"$SRC/urtwn/rtwn_efuse_8188e.c"
 	"$SRC/urtwn/rtwn_usb.c"
+	"$SRC/urtwn/rtwn_80211.c"
 	"$SRC/urtwn/rtwn_mp_8188e.c"
 	"$SRC/urtwn/rtwn_hal_8188e.c"
 	"$SRC/urtwn/rtwn_platform_kernel.c"

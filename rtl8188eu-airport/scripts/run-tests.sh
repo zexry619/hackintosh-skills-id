@@ -29,6 +29,9 @@ run "Transport USB — descriptor TX/RX + ring TX" bash -c \
 run "Keamanan rtwn_seq — regression F1/F4/F5" bash -c \
 	'clang -O2 -o /tmp/t_seq tools/test_seq_safety.c src/urtwn/rtwn_seq.c src/urtwn/rtwn_seq_efuse.c src/urtwn/rtwn_efuse_8188e.c -Isrc/urtwn && /tmp/t_seq'
 
+run "Frame 802.11 — probe request & parser SSID/BSSID (M2)" bash -c \
+	'clang -O2 -o /tmp/t_80211 tools/test_80211.c src/urtwn/rtwn_80211.c -Isrc/urtwn && /tmp/t_80211'
+
 run "Keseimbangan lock/unlock (regression PANIC #4)" bash -c \
 	'python3 scripts/lint-locks.py'
 
