@@ -10,7 +10,7 @@
 #   6. pastikan driver vendor tetap mati
 #
 # Usage:
-#   ALLOW_BOOT_INJECTION=1 sudo ./scripts/install-m4-esp.sh
+#   ALLOW_BOOT_INJECTION=1 sudo ./scripts/install-m4-esp.sh ["/Volumes/ESP"]
 #
 # Pasangan: scripts/restore-test-esp.sh
 set -euo pipefail
@@ -20,13 +20,38 @@ KEXT="$ROOT/src/driver/build-m4/RTL8188EAirport.kext"
 BUNDLE="RTL8188EAirport.kext"
 OLD_BUNDLE="RTL8188EUM1.kext"
 DISABLED_DIR="/Library/Extensions.disabled-m1"
+ESP_OVERRIDE="${1:-}"
 
 find_esp() {
-	local v
+	local v one="" count=0
+	# Argumen pertama = path ESP eksplisit (mis. "/Volumes/MAC OS 2").
+	if [ -n "$ESP_OVERRIDE" ]; then
+		if [ -f "$ESP_OVERRIDE/EFI/OC/OpenCore.efi" ]; then
+			echo "$ESP_OVERRIDE"
+			return 0
+		fi
+		return 1
+	fi
 	for v in /Volumes/*; do
-		if [ -f "$v/EFI/OC/OpenCore.efi" ]; then echo "$v"; return 0; fi
+		if [ -f "$v/EFI/OC/OpenCore.efi" ]; then
+			one="$v"
+			count=$((count + 1))
+		fi
 	done
-	return 1
+	if [ "$count" -eq 1 ]; then
+		echo "$one"
+		return 0
+	fi
+	if [ "$count" -eq 0 ]; then
+		return 1
+	fi
+	echo "[m4-install] Beberapa ESP ditemukan; pilih satu:" >&2
+	for v in /Volumes/*; do
+		if [ -f "$v/EFI/OC/OpenCore.efi" ]; then
+			printf '  sudo %s "%s"\n' "$0" "$v" >&2
+		fi
+	done
+	return 2
 }
 
 if [[ $EUID -ne 0 ]]; then echo "Jalankan dengan sudo" >&2; exit 1; fi
@@ -35,7 +60,11 @@ if [[ "${ALLOW_BOOT_INJECTION:-0}" != "1" ]]; then
 	exit 3
 fi
 
-ESP_MNT="$(find_esp)" || { echo "[m4-install] ESP tidak ditemukan" >&2; exit 1; }
+ESP_MNT="$(find_esp)" || {
+	echo "[m4-install] ESP tidak ditemukan / ambigu." >&2
+	echo "[m4-install] Jalankan: sudo $0 \"/Volumes/NAMA_ESP\"" >&2
+	exit 1
+}
 OC_DIR="$ESP_MNT/EFI/OC"
 echo "[m4-install] ESP: $ESP_MNT"
 
@@ -161,7 +190,7 @@ for k in RtWlanU RtWlanU1827; do
 	fi
 done
 
-cat <<EOF
+cat <<'EOF'
 
 ═══════════════════════════════════════════════════════════════════
  SIAP REBOOT (M4). Setelah reboot:

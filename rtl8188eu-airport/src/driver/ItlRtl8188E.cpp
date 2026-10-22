@@ -60,6 +60,8 @@ int ItlRtl8188E::halWrite(void *ctx, uint16_t addr, const void *buf,
 
 bool ItlRtl8188E::init()
 {
+	if (!super::init())
+		return false;
 	memset(&fChip, 0, sizeof(fChip));
 	memset(&fIc, 0, sizeof(fIc));
 	fInterface = nullptr;
@@ -73,6 +75,7 @@ bool ItlRtl8188E::init()
 	fChipReady = false;
 	fBulkReady = false;
 	fIfAttached = false;
+	fSawRx = false;
 	fTxQueueSize = 64;
 	fRxTimer = nullptr;
 	fRxLock = nullptr;
@@ -96,6 +99,12 @@ void ItlRtl8188E::free()
 	 * tidak dipanggil.
 	 */
 	fRxRunning = false;
+	if (fAttached)
+		fChip.usb.setRxCallback(nullptr, nullptr);
+	if (fBulkReady) {
+		fChip.usb.bulkClose();
+		fBulkReady = false;
+	}
 	if (fScanTo) {
 		timeout_del(&fScanTo);
 		timeout_free(&fScanTo);
@@ -237,23 +246,29 @@ bool ItlRtl8188E::attach(IOPCIDevice *device)
 	if (!fInterface)
 		return false;
 
+	setDiag("RTL8188E-stage", "usb-attach");
 	if (fChip.usb.attach(getController(), fDevice, fInterface) != 0) {
 		IOLog(LOGP "usb attach gagal\n");
+		setDiag("RTL8188E-stage", "fail-usb-attach");
 		return false;
 	}
 	fAttached = true;
 
+	setDiag("RTL8188E-stage", "chip-init");
 	if (initChip() != 0) {
 		IOLog(LOGP "init chip gagal\n");
+		setDiag("RTL8188E-stage", "fail-chip-init");
 		stopChip();
 		return false;
 	}
 
 	if (!fChip.usb.bulkOpen(fInterface)) {
 		IOLog(LOGP "bulkOpen gagal\n");
+		setDiag("RTL8188E-stage", "fail-bulk-open");
 		stopChip();
 		return false;
 	}
+	setDiag("RTL8188E-stage", "net80211-attach");
 
 	/* ---------------- net80211 ---------------- */
 	struct _ifnet *ifp = &fIc.ic_if;
@@ -353,7 +368,15 @@ bool ItlRtl8188E::attach(IOPCIDevice *device)
 		return false;
 	}
 	fBulkReady = true;
+	setDiag("RTL8188E-stage", "net80211-ready");
+	if (getController()) {
+		OSData *mac = OSData::withBytes(fMac, IEEE80211_ADDR_LEN);
 
+		if (mac) {
+			getController()->setProperty("RTL8188E-mac", mac);
+			mac->release();
+		}
+	}
 	IOLog(LOGP "net80211 attach OK (state INIT)\n");
 	return true;
 }
@@ -366,6 +389,15 @@ void ItlRtl8188E::detach(IOPCIDevice *device)
 	fRxRunning = false;
 	if (fAttached)
 		fChip.usb.setRxCallback(nullptr, nullptr);
+	/*
+	 * Tutup pipe RX lebih dulu: bulkClose() melakukan abort sinkron,
+	 * jadi setelah ini tidak ada completion yang boleh menyentuh
+	 * fRxLock/fRxTimer yang akan dibebaskan di bawah.
+	 */
+	if (fBulkReady) {
+		fChip.usb.bulkClose();
+		fBulkReady = false;
+	}
 	if (fRxTimer) {
 		fRxTimer->cancelTimeout();
 		if (getMainWorkLoop())
@@ -409,6 +441,7 @@ IOReturn ItlRtl8188E::enable(IONetworkInterface *interface)
 	ifp->if_flags |= IFF_UP | IFF_RUNNING;
 	fEnabled = true;
 	fRxRunning = true;
+	setDiag("RTL8188E-stage", "enabled");
 	if (fIc.ic_state == IEEE80211_S_INIT)
 		ieee80211_new_state(&fIc, IEEE80211_S_SCAN, -1);
 	return kIOReturnSuccess;
@@ -425,6 +458,7 @@ IOReturn ItlRtl8188E::disable(IONetworkInterface *interface)
 	ifp->if_flags &= ~(IFF_UP | IFF_RUNNING);
 	fEnabled = false;
 	fRxRunning = false;
+	setDiag("RTL8188E-stage", "disabled");
 	if (fScanTo)
 		timeout_del(&fScanTo);
 	if (fIc.ic_state != IEEE80211_S_INIT)
@@ -441,12 +475,36 @@ struct ieee80211com *ItlRtl8188E::get80211Controller()
 /*  net80211 state machine                                             */
 /* ------------------------------------------------------------------ */
 
+/*
+ * Diagnostik lewat ioreg (log show rusak di mesin ini):
+ *   ioreg -r -c AirportItlwm -l | grep RTL8188E
+ *   ioreg -r -c IOPCIEDeviceWrapper -l | grep RTL8188E
+ * Nilai dipasang pada controller DAN provider (wrapper) supaya tetap
+ * terlihat walau start() frontend gagal.
+ */
+void ItlRtl8188E::setDiag(const char *key, const char *value)
+{
+	IOService *svc = getController();
+
+	if (!svc || !key || !value)
+		return;
+	svc->setProperty(key, value);
+	IOService *provider = svc->getProvider();
+
+	if (provider)
+		provider->setProperty(key, value);
+}
+
 void ItlRtl8188E::setChannel(struct ieee80211_channel *chan)
 {
 	if (!chan)
 		return;
 	uint8_t ch = (uint8_t)ieee80211_chan2ieee(&fIc, chan);
 	if (ch >= 1 && ch <= 14) {
+		char stage[24];
+
+		snprintf(stage, sizeof(stage), "ch-%u", ch);
+		setDiag("RTL8188E-scan", stage);
 		if (rtwn_set_chan_8188e(halRead, halWrite, this, ch) != 0)
 			IOLog(LOGP "set kanal %u gagal\n", ch);
 	}
@@ -460,6 +518,23 @@ int ItlRtl8188E::newstateCb(struct ieee80211com *ic,
 
 	if (!me)
 		return EINVAL;
+
+	switch (nstate) {
+	case IEEE80211_S_INIT:
+		me->setDiag("RTL8188E-stage", "state-init");
+		break;
+	case IEEE80211_S_AUTH:
+		me->setDiag("RTL8188E-stage", "state-auth");
+		break;
+	case IEEE80211_S_ASSOC:
+		me->setDiag("RTL8188E-stage", "state-assoc");
+		break;
+	case IEEE80211_S_RUN:
+		me->setDiag("RTL8188E-stage", "state-run");
+		break;
+	default:
+		break;
+	}
 
 	switch (nstate) {
 	case IEEE80211_S_SCAN: {
@@ -519,8 +594,13 @@ void ItlRtl8188E::scanTimeoutCb(void *arg)
  */
 void ItlRtl8188E::watchdogCb(struct _ifnet *ifp)
 {
+	/*
+	 * Bukan sekadar membersihkan if_timer: net80211 memakai watchdog
+	 * ini untuk retry auth/assoc dan memaksa scan ulang kalau AP diam.
+	 * Tanpa ini state machine bisa tertahan di AUTH/ASSOC selamanya.
+	 */
 	if (ifp)
-		ifp->if_timer = 0;
+		ieee80211_watchdog(ifp);
 }
 
 /* ------------------------------------------------------------------ */
@@ -568,8 +648,13 @@ void ItlRtl8188E::sendFrame(mbuf_t m, struct ieee80211_node *ni, bool isMgmt)
 	/* Frame panjang (mis. CCMP) → pastikan kontigu. */
 	len = mbuf_pkthdr_len(m);
 	if (mbuf_len(m) < len) {
+		/*
+		 * mbuf_pullup() MEMBEBASKAN seluruh chain kalau gagal —
+		 * jangan panggil mbuf_freem() lagi di sini (double free).
+		 */
 		if (mbuf_pullup(&m, len) != 0) {
-			mbuf_freem(m);
+			if (ni)
+				ieee80211_release_node(&fIc, ni);
 			return;
 		}
 		wh = (uint8_t *)mbuf_data(m);
@@ -589,10 +674,20 @@ void ItlRtl8188E::sendFrame(mbuf_t m, struct ieee80211_node *ni, bool isMgmt)
 	if (!isMgmt && (wh[1] & IEEE80211_FC1_PROTECTED)) {
 		struct ieee80211_key *k = ieee80211_get_txkey(&fIc,
 		    (struct ieee80211_frame *)wh, ni);
+		if (!k) {
+			/* Frame terproteksi tanpa key jangan dikirim polos. */
+			mbuf_freem(m);
+			if (ni)
+				ieee80211_release_node(&fIc, ni);
+			return;
+		}
 		if (k) {
 			mbuf_t enc = ieee80211_encrypt(&fIc, m, k);
 			if (!enc) {
-				mbuf_freem(m);
+				/*
+				 * ieee80211_encrypt() sudah membebaskan m
+				 * (baik sukses maupun gagal). Jangan free lagi.
+				 */
 				if (ni)
 					ieee80211_release_node(&fIc, ni);
 				return;
@@ -620,29 +715,42 @@ void ItlRtl8188E::sendFrame(mbuf_t m, struct ieee80211_node *ni, bool isMgmt)
 		    bcast);
 	} else {
 		bool qos = (wh[0] & IEEE80211_FC0_SUBTYPE_QOS) != 0;
+		uint16_t seq = ((uint16_t)wh[22] |
+		    ((uint16_t)wh[23] << 8)) >> IEEE80211_SEQ_SEQ_SHIFT;
 
 		rtwn_usb_build_tx_desc(buf, RTWN_USB_TX_DESC_SIZE, (uint16_t)len,
 		    RTWN_USB_TX_DESC_SIZE, bcast, true, raid, false, false, 0);
-		/* txdw3: paksa laju (DRVRATE), CCK 1 Mb/s. */
-		buf[12] = 0x00;
-		buf[13] = 0x01;
+		/*
+		 * Layout r92c_tx_desc_usb:
+		 *   12 txdw3 (16 bit)  14 txdseq  16 txdw4  20 txdw5
+		 * DRVRATE/HWSEQ ada di txdw4, BUKAN txdw3. Samakan dengan
+		 * mgmt builder yang sudah terbukti di M2.
+		 */
 		if (qos) {
-			/* QoS: seq/frag sudah diberikan net80211. */
-			buf[14] = wh[22];
-			buf[15] = wh[23];
+			/* QoS: nomor urut dari net80211 (field 12 bit). */
+			buf[14] = (uint8_t)(seq & 0xff);
+			buf[15] = (uint8_t)((seq >> 8) & 0xff);
+			buf[16] = 0x40;	/* QOS */
+			buf[17] = 0x01;	/* DRVRATE */
 		} else {
 			/* Non-QoS: chip yang memberi nomor urut. */
 			buf[14] = 0x00;
-			buf[15] = 0x80;
+			buf[15] = 0x80;	/* txdseq: HWSEQEN */
+			buf[16] = 0x80;	/* HWSEQ */
+			buf[17] = 0x01;	/* DRVRATE */
 		}
+		buf[18] = 0x00;
+		buf[19] = 0x00;
+		/* txdw5: DATARATE=0 → CCK 1 Mb/s; tanpa SGI. */
+		buf[20] = 0x00;
+		buf[21] = 0x00;
+		buf[22] = 0x00;
+		buf[23] = 0x00;
 		/*
 		 * CCX_RPT dimatikan: kita belum memproses laporan TX (C2H),
 		 * dan laporan itu bisa disalahartikan sebagai frame 802.11.
 		 * AGGBK tetap. */
 		buf[10] &= (uint8_t)~0x08;
-		/* txdw4: DATARATE=0 (1M), fallback 0x1f. */
-		buf[16] = 0x00;
-		buf[17] = 0x1f;
 		rtwn_usb_tx_checksum(buf, RTWN_USB_TX_DESC_SIZE);
 	}
 
@@ -790,107 +898,204 @@ void ItlRtl8188E::rxQueueFree(void)
 		IOFree(bufs[i], lens[i]);
 }
 
+static inline uint32_t
+rxDescDw(const uint8_t *buf, uint32_t off, int dw)
+{
+	const uint8_t *p = buf + off + dw * 4;
+	return (uint32_t)p[0] | ((uint32_t)p[1] << 8) |
+	    ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
+}
+
+/*
+ * Validasi satu slot RX: descriptor masuk akal + frame 802.11 di posisi
+ * canonical (24 + infosz). Dipakai untuk memilih stride 128 vs 4 byte.
+ */
+static bool
+rxSlotOk(const uint8_t *buf, uint32_t len, uint32_t off)
+{
+	rtwn_usb_rxinfo_t info;
+	const struct ieee80211_frame *wh;
+	uint32_t foff;
+	uint8_t type;
+
+	if (off + RTWN_USB_RX_DESC_SIZE + RTWN_USB_RX_EXTRA_SIZE > len)
+		return false;
+	if (!rtwn_usb_parse_rx_desc(buf + off, len - off, &info))
+		return false;
+	if (info.pktlen == 0 || info.pktlen > 2048)
+		return false;
+	foff = off + RTWN_USB_RX_DESC_SIZE + info.infosz;
+	if (foff + info.pktlen > len ||
+	    info.pktlen < sizeof(struct ieee80211_frame))
+		return false;
+	wh = (const struct ieee80211_frame *)(buf + foff);
+	if ((wh->i_fc[0] & IEEE80211_FC0_VERSION_MASK) !=
+	    IEEE80211_FC0_VERSION_0)
+		return false;
+	type = wh->i_fc[0] & IEEE80211_FC0_TYPE_MASK;
+	return type == IEEE80211_FC0_TYPE_MGT ||
+	    type == IEEE80211_FC0_TYPE_DATA ||
+	    type == IEEE80211_FC0_TYPE_CTL;
+}
+
 void ItlRtl8188E::handleRx(const uint8_t *buf, uint32_t len)
 {
 	struct _ifnet *ifp = &fIc.ic_if;
 	uint32_t off = 0;
+	uint32_t npkts = 0;
+	uint32_t slot = 0;
 
-	while (off + RTWN_USB_RX_DESC_SIZE + RTWN_USB_RX_EXTRA_SIZE <= len) {
+	while (off + RTWN_USB_RX_DESC_SIZE + RTWN_USB_RX_EXTRA_SIZE <= len &&
+	    (npkts == 0 || slot < npkts)) {
 		rtwn_usb_rxinfo_t info;
-		uint32_t flen, foff;
+		uint32_t flen, foff, dw2, dw3, s4, s128, next;
 		struct ieee80211_frame *wh;
 		struct ieee80211_node *ni;
 		struct ieee80211_rxinfo rxi;
 		mbuf_t m;
 		int8_t rssi = -95;
-
-		uint32_t doff = off;
+		bool txReport;
 
 		if (!rtwn_usb_parse_rx_desc(buf + off, len - off, &info))
 			break;
-
-		/*
-		 * dw2 bit 28 = R92E_RXDW2_RPT_C2H. Ini laporan/event firmware,
-		 * bukan frame 802.11. Tanpa filter, isinya bisa masuk net80211
-		 * sebagai frame sampah.
-		 */
-		{
-			uint32_t dw2 = (uint32_t)buf[doff + 8] |
-			    ((uint32_t)buf[doff + 9] << 8) |
-			    ((uint32_t)buf[doff + 10] << 16) |
-			    ((uint32_t)buf[doff + 11] << 24);
-			if (dw2 & 0x10000000u) {
-				uint32_t adv = RTWN_USB_RX_DESC_SIZE + info.infosz +
-				    info.pktlen;
-				off = (doff + adv + 3) & ~3u;
-				if (adv == 0 || off <= doff)
-					break;
-				continue;
-			}
-		}
 
 		flen = info.pktlen;
 		if (flen == 0 || flen > 2048)
 			break;
 
-		/*
-		 * Format 8188E (OpenBSD urtwn): descriptor 24 B + PHY status
-		 * (infosz) + frame. Tidak ada padding +2 sebelum frame; M2
-		 * memakai +2 hanya sebagai kandidat fallback.
-		 */
+		dw2 = rxDescDw(buf, off, 2);
+		dw3 = rxDescDw(buf, off, 3);
+
+		if (npkts == 0) {
+			/* Jumlah frame dalam satu transfer USB (RXDW2 bit 16-23). */
+			npkts = (dw2 >> 16) & 0xff;
+			if (npkts == 0)
+				npkts = 1;
+			if (npkts > 64)
+				npkts = 64;
+		}
+		slot++;
+
 		foff = off + RTWN_USB_RX_DESC_SIZE + info.infosz;
 		if (foff + flen > len)
 			break;
 
-		/* Majukan offset lebih dulu untuk semua jalur di bawah. */
-		off = (foff + flen + 3) & ~3u;
+		/*
+		 * RTL8188E memakai RXDW3 bit 14-15 untuk jenis report.
+		 * TX report bukan frame 802.11. Jangan memakai RXDW2 bit 28:
+		 * itu field C2H milik 92E, tidak dipakai 88E (OpenBSD hanya
+		 * memeriksa RXDW3 untuk chip ini).
+		 */
+		txReport = ((dw3 >> 14) & 0x3) != 0;
 
-		if (info.crcError || info.icvError)
-			continue;
-		if (flen < sizeof(struct ieee80211_frame))
-			continue;
-
-		wh = (struct ieee80211_frame *)(buf + foff);
-		if ((wh->i_fc[0] & IEEE80211_FC0_VERSION_MASK) !=
-		    IEEE80211_FC0_VERSION_0)
-			continue;
+		if (info.crcError || info.icvError) {
+			/* Sama seperti OpenBSD: frame korup jangan masuk net80211. */
+			txReport = true;
+		}
 
 		/*
-		 * RSSI dari PHY status, rumus rtwn_r88e_get_rssi().
-		 * phy[4..7] = sq_rpt (LE32); phy[5] = agc_rpt.
+		 * Stride: OpenBSD memakai 128-byte alignment untuk 88E,
+		 * sedangkan pengamatan M2 (npkts=1) tidak membedakan.
+		 * Pilih kandidat yang benar-benar berisi descriptor +
+		 * frame valid supaya tidak salah saat npkts > 1.
 		 */
-		if (info.infosz > 0 && info.hasPhyStatus) {
-			const uint8_t *phy = buf + foff - info.infosz;
-			if (info.rate <= 3) {
-				static const int8_t cckoff[] =
-				    { 20, 14, 10, -4, -16, -22, -38, -40 };
-				uint8_t agc = phy[5];
-				uint8_t rpt = (agc >> 5) & 0x7;
-				rssi = ((agc & 0x1f) > 27) ? -94 :
-				    (int8_t)(cckoff[rpt] - ((agc & 0x1f) << 1));
-			} else {
-				uint32_t sq = (uint32_t)phy[4] |
-				    ((uint32_t)phy[5] << 8) |
-				    ((uint32_t)phy[6] << 16) |
-				    ((uint32_t)phy[7] << 24);
-				rssi = (int8_t)(((sq >> 1) & 0x7f) - 110);
+		s4 = (RTWN_USB_RX_DESC_SIZE + info.infosz + flen + 3) & ~3u;
+		s128 = (RTWN_USB_RX_DESC_SIZE + info.infosz + flen + 127) &
+		    ~127u;
+		next = off + s4;
+		if (slot < npkts) {
+			if (rxSlotOk(buf, len, off + s128))
+				next = off + s128;
+			else if (!rxSlotOk(buf, len, off + s4))
+				next = 0;
+		}
+
+		if (!txReport) {
+			uint8_t type = 0;
+
+			if (flen < sizeof(struct ieee80211_frame))
+				goto advance;
+			wh = (struct ieee80211_frame *)(buf + foff);
+			if (!fSawRx) {
+				const char *kind = "data";
+
+				fSawRx = true;
+				switch (wh->i_fc[0] & IEEE80211_FC0_TYPE_MASK) {
+				case IEEE80211_FC0_TYPE_MGT:
+					kind = ((wh->i_fc[0] & IEEE80211_FC0_SUBTYPE_MASK) ==
+					    IEEE80211_FC0_SUBTYPE_BEACON) ?
+					    "beacon" : "mgmt";
+					break;
+				case IEEE80211_FC0_TYPE_CTL:
+					kind = "ctrl";
+					break;
+				default:
+					break;
+				}
+				setDiag("RTL8188E-first-rx", kind);
+			}
+			if ((wh->i_fc[0] & IEEE80211_FC0_VERSION_MASK) !=
+			    IEEE80211_FC0_VERSION_0)
+				goto advance;
+
+			/* RSSI dari PHY status (rtwn_r88e_get_rssi). */
+			if (info.infosz > 0 && info.hasPhyStatus) {
+				const uint8_t *phy = buf + foff - info.infosz;
+
+				if (info.rate <= 3) {
+					static const int8_t cckoff[] =
+					    { 20, 14, 10, -4, -16, -22, -38, -40 };
+					uint8_t agc = phy[5];
+					uint8_t rpt = (agc >> 5) & 0x7;
+
+					rssi = ((agc & 0x1f) > 27) ? -94 :
+					    (int8_t)(cckoff[rpt] -
+					    ((agc & 0x1f) << 1));
+				} else {
+					uint32_t sq = (uint32_t)phy[4] |
+					    ((uint32_t)phy[5] << 8) |
+					    ((uint32_t)phy[6] << 16) |
+					    ((uint32_t)phy[7] << 24);
+
+					rssi = (int8_t)(((sq >> 1) & 0x7f) - 110);
+				}
+			}
+
+			m = getController() ?
+			    getController()->allocatePacket(flen) : nullptr;
+			if (m) {
+				if (mbuf_copyback(m, 0, flen, buf + foff,
+				    MBUF_WAITOK) == 0) {
+					ni = ieee80211_find_rxnode(&fIc, wh);
+					memset(&rxi, 0, sizeof(rxi));
+					/*
+					 * Port net80211 ini memakai RSSI ternormalisasi
+					 * 0..ic_max_rssi (bukan dBm), sama seperti iwm:
+					 * frontend menghitung asr_rssi = rssi - 100.
+					 * rxi/ni_rssi bertipe u8; dBm negatif akan wrap.
+					 */
+					{
+						int norm = (int)rssi + 100;
+
+						if (norm < 0)
+							norm = 0;
+						if (norm > fIc.ic_max_rssi)
+							norm = fIc.ic_max_rssi;
+						rxi.rxi_rssi = norm;
+					}
+					ieee80211_inputm(ifp, m, ni, &rxi,
+					    nullptr);
+					ieee80211_release_node(&fIc, ni);
+				} else {
+					mbuf_freem(m);
+				}
 			}
 		}
 
-		m = getController() ? getController()->allocatePacket(flen) : nullptr;
-		if (!m)
-			continue;
-
-		if (mbuf_copyback(m, 0, flen, buf + foff, MBUF_WAITOK) != 0) {
-			mbuf_freem(m);
-			continue;
-		}
-
-		ni = ieee80211_find_rxnode(&fIc, wh);
-		memset(&rxi, 0, sizeof(rxi));
-		rxi.rxi_rssi = rssi;
-		ieee80211_inputm(ifp, m, ni, &rxi, nullptr);
-		ieee80211_release_node(&fIc, ni);
+advance:
+		if (next == 0 || next <= off)
+			break;
+		off = next;
 	}
 }
 

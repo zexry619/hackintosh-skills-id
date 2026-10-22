@@ -80,6 +80,7 @@ public:
 	bool         fChipReady;
 	bool         fBulkReady;
 	bool         fIfAttached;
+	bool         fSawRx;
 	uint32_t     fTxQueueSize;
 	uint8_t      fMac[6];
 	char         fFirmwareVersion[32];
@@ -122,6 +123,7 @@ public:
 	void txStart(struct _ifnet *ifp);
 	void sendFrame(mbuf_t m, struct ieee80211_node *ni, bool isMgmt);
 	void setChannel(struct ieee80211_channel *chan);
+	void setDiag(const char *key, const char *value);
 	int  initChip(void);
 	void stopChip(void);
 };

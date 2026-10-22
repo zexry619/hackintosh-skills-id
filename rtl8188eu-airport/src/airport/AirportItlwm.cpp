@@ -51,6 +51,27 @@ void AirportItlwm::releaseAll()
 #ifndef AIRPORT_WCL
     OSSafeReleaseNULL(driverFaultReporter);
 #endif
+    /*
+     * Timer harus mati SEBELUM fHalService dilepas: aksi timer
+     * (watchdogAction/fakeScanDone) memakai fHalService. Kalau timer
+     * menembak di jendela antara release HAL dan cancel → NULL deref.
+     */
+    if (watchdogTimer) {
+        watchdogTimer->cancelTimeout();
+        watchdogTimer->disable();
+        if (_fWorkloop)
+            _fWorkloop->removeEventSource(watchdogTimer);
+        watchdogTimer->release();
+        watchdogTimer = NULL;
+    }
+    if (scanSource) {
+        scanSource->cancelTimeout();
+        scanSource->disable();
+        if (_fWorkloop)
+            _fWorkloop->removeEventSource(scanSource);
+        scanSource->release();
+        scanSource = NULL;
+    }
     if (fHalService) {
         fHalService->release();
         fHalService = NULL;
@@ -61,21 +82,6 @@ void AirportItlwm::releaseAll()
             _fWorkloop->removeEventSource(_fCommandGate);
             _fCommandGate->release();
             _fCommandGate = NULL;
-        }
-        if (scanSource) {
-            scanSource->cancelTimeout();
-            scanSource->disable();
-            _fWorkloop->removeEventSource(scanSource);
-            scanSource->release();
-            scanSource = NULL;
-        }
-        if (fWatchdogWorkLoop && watchdogTimer) {
-            watchdogTimer->cancelTimeout();
-            fWatchdogWorkLoop->removeEventSource(watchdogTimer);
-            watchdogTimer->release();
-            watchdogTimer = NULL;
-            fWatchdogWorkLoop->release();
-            fWatchdogWorkLoop = NULL;
         }
         _fWorkloop->release();
         _fWorkloop = NULL;
@@ -115,7 +121,11 @@ eventHandler(struct ieee80211com *ic, int msgCode, void *data)
 
 void AirportItlwm::watchdogAction(IOTimerEventSource *timer)
 {
+    if (!fHalService)
+        return;
     struct _ifnet *ifp = &fHalService->get80211Controller()->ic_ac.ac_if;
+    if (!ifp->if_watchdog)
+        return;
     (*ifp->if_watchdog)(ifp);
 
     watchdogTimer->setTimeoutMS(kWatchDogTimerPeriod);
@@ -345,14 +355,11 @@ bool AirportItlwm::start(IOService *provider)
         releaseAll();
         return false;
     }
-    fWatchdogWorkLoop = IOWorkLoop::workLoop();
-    if (fWatchdogWorkLoop == NULL) {
-        XYLog("init watchdog workloop fail\n");
-        fHalService->detach(pciNub);
-        super::stop(provider);
-        releaseAll();
-        return false;
-    }
+    /*
+     * Watchdog HARUS di workloop IO80211 yang sama dengan RX dan timer
+     * scan. Kalau ditaruh di workloop terpisah, ieee80211_watchdog()
+     * bisa mengubah state/free node bersamaan dengan RX → race.
+     */
     watchdogTimer = IOTimerEventSource::timerEventSource(this, OSMemberFunctionCast(IOTimerEventSource::Action, this, &AirportItlwm::watchdogAction));
     if (!watchdogTimer) {
         XYLog("init watchdog fail\n");
@@ -361,7 +368,14 @@ bool AirportItlwm::start(IOService *provider)
         releaseAll();
         return false;
     }
-    fWatchdogWorkLoop->addEventSource(watchdogTimer);
+    if (_fWorkloop->addEventSource(watchdogTimer) != kIOReturnSuccess) {
+        XYLog("add watchdog event source fail\n");
+        OSSafeReleaseNULL(watchdogTimer);
+        fHalService->detach(pciNub);
+        super::stop(provider);
+        releaseAll();
+        return false;
+    }
     scanSource = IOTimerEventSource::timerEventSource(this, &fakeScanDone);
 #ifdef AIRPORT_WCL
     if (!scanSource || _fWorkloop->addEventSource(scanSource) != kIOReturnSuccess) {
@@ -474,6 +488,11 @@ bool AirportItlwm::start(IOService *provider)
 void AirportItlwm::stop(IOService *provider)
 {
     XYLog("%s\n", __PRETTY_FUNCTION__);XYLog("%s\n", __PRETTY_FUNCTION__);
+    if (!fHalService) {
+        /* start() pernah gagal dan releaseAll() sudah membersihkan. */
+        super::stop(provider);
+        return;
+    }
     struct _ifnet *ifp = &fHalService->get80211Controller()->ic_ac.ac_if;
 #ifdef AIRPORT_WCL
     if (fNetIf)
@@ -1212,9 +1231,12 @@ IOReturn AirportItlwm::enableAdapter(IONetworkInterface *netif)
 
 void AirportItlwm::disableAdapter(IONetworkInterface *netif)
 {
-    watchdogTimer->cancelTimeout();
-    watchdogTimer->disable();
-    fHalService->disable(netif);
+    if (watchdogTimer) {
+        watchdogTimer->cancelTimeout();
+        watchdogTimer->disable();
+    }
+    if (fHalService)
+        fHalService->disable(netif);
 }
 
 IOReturn AirportItlwm::

@@ -296,8 +296,37 @@ satu-satunya reboot uji tidak berakhir panic karena hal sepele.
 kextutil -t ...                          hanya "not approved to load"
 nm -u | grep cxa_pure_virtual            hanya dari vtable ItlHalService
                                          (abstract base, tidak pernah dipanggil)
-./scripts/run-tests.sh                   PASS
+./scripts/run-tests.sh                   PASS (semua suite)
 ```
+
+### 10b. Audit putaran kedua — TX/RX/teardown/lifecycle (22 Okt 2026, malam)
+
+Audit lanjutan setelah tabel di atas, fokus pada jalur yang **pasti dieksekusi
+saat boot dan asosiasi pertama**. Semua bug di bawah sudah diperbaiki dan
+build/tes ulang lulus (`m4build18.log`, `runtests4.log`).
+
+| # | Temuan | Dampak | Perbaikan |
+|---|---|---|---|
+| 14 | **Descriptor TX data salah offset** — `DRVRATE`/`HWSEQ` ditulis ke `txdw3` (byte 12–13) | Chip membaca `txdw3` sebagai bit HWSEQ/seq; frame data bisa dikirim tanpa rate/seq yang benar → TX macet | tulis ke **`txdw4`** (byte 16–19): non-QoS `0x0180` (HWSEQ\|DRVRATE) + `txdseq=0x8000`; QoS `0x0140` + seq asli; `txdw5=0` CCK 1 Mb/s. Sesuai `urtwn_tx_fill_desc` |
+| 15 | `mbuf_pullup()` gagal lalu `mbuf_freem(m)` | API Apple **membebaskan seluruh chain** saat gagal → **double free** → panic | jangan free lagi; cukup lepas referensi node |
+| 16 | `ieee80211_encrypt()` gagal lalu `mbuf_freem(m)` | Encrypt **sudah** membebaskan `m0` (sukses & gagal) → double free | hapus `mbuf_freem` di jalur gagal |
+| 17 | Filter TX-report memakai `RXDW2` bit 28 (field C2H milik 92E) | Frame 88E valid bisa ikut dibuang / report lolos | hanya `RXDW3` bit 14–15 (OpenBSD 88E); bit C2H dihapus |
+| 18 | RSSI PHYST dicek di bit 20 | PHY status tidak pernah terdeteksi → RSSI selalu -95 → menu sinyal palsu | `R92C_RXDW0_PHYST` = **bit 26** (`0x04000000`) |
+| 19 | RSSI dBm mentah dimasukkan ke `rxi_rssi` | `ni_rssi` bertipe `u8` → nilai negatif wrap (mis. -50 → 206) | normalisasi `clamp(dbm + 100, 0, ic_max_rssi)` seperti iwm |
+| 20 | Frame CRC/ICV error tetap diproses | net80211 menerima frame korup (risiko state aneh) | drop sebelum `ieee80211_inputm`, sama seperti OpenBSD |
+| 21 | `releaseAll()` melepas `fHalService` sebelum timer | `watchdogAction`/`fakeScanDone` menembak HAL yang sudah bebas → NULL deref | cancel/disable/remove **semua timer** dulu, baru release HAL; `_fCommandGate`/`_fWorkloop` dilepas terakhir |
+| 22 | Watchdog di workloop terpisah | `ieee80211_watchdog` mengubah state/free node **bersamaan** dengan RX di workloop IO80211 → race | watchdog dipindah ke `_fWorkloop` yang sama dengan RX + timer scan |
+| 23 | `watchdogCb` hanya membersihkan `if_timer` | Auth/assoc timeout tidak pernah retry → state macet di AUTH | panggil `ieee80211_watchdog(ifp)` (retry 3× lalu scan) |
+| 24 | `free()` sebelum `initWithController` | `free()` bisa jalan saat base member belum di-zero → release pointer sampah | `ItlHalService::init()` men-zero semua member; `ItlRtl8188E::init()` memanggil `super::init()` |
+| 25 | Teardown RX tidak sinkron | callback USB bisa menyentuh `fRxLock`/`fRxTimer` yang sudah dibebaskan | `fRxRunning=false` + callback null + `bulkClose()` (abort sinkron) **sebelum** free timer/queue/lock |
+| 26 | `restore-test-esp.sh` lama | Tidak mengenal M4; bisa menyisakan bundle/entri atau salah hapus boot-arg | deteksi ESP eksplisit, hapus M1+M4, parsing boot-arg per token (flag & nilai terpisah), backup config, fallback |
+| 27 | Tidak ada diagnostik saat boot | `log show` rusak di mesin ini → tidak tahu sejauh mana driver jalan | properti ioreg: `RTL8188E-stage`, `RTL8188E-scan`, `RTL8188E-first-rx`, `RTL8188E-mac` |
+
+Catatan hasil audit OpenBSD `rtwn_newstate`: untuk STA data dasar, RCR tanpa
+`CBSSID_DATA/BCN` (menerima semua BSSID), `RXFLTMAP2=0xffff`, `TXPAUSE=0`,
+MACID 0/BSSID 0 sudah cukup. Penulisan TSF/RAID/rate-init dan switching gain
+scan↔link sengaja **belum** ditambahkan karena belum terbukti diperlukan.
+
 
 ### Yang masih belum bisa diverifikasi tanpa hardware
 

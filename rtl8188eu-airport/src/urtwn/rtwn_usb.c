@@ -213,7 +213,8 @@ bool rtwn_usb_parse_rx_desc(const uint8_t *buf, uint32_t bufLen,
 	info->rate = (uint8_t)(dw3 & 0x1f);
 	info->crcError = (dw0 & 0x4000) != 0;
 	info->icvError = (dw0 & 0x8000) != 0;
-	info->hasPhyStatus = (dw0 & 0x100000) != 0;
+	/* R92C_RXDW0_PHYST = bit 26 (0x04000000), bukan bit 20. */
+	info->hasPhyStatus = (dw0 & 0x04000000) != 0;
 	info->headerLen = RTWN_RX_DESC_SIZE + RTWN_RX_EXTRA_SIZE;
 
 	/*

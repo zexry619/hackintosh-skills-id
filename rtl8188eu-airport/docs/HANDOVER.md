@@ -1081,6 +1081,29 @@ Bug kritis yang ditemukan dan diperbaiki sebelum uji reboot:
 | install script | config rusak tidak dipulihkan | rollback otomatis + verifikasi executable |
 | laporan C2H di RX | sampah firmware dianggap frame 802.11 | filter `R92E_RXDW2_RPT_C2H`; `CCX_RPT` dimatikan |
 
+### Audit putaran kedua (TX/RX/lifecycle) — semua sudah diperbaiki
+
+| Bug | Akibat | Perbaikan |
+|---|---|---|
+| `DRVRATE`/`HWSEQ` ditulis ke `txdw3` | frame data tanpa rate/seq benar → TX macet | tulis ke `txdw4` (byte 16–19): `0x0180` non-QoS / `0x0140` QoS, `txdseq` benar |
+| `mbuf_pullup` gagal → `mbuf_freem(m)` | Apple API sudah membebaskan chain → **double free** | hapus free di jalur gagal |
+| `ieee80211_encrypt` gagal → `mbuf_freem(m)` | encrypt sudah membebaskan `m0` → double free | hapus free di jalur gagal |
+| filter TX report pakai `RXDW2` bit 28 | field C2H milik 92E, bukan 88E | hanya `RXDW3` bit 14–15 |
+| PHYST dicek di bit 20 | RSSI tidak pernah terbaca | `R92C_RXDW0_PHYST` bit 26 |
+| RSSI dBm mentah → `u8` | nilai negatif wrap (206) | normalisasi `clamp(dbm+100, 0, 100)` |
+| frame CRC/ICV ikut diproses | net80211 menerima frame korup | drop sebelum `ieee80211_inputm` |
+| `releaseAll` melepas HAL sebelum timer | watchdog/scan menembak memori bebas | timer dibatalkan/dihapus dulu, HAL terakhir |
+| watchdog di workloop terpisah | race dengan RX (state/free node) | watchdog dipindah ke `_fWorkloop` yang sama |
+| `watchdogCb` tidak memanggil net80211 | auth/assoc timeout tidak retry | panggil `ieee80211_watchdog(ifp)` |
+| base member belum di-zero saat `free()` awal | release pointer sampah | `ItlHalService::init()` men-zero semua |
+| teardown RX tidak sinkron | callback menyentuh lock/timer bebas | callback null + `bulkClose()` sebelum free |
+| `restore-test-esp.sh` belum M4-aware | rollback bisa menyisakan M4/M1 | deteksi ESP + hapus kedua bundle + perbaiki boot-arg |
+| tanpa diagnostik boot | `log show` rusak | properti ioreg `RTL8188E-*` |
+
+Status build terbaru: `./scripts/build-m4.sh` rc=0 (946 undefined dynamic
+symbols), `kextutil -t` hanya berhenti di *"not approved to load"*,
+`./scripts/run-tests.sh` → **SEMUA TEST LULUS**.
+
 ### Risiko / yang belum
 
 1. Asosiasi/WPA2 belum diuji; jalur RUN masih minimal (RCR menerima semua,

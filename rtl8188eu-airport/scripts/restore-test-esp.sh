@@ -1,29 +1,55 @@
 #!/bin/bash
-# restore-test-esp.sh — kembalikan mesin ke kondisi SEBELUM uji M1.
+# restore-test-esp.sh — kembalikan mesin ke kondisi SEBELUM uji M1/M4.
 #
 # Melakukan:
-#   1. Hapus kext dari ESP (EFI/OC/Kexts) + entri Kernel->Add
+#   1. Hapus RTL8188EAirport.kext DAN RTL8188EUM1.kext dari ESP
+#      beserta entri Kernel->Add
 #   2. Hapus boot-arg -rtl8188eum1_mode dari config.plist
 #   3. Bersihkan staging AuxKC
 #   4. Kembalikan driver vendor Realtek ke /Library/Extensions
-#   5. Validasi config.plist
+#   5. Validasi config.plist (kalau rusak, pulihkan backup pre-M4)
 #
 # Setelah script ini: REBOOT → Wi-Fi vendor kembali normal.
 #
-# Usage: sudo ./scripts/restore-test-esp.sh
+# Usage: sudo ./scripts/restore-test-esp.sh ["/Volumes/ESP"]
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-BUNDLE="RTL8188EUM1.kext"
+BUNDLES=("RTL8188EAirport.kext" "RTL8188EUM1.kext")
 BOOTARG="rtl8188eum1_mode"
 DISABLED_DIR="/Library/Extensions.disabled-m1"
+ESP_OVERRIDE="${1:-}"
 
 find_esp() {
-	local v
+	local v one="" count=0
+	# Argumen pertama = path ESP eksplisit (mis. "/Volumes/MAC OS 2").
+	if [ -n "$ESP_OVERRIDE" ]; then
+		if [ -f "$ESP_OVERRIDE/EFI/OC/OpenCore.efi" ]; then
+			echo "$ESP_OVERRIDE"
+			return 0
+		fi
+		return 1
+	fi
 	for v in /Volumes/*; do
-		if [ -f "$v/EFI/OC/OpenCore.efi" ]; then echo "$v"; return 0; fi
+		if [ -f "$v/EFI/OC/OpenCore.efi" ]; then
+			one="$v"
+			count=$((count + 1))
+		fi
 	done
-	return 1
+	if [ "$count" -eq 1 ]; then
+		echo "$one"
+		return 0
+	fi
+	if [ "$count" -eq 0 ]; then
+		return 1
+	fi
+	echo "[restore] Beberapa ESP ditemukan; pilih satu:" >&2
+	for v in /Volumes/*; do
+		if [ -f "$v/EFI/OC/OpenCore.efi" ]; then
+			printf '  sudo %s "%s"\n' "$0" "$v" >&2
+		fi
+	done
+	return 2
 }
 
 if [[ $EUID -ne 0 ]]; then echo "Jalankan dengan sudo" >&2; exit 1; fi
@@ -31,19 +57,22 @@ if [[ $EUID -ne 0 ]]; then echo "Jalankan dengan sudo" >&2; exit 1; fi
 # ── 1. hapus dari ESP + config ──────────────────────────────────────
 if ESP_MNT="$(find_esp)"; then
 	OC_DIR="$ESP_MNT/EFI/OC"
-	rm -rf "$OC_DIR/Kexts/$BUNDLE"
-	echo "[restore] kext dihapus dari ESP"
+	for b in "${BUNDLES[@]}"; do
+		rm -rf "$OC_DIR/Kexts/$b"
+	done
+	echo "[restore] kext M4/M1 dihapus dari ESP"
 
-	python3 - "$OC_DIR/config.plist" "$BUNDLE" "$BOOTARG" <<'PY'
+	python3 - "$OC_DIR/config.plist" "$BOOTARG" "${BUNDLES[@]}" <<'PY'
 import plistlib, sys
 
-path, bundle, argname = sys.argv[1:4]
+path, argname = sys.argv[1:3]
+bundles = sys.argv[3:]
 with open(path, 'rb') as f:
     d = plistlib.load(f)
 
 adds = d.setdefault('Kernel', {}).setdefault('Add', [])
 n = len(adds)
-adds[:] = [a for a in adds if a.get('BundlePath') != bundle]
+adds[:] = [a for a in adds if a.get('BundlePath') not in bundles]
 print('[restore] Kernel->Add: %d -> %d' % (n, len(adds)))
 
 guid = '7C436110-AB2A-4BBB-A880-FE41995C9F82'
@@ -52,17 +81,19 @@ ba = nvram.get(guid, {}).get('boot-args', '')
 if isinstance(ba, bytes):
     ba = ba.decode('utf-8', 'replace')
 parts = []
-skip = False
+skip_next = False
 for tok in ba.split():
-    if skip:
-        skip = False
+    if skip_next:
+        skip_next = False
+        if tok in ('readonly', 'poweron', 'full'):
+            continue
+        parts.append(tok)       # token ini boot-arg asli, jangan dibuang
         continue
-    if tok.startswith('-%s' % argname):
-        skip = True          # buang flag (beserta '=' dan nilainya)
+    if tok == '-%s' % argname:
+        skip_next = True        # flag terpisah dari nilainya
         continue
-    # buang juga nilai mode yang nyasar dari install sebelumnya
-    if tok in ('readonly', 'poweron', 'full'):
-        continue
+    if tok.startswith('-%s=' % argname):
+        continue                # flag + nilai dalam satu token
     parts.append(tok)
 if parts:
     nvram[guid]['boot-args'] = ' '.join(parts)
@@ -74,9 +105,21 @@ with open(path, 'wb') as f:
     plistlib.dump(d, f)
 PY
 
-	plutil -lint "$OC_DIR/config.plist" >/dev/null \
-		&& echo "[restore] plutil -lint: OK" \
-		|| { echo "[restore] ⚠️ config.plist RUSAK — restore dari backup!" >&2; exit 1; }
+	if ! plutil -lint "$OC_DIR/config.plist" >/dev/null; then
+		echo "[restore] ⚠️ config.plist RUSAK — memulihkan backup pre-M4 terbaru" >&2
+		LATEST="$(ls -t "$ROOT"/backup/config.plist.pre-m4.*.bak 2>/dev/null | head -1 || true)"
+		if [ -n "$LATEST" ]; then
+			cp "$LATEST" "$OC_DIR/config.plist"
+			plutil -lint "$OC_DIR/config.plist" >/dev/null \
+				&& echo "[restore] dipulihkan dari $LATEST" \
+				|| { echo "[restore] backup juga rusak — perbaiki manual" >&2; exit 1; }
+		else
+			echo "[restore] tidak ada backup; perbaiki manual" >&2
+			exit 1
+		fi
+	else
+		echo "[restore] plutil -lint: OK"
+	fi
 else
 	echo "[restore] ESP tidak ditemukan — lewati"
 fi
@@ -103,6 +146,7 @@ for name in ("com.apple.kcgen.instructions.plist", "com.apple.kcgen.uakl.plist")
     if len(ul) != n:
         changed = True
     if changed:
+        shutil.copy(p, p + ".bak-restore")
         with open(p, 'wb') as f:
             plistlib.dump(d, f)
         print('[restore] AuxKC staging dibersihkan: %s' % name)

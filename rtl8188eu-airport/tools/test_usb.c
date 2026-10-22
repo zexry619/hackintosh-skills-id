@@ -73,11 +73,13 @@ static void test_rx_desc(void)
 	printf("\n── Descriptor RX (r92c_rx_desc_usb) ──\n");
 
 	memset(buf, 0, sizeof(buf));
-	/* dw0: PKTLEN=64, INFOSZ=2 (16 byte PHY status), PHYST set */
+	/* dw0: PKTLEN=64, INFOSZ=2 (16 byte PHY status), PHYST set
+	 *     INFOSZ di bit 16-19, PHYST di bit 26 (0x04000000). */
 	buf[0] = 64;
 	buf[1] = 0;
-	buf[2] = (uint8_t)((2 << 0) | (1 << 4));	/* INFOSZ=2 → 16 byte, PHYST bit20 */
-	buf[3] = 0x10;
+	buf[2] = (uint8_t)(2 << 0);	/* INFOSZ=2 → 16 byte */
+	buf[3] = 0x04;		/* PHYST = bit 26 (0x04000000) */
+	buf[4] = 0;
 	/* dw3: RATE=4 */
 	buf[12] = 4;
 
