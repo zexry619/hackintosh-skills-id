@@ -671,6 +671,8 @@ ioreg:  +-o AppleUSBInterface@0
 | `docs/audit-hardening.md` | **Audit keamanan + 17 temuan + perbaikannya** |
 
 | `docs/re-8188e-efuse.md` | **RE EFUSE 8188E (decompilation vendor, 3 bug ditemukan)** |
+
+| `docs/m4-airport-integration.md` | **Rencana M4 — integrasi IO80211 native (referensi Airport_RTW88)** |
 ```
 
 Hasil pengukuran:
