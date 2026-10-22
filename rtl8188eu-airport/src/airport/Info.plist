@@ -35,7 +35,7 @@
 			<key>IOClass</key>
 			<string>AirportItlwm</string>
 			<key>IOProbeScore</key>
-			<integer>10000</integer>
+			<integer>92000</integer>
 			<key>IOProviderClass</key>
 			<string>IOPCIEDeviceWrapper</string>
 		</dict>
@@ -46,7 +46,26 @@
 			<key>IOClass</key>
 			<string>IOPCIEDeviceWrapper</string>
 			<key>IOProbeScore</key>
-			<integer>10000</integer>
+			<integer>92000</integer>
+			<key>IOProviderClass</key>
+			<string>IOUSBHostInterface</string>
+			<key>bConfigurationValue</key>
+			<integer>1</integer>
+			<key>bInterfaceNumber</key>
+			<integer>0</integer>
+			<key>idProduct</key>
+			<integer>268</integer>
+			<key>idVendor</key>
+			<integer>9047</integer>
+		</dict>
+		<key>RTL8188EUSWrapper_NoCfg</key>
+		<dict>
+			<key>CFBundleIdentifier</key>
+			<string>io.github.zekri.RTL8188EAirport</string>
+			<key>IOClass</key>
+			<string>IOPCIEDeviceWrapper</string>
+			<key>IOProbeScore</key>
+			<integer>91500</integer>
 			<key>IOProviderClass</key>
 			<string>IOUSBHostInterface</string>
 			<key>bInterfaceNumber</key>
@@ -55,6 +74,25 @@
 			<integer>268</integer>
 			<key>idVendor</key>
 			<integer>9047</integer>
+		</dict>
+		<key>RTL8188EUSWrapper_Realtek</key>
+		<dict>
+			<key>CFBundleIdentifier</key>
+			<string>io.github.zekri.RTL8188EAirport</string>
+			<key>IOClass</key>
+			<string>IOPCIEDeviceWrapper</string>
+			<key>IOProbeScore</key>
+			<integer>92000</integer>
+			<key>IOProviderClass</key>
+			<string>IOUSBHostInterface</string>
+			<key>bConfigurationValue</key>
+			<integer>1</integer>
+			<key>bInterfaceNumber</key>
+			<integer>0</integer>
+			<key>idProduct</key>
+			<integer>33145</integer>
+			<key>idVendor</key>
+			<integer>3034</integer>
 		</dict>
 	</dict>
 	<key>LSMinimumSystemVersion</key>

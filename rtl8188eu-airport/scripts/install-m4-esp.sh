@@ -68,10 +68,8 @@ ESP_MNT="$(find_esp)" || {
 OC_DIR="$ESP_MNT/EFI/OC"
 echo "[m4-install] ESP: $ESP_MNT"
 
-if [[ ! -d "$KEXT" ]]; then
-	echo "[m4-install] build M4 belum ada → build..."
-	"$ROOT/scripts/build-m4.sh" 2>&1 | tail -3
-fi
+echo "[m4-install] build M4..."
+"$ROOT/scripts/build-m4.sh" 2>&1 | tail -3
 [[ -d "$KEXT" ]] || { echo "[m4-install] gagal build M4" >&2; exit 1; }
 
 # ── 1. backup ───────────────────────────────────────────────────────
@@ -111,8 +109,8 @@ adds.append({
     'Comment': 'RTL8188EUS native Wi-Fi (M4: IO80211/Skywalk)',
     'Enabled': True,
     'ExecutablePath': 'Contents/MacOS/RTL8188EAirport',
-    'MaxKernel': '24.99.99',
-    'MinKernel': '24.0.0',
+    'MaxKernel': '',
+    'MinKernel': '',
     'PlistPath': 'Contents/Info.plist',
 })
 

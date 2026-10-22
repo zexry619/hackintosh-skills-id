@@ -157,9 +157,11 @@ bool AirportItlwm::init(OSDictionary *properties)
 
 IOService* AirportItlwm::probe(IOService *provider, SInt32 *score)
 {
+    IOLog("rtl8188e: AirportItlwm::probe called!\n");
     XYLog("%s\n", __PRETTY_FUNCTION__);
     IOPCIEDeviceWrapper *wrapper = OSDynamicCast(IOPCIEDeviceWrapper, provider);
     if (!wrapper) {
+        IOLog("rtl8188e: AirportItlwm provider bukan IOPCIEDeviceWrapper\n");
         XYLog("%s Not a IOPCIEDeviceWrapper instance\n", __FUNCTION__);
         return NULL;
     }
@@ -167,9 +169,11 @@ IOService* AirportItlwm::probe(IOService *provider, SInt32 *score)
     fHalService = wrapper->fHalService;
     /* M4: wrapper USB tidak punya pciNub; HAL memegang IOUSBHostInterface. */
     if (!fHalService) {
+        IOLog("rtl8188e: AirportItlwm wrapper tanpa HAL service\n");
         XYLog("%s wrapper tanpa HAL service\n", __FUNCTION__);
         return NULL;
     }
+    IOLog("rtl8188e: AirportItlwm::probe BERHASIL\n");
     return super::probe(provider, score);
 }
 

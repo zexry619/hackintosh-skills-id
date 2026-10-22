@@ -50,12 +50,14 @@ IOWorkLoop *IOPCIEDeviceWrapper::getWorkLoop() const
 IOService* IOPCIEDeviceWrapper::
 probe(IOService *provider, SInt32 *score)
 {
+    IOLog("rtl8188e: IOPCIEDeviceWrapper::probe score=%d\n", score ? (int)*score : 0);
     XYLog("%s\n", __PRETTY_FUNCTION__);
     if (!super::probe(provider, score))
         return NULL;
 
     IOUSBHostInterface *interface = OSDynamicCast(IOUSBHostInterface, provider);
     if (!interface) {
+        IOLog("rtl8188e: provider bukan IOUSBHostInterface\n");
         XYLog("%s: provider bukan IOUSBHostInterface\n", __FUNCTION__);
         return NULL;
     }
@@ -69,9 +71,12 @@ probe(IOService *provider, SInt32 *score)
         vid = OSDynamicCast(OSNumber, dev->getProperty("idVendor"));
         pid = OSDynamicCast(OSNumber, dev->getProperty("idProduct"));
     }
-    if (!vid || !pid ||
-        vid->unsigned32BitValue() != RTL8188EUS_VID ||
-        pid->unsigned32BitValue() != RTL8188EUS_PID) {
+    UInt32 vidVal = vid ? vid->unsigned32BitValue() : 0;
+    UInt32 pidVal = pid ? pid->unsigned32BitValue() : 0;
+    bool match = (vidVal == RTL8188EUS_VID && pidVal == RTL8188EUS_PID) ||
+                 (vidVal == 0x0bda && pidVal == 0x8179);
+    if (!match) {
+        IOLog("rtl8188e: bukan RTL8188EUS vid=0x%04x pid=0x%04x\n", (unsigned)vidVal, (unsigned)pidVal);
         XYLog("%s: bukan RTL8188EUS (vid/pid tidak cocok)\n", __FUNCTION__);
         return NULL;
     }
@@ -82,6 +87,7 @@ probe(IOService *provider, SInt32 *score)
 
     ItlRtl8188E *hal = new ItlRtl8188E;
     if (!hal || !hal->init()) {
+        IOLog("rtl8188e: gagal membuat HAL\n");
         XYLog("%s: gagal membuat HAL\n", __FUNCTION__);
         if (hal) hal->release();
         fInterface->release();
@@ -89,6 +95,7 @@ probe(IOService *provider, SInt32 *score)
         return NULL;
     }
     if (!hal->prepare(interface)) {
+        IOLog("rtl8188e: HAL prepare gagal\n");
         XYLog("%s: HAL prepare gagal\n", __FUNCTION__);
         hal->release();
         fInterface->release();
@@ -96,22 +103,31 @@ probe(IOService *provider, SInt32 *score)
         return NULL;
     }
     fHalService = hal;
+    IOLog("rtl8188e: IOPCIEDeviceWrapper::probe BERHASIL\n");
     return this;
 }
 
 bool IOPCIEDeviceWrapper::
 start(IOService *provider)
 {
+    IOLog("rtl8188e: IOPCIEDeviceWrapper::start!\n");
     XYLog("%s\n", __PRETTY_FUNCTION__);
     _fWorkloop = IO80211WorkQueue::workQueue();
-    if (!super::start(provider))
+    if (!super::start(provider)) {
+        IOLog("rtl8188e: IOPCIEDeviceWrapper super::start gagal\n");
         return false;
+    }
     if (!_fWorkloop) {
+        IOLog("rtl8188e: IOPCIEDeviceWrapper workloop gagal\n");
         XYLog("%s: workloop gagal\n", __FUNCTION__);
         return false;
     }
     UInt8 builtIn = 0;
-    setProperty("built-in", OSData::withBytes(&builtIn, sizeof(builtIn)));
+    OSData *bi = OSData::withBytes(&builtIn, sizeof(builtIn));
+    if (bi) {
+        setProperty("built-in", bi);
+        bi->release();
+    }
     static IOPMPowerState powerStateArray[2] = {
         {1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
         {1, kIOPMDeviceUsable, kIOPMPowerOn, kIOPMPowerOn, 0, 0, 0, 0, 0, 0, 0, 0}
@@ -120,6 +136,7 @@ start(IOService *provider)
     registerPowerDriver(this, powerStateArray, 2);
     provider->joinPMtree(this);
     registerService();
+    IOLog("rtl8188e: IOPCIEDeviceWrapper registered service!\n");
     return true;
 }
 
