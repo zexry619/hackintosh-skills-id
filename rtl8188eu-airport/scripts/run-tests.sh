@@ -32,6 +32,9 @@ run "Keamanan rtwn_seq — regression F1/F4/F5" bash -c \
 run "Frame 802.11 — probe request & parser SSID/BSSID (M2)" bash -c \
 	'clang -O2 -o /tmp/t_80211 tools/test_80211.c src/urtwn/rtwn_80211.c -Isrc/urtwn && /tmp/t_80211'
 
+run "Set kanal 8188E — RF/BB register path (M2)" bash -c \
+	'clang -O2 -o /tmp/t_chan tools/test_chan.c src/urtwn/rtwn_chan.c src/urtwn/rtwn_seq.c src/urtwn/rtwn_seq_efuse.c src/urtwn/rtwn_efuse_8188e.c -Isrc/urtwn && /tmp/t_chan'
+
 run "Keseimbangan lock/unlock (regression PANIC #4)" bash -c \
 	'python3 scripts/lint-locks.py'
 
