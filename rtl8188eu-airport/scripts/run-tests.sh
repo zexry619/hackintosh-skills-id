@@ -17,8 +17,13 @@ run() {
 echo "=== TEST SUITE (offline) ==="
 echo
 
-run "Parser EFUSE — differential vs transkripsi pseudocode Ghidra" bash -c \
-	'clang -O2 -o /tmp/t_diff tools/test_efuse_diff.c src/urtwn/rtwn_seq.c -Isrc/urtwn && /tmp/t_diff'
+# Catatan (22 Okt 2026): test_efuse_diff.c DIHENTIKAN dari suite.
+# Referensinya adalah transkripsi pseudocode Ghidra yang sama-sama salah
+# membaca semantik mask (bit SET dianggap 1 byte, bukan ABSENT). Test itu
+# lulus hanya karena membandingkan dua implementasi yang salah dengan cara
+# yang sama. Penggantinya adalah golden test dengan dump NYATA dari chip.
+run "Parser EFUSE — golden test dump nyata 8188E (MAC/VID/strings)" bash -c \
+	'clang -O2 -o /tmp/t_real tools/test_efuse_real.c src/urtwn/rtwn_seq.c -Isrc/urtwn && /tmp/t_real'
 
 run "Parser EFUSE — image sintetis (tabel mask asli vendor)" bash -c \
 	'clang -O2 -o /tmp/t_syn tools/test_efuse.c src/urtwn/rtwn_seq.c -Isrc/urtwn && /tmp/t_syn'

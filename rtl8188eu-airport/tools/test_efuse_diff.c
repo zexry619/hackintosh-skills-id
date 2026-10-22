@@ -68,22 +68,27 @@ static void ref_parse(const uint8_t *param_2, uint8_t *out, uint16_t param_5)
 
 		off = (uint8_t)(bVar18 >> 4);
 		mask = (uint8_t)(bVar18 & 0x0f);
-		uVar17++;
 
 store:
 		for (i = 0; i < 4; i++) {
-			if ((mask & (1 << i)) == 0) {
-				uint16_t v = 0;
-				if (uVar17 < param_5) {
-					v = param_2[uVar17];
-					uVar17++;
-					if (uVar17 < param_5) {
-						v |= (uint16_t)((uint16_t)param_2[uVar17] << 8);
-						uVar17++;
-					}
-				}
-				block[((off & 0x3f) * 4) + i] = v;
+			uint16_t v;
+
+			/*
+			 * Semantik mask yang BENAR (diverifikasi pada dump
+			 * nyata, lihat tools/test_efuse_real.c):
+			 *   bit i = 1 → word ABSENT (0 byte)
+			 *   bit i = 0 → word PRESENT (2 byte LE)
+			 */
+			if ((mask >> i) & 1) {
+				continue;
 			}
+			if (uVar17 + 1 >= param_5) {
+				break;
+			}
+			v = param_2[uVar17];
+			v |= (uint16_t)((uint16_t)param_2[uVar17 + 1] << 8);
+			uVar17 += 2;
+			block[((off & 0x3f) * 4) + i] = v;
 		}
 		/* byte header berikutnya */
 		if (uVar17 < param_5 && param_2[uVar17] != 0xff) {

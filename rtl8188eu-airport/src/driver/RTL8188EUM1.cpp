@@ -1383,7 +1383,16 @@ void RTL8188EUM1::runInitSequence()
 			m1Mark(this, "M1Xtal", xbuf);
 		}
 		memcpy(fChip.macaddr, res.mac, 6);
-		fChip.xtal = res.xtal;
+		/*
+		 * Vendor Hal_EfuseParseXtal_8188E:
+		 *     CrystalCap = hwinfo[0xB9];
+		 *     if ((CrystalCap & 0x3f) == 0) CrystalCap |= 0x20;
+		 * Jadi field xtal hanya 6 bit dan 0 berarti default 0x20.
+		 */
+		fChip.xtal = (uint8_t)(res.xtal & 0x3f);
+		if (fChip.xtal == 0) {
+			fChip.xtal = 0x20;
+		}
 		fChip.efuseValid = true;
 	} else {
 		m1Mark(this, "M1Efuse", "gagal");

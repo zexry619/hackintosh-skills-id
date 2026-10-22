@@ -446,6 +446,17 @@ int rtwn_seq_read_efuse_offload(rtwn_seq_result_t *r, rtwn_read_fn rd,
 			m1_hex(dbg, sizeof(dbg), raw, 8);
 			rtwn_seq_diag_set(ctx, "efuse-offload-raw", dbg);
 			{
+				/*
+				 * Dump lengkap (untuk analisis parser offline).
+				 * 256 byte = 513 karakter.
+				 */
+				char big[560];
+				uint16_t lim = (rawlen > 256) ? 256 : rawlen;
+
+				m1_hex(big, sizeof(big), raw, lim);
+				rtwn_seq_diag_set(ctx, "efuse-dump", big);
+			}
+			{
 				uint8_t r[5];
 
 				r[0] = rom[0];

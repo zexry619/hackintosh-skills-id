@@ -168,6 +168,13 @@ int rtwn_seq_read_efuse_direct_8188e(rtwn_seq_result_t *r, rtwn_read_fn rd,
 		rtwn_seq_diag_set(ctx, "efuse-direct-bytes", dbg);
 		m1_hex(dbg, sizeof(dbg), raw, 8);
 		rtwn_seq_diag_set(ctx, "efuse-direct-head", dbg);
+		{
+			/* Dump penuh untuk analisis parser offline. */
+			char big[560];
+
+			m1_hex(big, sizeof(big), raw, 256);
+			rtwn_seq_diag_set(ctx, "efuse-direct-dump", big);
+		}
 	}
 
 	/* Kembalikan akses EFUSE. */

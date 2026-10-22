@@ -1,11 +1,30 @@
 # LANJUTKAN PROYEK INI — panduan cepat
 
-**Status (22 Okt 2026, 04:20):** M1 **SELESAI** — chip 8188EUS hidup
-(power-on + LLT/DMA + upload firmware 8051 + bulk pipe). Tanpa panic.
-Sisa M1: MAC/xtal dari EFUSE masih `ff:ff:ff:ff:ff:ff` / `0xff`
-( hopes: urutan baru "firmware → EFUSE" akan memperbaikinya).
+**Status (22 Okt 2026, sore):** **M1c SELESAI** — MAC terbaca dari chip:
+`98:03:8e:9e:bc:24`, xtal `0x2f`, channel_plan `0xa1`.
+M1 (chip hidup) + M1d (HAL tables) + M2 kode (802.11/kanal) siap.
 
-**Commit:** `63d161a` — semua kode, docs, dan skrip tersimpan.
+**Terobosan metode:** `tools/rtwn_probe` sekarang bisa membuka device dari
+**user space** (API IOKit yang benar). Iterasi jadi hitungan detik —
+**tanpa reboot, tanpa kernel, tanpa risiko panic**.
+
+```bash
+sudo ./tools/rtwn_probe --efuse-all     # MAC + diagnostik lengkap
+sudo ./tools/rtwn_probe --full          # power-on + LLT + firmware
+sudo ./tools/rtwn_probe --peek 0x610 6  # baca register mentah
+```
+
+**Dua akar masalah yang diperbaiki hari ini:**
+1. Reset 8051 memakai register chip lain (`0x093` = cabang `cardType 0x32`);
+   8188E (`0x0e`) memakai `0x1c/0x1d/0x03`.
+2. Parser EFUSE: `ri++` ganda + bit mask SET berarti **ABSENT (0 byte)**,
+   bukan 1 byte.
+
+**Langkah berikutnya:** tambahkan bulk pipe ke `rtwn_probe` → uji M2
+(TX probe request, RX beacon) dari user space, lalu integrasi IO80211 (M4).
+
+**Rujukan:** `docs/HANDOVER.md` §16, `docs/userspace-lab.md`,
+`docs/re-8188e-efuse.md` §4b/§4c.
 
 ---
 

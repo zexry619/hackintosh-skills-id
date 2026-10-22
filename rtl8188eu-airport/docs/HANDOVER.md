@@ -481,21 +481,42 @@ Kunci:
 * Transport bulk (M2) sudah terpasang: `bulkOpen`/`bulkQueueRx`/`bulkSend` +
   parser descriptor RX (24+2 B) + parser SSID beacon
 
-## 7f. ⚠️ User-space USB probe tidak mungkin di macOS 15 (22 Okt 2026)
+## 7f. ⭐ KOREKSI — user-space USB probe BISA (22 Okt 2026)
 
-Diuji dengan program minimal: `IOServiceOpen` pada `IOUSBDevice`/`AppleUSBDevice`/
-`AppleUSBInterface` → **`0xE00002C7` (exclusive access) untuk SEMUA device USB**
-(mouse, keyboard, Wi-Fi). Hanya `IOUSBHostDevice` (stack modern) yang bisa dibuka,
-dan itu lewat user client privat yang tidak ada di SDK.
+Bagian ini sebelumnya menyatakan "tidak mungkin". **Itu salah.** Penyebabnya
+adalah cara membuka device yang keliru, bukan batasan macOS.
 
-→ **Validasi M1 wajib lewat kernel driver.** Roads:
-`kmutil load -z -p` juga tidak bisa (macOS 15 mewajibkan kext baru via AuxKC →
-reboot). Jadi **1 reboot memang perlu**; sesudahnya iterasi lewat:
-build → `kmutil load -z -p` (butuh reboot lagi) atau langsung ke probe… yang
-tidak mungkin. **Reality: 1 reboot per iterasi kernel**, ATAU validasi seluruh
-M1/M2 di kernel sekali dengan logging lengkap.
+`IOServiceOpen()` pada `IOUSBDevice` memang mengembalikan
+`kIOReturnNotOpen` (`0xe00002c7`) — tapi `IOServiceOpen` bukan API yang benar
+untuk itu. Jalur yang benar adalah plugin IOKit:
 
-Detail: [`prereboot-readiness.md`](prereboot-readiness.md) §4b.
+```c
+IOCreatePlugInInterfaceForService(svc,
+    kIOUSBDeviceUserClientTypeID, kIOCFPlugInInterfaceID, &plug, &score);
+(*plug)->QueryInterface(plug,
+    CFUUIDGetUUIDBytes(kIOUSBDeviceInterfaceID), (LPVOID *)&dev);
+(*plug)->Release(plug);
+(*dev)->USBDeviceOpen(dev);          /* atau USBDeviceOpenSeize */
+```
+
+Setelah itu `DeviceRequest()` (vendor request `bRequest=0x05`) bekerja penuh
+dari user space — **tanpa kext, tanpa reboot, tanpa risiko panic**.
+
+Terbukti 22 Okt 2026 pada mesin ini:
+
+```
+device dibuka ✓ (config=1)
+CR=0x0000063f  MCUFWDL=0x000300c6  SYS_CFG=0x244037b7
+```
+
+Konsekuensi: **seluruh M1/M2 bisa divalidasi dan diiterasi dari user space**
+dalam hitungan detik. Satu-satunya syarat: driver kernel tidak memegang
+device (kext kita self-detach, jadi tunggu ±10 dtk).
+
+Detail & pemakaian: [`userspace-lab.md`](userspace-lab.md).
+
+Catatan: `kmutil load` untuk kext baru tetap butuh reboot (batasan macOS 15),
+tetapi **loop pengembangan tidak lagi bergantung pada kernel**.
 
 ## 7g. M3/M4: kode & peta (22 Okt 2026)
 
@@ -858,3 +879,53 @@ cat logs/watch-*.log | tail -1
 sudo ./scripts/restore-test-esp.sh && reboot
 ```
 
+
+---
+
+## 16. ⭐⭐ M1c **SELESAI** — MAC terbaca dari chip (22 Okt 2026)
+
+**Hasil:** `MAC = 98:03:8e:9e:bc:24`, `xtal=0x2f`, `channel_plan=0xa1`,
+`rf_board_opt=0x01` — dibaca **langsung dari chip**, diverifikasi silang
+dengan driver vendor.
+
+### Dua akar masalah (keduanya ditemukan & diperbaiki)
+
+| # | Masalah | Akar | Perbaikan |
+|---|---|---|---|
+| 1 | Reset 8051 memakai register chip lain | `HAL_8051PauseIOWrapper` memilih register per `cardType`; kita memakai cabang `0x32` (`0x093`) padahal 8188E (`0x0e`) memakai `0x1c/0x1d/0x03` | `efuse_8051_pause_style`/`enable_style` (GRP A, GRP B, 0x32), 8 kombinasi mode × gaya |
+| 2 | Parser EFUSE salah semantik | (a) `ri++` ganda → data mulai `raw[2]`; (b) bit mask SET dianggap 1 byte data, padahal **ABSENT (0 byte)** | `efuse_parse_8188e` ditulis ulang; golden test `tools/test_efuse_real.c` |
+
+### Bukti (dump nyata, 4 field independen cocok)
+
+```
+offset   0 : 29 81                → EEPROM ID 0x8129
+offset 208 : 57 23 0c 01          → VID 0x2357, PID 0x010c
+offset 215 : 98 03 8e 9e bc 24    → MAC
+offset 223 : "Realtek"
+offset 232 : "802.11n "
+```
+
+### Terobosan metode: lab user space
+
+`tools/rtwn_probe` sekarang **benar-benar bisa membuka device** (sebelumnya
+salah API). Ini menghapus kebutuhan reboot untuk setiap iterasi:
+`sudo ./tools/rtwn_probe --efuse-all` → hasil dalam detik.
+Lihat [`userspace-lab.md`](userspace-lab.md).
+
+### Status tiap milestone
+
+| Milestone | Status |
+|---|---|
+| M1 — chip hidup (power-on, LLT, firmware) | ✅ |
+| M1c — MAC/xtal dari EFUSE | ✅ **22 Okt 2026** |
+| M1d — HAL tables (2.446 entri) | ✅ siap (belum dijalankan di chip) |
+| M2 — scan (probe request + RX beacon) | 🟡 kode siap, perlu bulk pipe di lab |
+| M3 — assoc/WPA2 | ⬜ |
+| M4 — integrasi IO80211 | 🟡 peta + template `upstream/Airport_RTW88` |
+
+### Catatan penting tentang jalur EFUSE
+
+- **OFFLOAD = primer** (berhasil, MAC benar).
+- **DIRECT = cadangan** — kadang gagal 1 byte (flaky); jangan dijadikan
+  satu-satunya sumber.
+- `MACID` register `0x610` = `00:00:00:00:00:00` (kosong; bukan sumber MAC).

@@ -308,91 +308,79 @@ static void efuse_parse_8188e(const uint8_t *raw, uint16_t rawlen,
 {
 	uint16_t block[256];
 	int i, j;
-	/*
-	 * PERBAIKAN (audit 22 Okt 2026): `ri` dulu uint16_t. Dengan
-	 * rawlen == 65535, `ri += 2` di ri == 65534 akan wrap ke 0 →
-	 * parse mengulang dari awal → loop tak berujung di kernel.
-	 * Sekarang size_t (selalu ≥ 32 bit).
-	 */
-	size_t ri = 0;
+	size_t ri;
 	uint8_t cur;
 
-	for (i = 0; i < 256; i++) {
+	for (i = 0; i < 256; i++)
 		block[i] = 0xffff;
-	}
 	memset(out, 0xff, 512);
 
-	if (rawlen < 2) {
+	if (rawlen < 2)
 		return;
-	}
 
 	cur = raw[0];
 	ri = 1;
 
 	while (cur != 0xff && ri < (size_t)rawlen) {
-		uint8_t off;
-		uint8_t mask;
+		uint8_t off, mask;
 
 		if ((cur & 0x1f) == 0x0f) {
-			/*
-			 * Header ekstensi (blok offset >= 16).
-			 *
-			 * byte 1: low 5 bit = 0x0f, high 3 bit = offset bit 0..2
-			 * byte 2: low nibble = MASK (!), high bits = offset bit 3..5
-			 *
-			 * off = ((nxt >> 1) & 0x78) | (cur >> 5)
-			 * mask = nxt & 0x0f        ← PENTING (bukan 0)
-			 */
+			/* Header ekstensi 2 byte (blok >= 16). */
 			uint8_t nxt = (ri < (size_t)rawlen) ? raw[ri] : 0xff;
-			if ((nxt & 0x0f) != 0x0f) {
-				off = (uint8_t)(((nxt >> 1) & 0x78) | (cur >> 5));
-				mask = (uint8_t)(nxt & 0x0f);
+
+			mask = (uint8_t)(nxt & 0x0f);
+			if (mask != 0x0f) {
+				off = (uint8_t)(((nxt >> 1) & 0x78) |
+				    (cur >> 5));
 				ri++;
-				cur = nxt;
-				goto store_block;
+			} else {
+				ri += 2;
+				cur = (ri < (size_t)rawlen) ? raw[ri] : 0xff;
+				continue;
 			}
-			/* nxt juga 0x0f → bentuk header lain; lewati 2 byte. */
-			ri += 2;
-			cur = (ri < (size_t)rawlen) ? raw[ri] : 0xff;
-			ri++;
-			continue;
+		} else {
+			/* Header 1 byte: nibble atas = blok, bawah = mask. */
+			off = (uint8_t)(cur >> 4);
+			mask = (uint8_t)(cur & 0x0f);
 		}
 
-		off = (uint8_t)(cur >> 4);
-		mask = (uint8_t)(cur & 0x0f);
-		ri++;
-
-store_block:
+		/*
+		 * ── SEMANTIK MASK (diverifikasi pada dump EFUSE nyata) ──
+		 *
+		 *   bit i = 1 → word i ABSENT  (0 byte, tidak ada data)
+		 *   bit i = 0 → word i PRESENT (2 byte, little-endian)
+		 *
+		 * Bukti (dump 8188E, 256 byte):
+		 *   0e | 29 81                    → mask 0x0e = 1 word
+		 *   4f 30 | 57 23 0c 01 43 66 00 98  → mask 0x00 = 4 word
+		 *   2f 3e | 00 03                 → mask 0x0e = 1 word
+		 *   af 30 | 38 30 32 2e 31 31 6e 20  → "802.11n "
+		 *
+		 * Implementasi lama keliru: untuk bit SET ia tetap memajukan
+		 * `ri` sebesar 1 byte. Akibatnya seluruh stream bergeser dan
+		 * MAC tidak pernah ditemukan (rom[0] != 0x29).
+		 */
 		for (i = 0; i < 4; i++) {
-			if ((mask & (1 << i)) == 0) {
-				/*
-				 * Catatan: kalau data di luar buffer, nilai
-				 * tetap ditulis (0), bukan dilewati — ini
-				 * perilaku vendor (differential test
-				 * tools/test_efuse_diff.c memverifikasinya).
-				 */
-				uint16_t v = 0;
-				if (ri < (size_t)rawlen) {
-					v = raw[ri];
-					ri++;
-					if (ri < (size_t)rawlen) {
-						v |= (uint16_t)((uint16_t)raw[ri] << 8);
-						ri++;
-					}
-				}
-				block[((off & 0x3f) * 4) + i] = v;
-			}
+			if ((mask >> i) & 1)
+				continue;	/* word absent */
+			if (ri + 1 >= (size_t)rawlen)
+				break;
+			block[((off & 0x3f) * 4) + i] =
+			    (uint16_t)(raw[ri] |
+			    ((uint16_t)raw[ri + 1] << 8));
+			ri += 2;
 		}
 
-		/* Byte header berikutnya */
 		cur = (ri < (size_t)rawlen) ? raw[ri] : 0xff;
-		ri++;
+		if (cur != 0xff)
+			ri++;
 	}
 
-	/* Susun output: blok N -> out[N*8 .. N*8+7] */
+	/* Susun output: blok N -> out[N*8 .. N*8+7], little-endian. */
 	for (i = 0; i < 64; i++) {
 		for (j = 0; j < 4; j++) {
 			uint16_t v = block[i * 4 + j];
+
 			out[i * 8 + j * 2 + 0] = (uint8_t)(v & 0xff);
 			out[i * 8 + j * 2 + 1] = (uint8_t)(v >> 8);
 		}

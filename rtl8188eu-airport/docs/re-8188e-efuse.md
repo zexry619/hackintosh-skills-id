@@ -230,43 +230,97 @@ void ParsingEfuseContent_8188EU(ADAPTER *p,
         uint8_t  out_offset);
 ```
 
-Inti loop (setara implementasi kita, **sudah diverifikasi identik** lewat
-`tools/test_efuse_diff.c`):
+Inti loop — **DIREVISI 22 Oktober 2026** setelah diuji dengan dump EFUSE
+NYATA dari chip (lihat §4b). Versi lama (transkripsi Ghidra) **salah** pada
+dua hal dan menghasilkan `rom[0] != 0x29`.
 
 ```
 cur = raw[0];
 if (cur == 0xff) return;                /* stream kosong */
-ri = 1;
+ri = 1;                                  /* ri sudah menunjuk DATA */
 while (cur != 0xff && ri < raw_len) {
-    if ((cur & 0x1f) == 0x0f) {         /* header ekstensi */
+    if ((cur & 0x1f) == 0x0f) {         /* header ekstensi 2 byte */
         mask = raw[ri] & 0x0f;
         if (mask != 0x0f) {
             off = (raw[ri] >> 1 & 0x78) | (cur >> 5);
-            ri++;
-        } else {                        /* bentuk header 2 byte */
+            ri++;                        /* lewati byte ke-2 header */
+        } else {                         /* bentuk header lain */
             ri += 2; cur = raw[ri];
+            continue;                    /* TIDAK memproses blok */
         }
     } else {
         off  = cur >> 4;
         mask = cur & 0x0f;
-        ri++;
+        /* TIDAK ada ri++ di sini — ri sudah menunjuk data */
     }
-    /* 4 slot per blok; tiap bit mask menentukan 1 atau 2 byte data */
     for (i = 0; i < 4; i++) {
-        if ((mask & 1) == 0) {
-            block[off * 4 + i] = raw[ri];       /* 1 byte  */
-            ri++;
-        } else {
-            block[off * 4 + i] = LE16(raw[ri], raw[ri+1]); /* 2 byte */
-            ri += 2;
-            mask >>= 1;
-        }
+        if ((mask >> i) & 1)             /* bit SET = word ABSENT */
+            continue;                    /* 0 byte — TIDAK memajukan ri */
+        block[off * 4 + i] = LE16(raw[ri], raw[ri+1]);   /* 2 byte */
+        ri += 2;
     }
     cur = raw[ri];
     if (cur != 0xff) ri++;
 }
 /* 64 blok × 4 short → 512 byte out, little endian */
 ```
+
+### Perbedaan kunci vs versi lama (dua bug)
+
+| # | Lama (salah) | Baru (benar) | Bukti |
+|---|---|---|---|
+| **P1** | `ri++` juga di cabang header normal → data mulai di `raw[2]`, `raw[1]` terlewat | tidak ada `ri++`; data mulai `raw[1]` | `raw[0]=0x0e, raw[1]=0x29, raw[2]=0x81` → ID `0x8129` |
+| **P2** | bit SET = **1 byte** data (dan `ri++`) | bit SET = **ABSENT** (0 byte) | `4f 30` (mask 0) = 4 word; `2f 3e` (mask 0x0e) = 1 word |
+
+### 4b. Bukti dari hardware (dump nyata, 22 Okt 2026)
+
+256 byte pertama EFUSE dibaca langsung dari chip
+(`rtwn_probe --efuse-all`, jalur direct 0x031/32/33/30):
+
+```
+0e 29 81 6f 33 ff 00 00 00 cf 40 81 ae 96 2d 03 93 96 11 ef 48 fc 8c 00
+11 9b ff 01 00 6c 0b 00 00 00 10 00 0c 00 00 00 00 00 00 20 2d 2d 2d 2d
+2d 2d 2d 2d 3c 2d 2d 2d f1 ef 20 a1 20 1a 00 00 00 00 00 0f 30 00 01 00
+10 00 00 00 00 2f 3e 00 03 4f 30 57 23 0c 01 43 66 00 98 6f 30 03 8e 9e
+bc 24 09 03 52 8f 30 65 61 6c 74 65 6b 0d 03 af 30 38 30 32 2e 31 31 6e
+20 cf 30 4e 49 43 0c 03 30 30 45 ef 30 30 34 43 30 30 30 31 00 20 2f 2e
+2e 2e 2e 2e 33 32 3c 32 31 31 f1 ef 2c a1 2f 15 00 ff ff ...
+```
+
+Hasil parse (empat field independen, semuanya cocok):
+
+| Offset | Nilai | Arti |
+|---|---|---|
+| 0 | `29 81` | EEPROM ID `0x8129` |
+| 208 | `57 23 0c 01` | VID `0x2357`, PID `0x010c` |
+| **215** | **`98 03 8e 9e bc 24`** | **MAC address** |
+| 223 | `"Realtek"` | vendor string (cocok `struct r88e_rom`) |
+| 232 | `"802.11n "` | product string |
+
+Blok yang ditulis dua kali (patch di akhir stream) → **nilai terakhir menang**
+(contoh: blok 23 `a1 20 1a` lalu `a1 2f 15` → dipakai `a1 2f 15`).
+
+Golden test: `tools/test_efuse_real.c` (memakai dump di atas).
+Test differential lama `tools/test_efuse_diff.c` **dihentikan** dari suite:
+referensinya adalah transkripsi pseudocode yang salah dengan cara yang sama,
+jadi test itu lulus secara sirkular.
+
+### 4c. Reset 8051 yang benar (prasyarat offload)
+
+`HAL_8051PauseIOWrapper` / `HAL_8051EnableIOWrapper` vendor memilih register
+berdasarkan `cardType` (`adapter + 0x3a0`):
+
+| cardType | pause | enable |
+|---|---|---|
+| `> 0x34` | tidak melakukan apa-apa | — |
+| `0x0e` (8188E) | `0x1c &= ~0x02`, `0x1d &= ~0x01`, `0x03 &= ~0x04` | `0x1d \|= 0x01`, `0x03 \|= 0x04` |
+| `0x0f` / `0x10` | `0x1c &= ~0x02`, `0x1d &= ~0x08`, `0x03 &= ~0x04` | `0x1d \|= 0x08`, `0x03 \|= 0x04` |
+| `0x32` (chip lain) | `0x93 &= ~0x01` (lalu return) | `0x93 \|= 0x01` |
+
+Implementasi lama memakai cabang `0x32` untuk 8188E → 8051 tidak pernah
+di-reset dengan benar → trigger offload tidak mengisi buffer → EFUSE 0xff.
+Sekarang kedua gaya (A/B) dicoba bergantian dalam 8 kombinasi
+`mode 0xaa/0xf4 × gaya A/B`.
 
 **Offset penting di image ROM 8188E (dipakai driver kita):**
 
