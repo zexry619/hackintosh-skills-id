@@ -29,6 +29,17 @@ M1 (chip hidup) ✅ · M1c (MAC/xtal dari EFUSE) ✅ · M2 (scan) ✅ ·
 > `/Library/Extensions` ditolak TCC. Wi-Fi harian sementara lewat USB
 > tethering; kalau perlu vendor lagi, jalankan dari Terminal yang punya
 > izin App Management.
+>
+> **Update 23 Okt 06:45 — perbaikan presisi + boot tanpa ESP.**
+> Akar masalah yang diperbaiki: 8188EU memetakan endpoint USB → queue TX
+> (0 VO/mgmt, 1 VI, 2 BE/BK), tapi driver hanya membuka satu bulk-out dan
+> memakai QSEL=BE untuk data → frame data masuk queue mgmt dan tidak pernah
+> keluar. Sekarang `bulkOpen()` membuka 3 pipe dan `sendFrame()` memilih
+> pipe+QSEL per AC/TID; `txdw5` juga mengisi batas retry `0x0001ff00`.
+> Diagnostik baru: `RTL8188E-stat` dan `RTL8188E-wcl` di ioreg.
+> Boot: **tidak lagi lewat ESP** — LaunchDaemon `com.zekri.rtl8188e-start`
+> memuat `/usr/local/lib/RTL8188EAirport.kext` (fallback otomatis ke vendor
+> kalau gagal). Log: `/var/log/rtl8188e-start.log`.
 
 **Terobosan metode:** `tools/rtwn_probe` sekarang bisa membuka device dari
 **user space** (API IOKit yang benar). Iterasi jadi hitungan detik —

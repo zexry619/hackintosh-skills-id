@@ -110,6 +110,7 @@ Prioritas: **P0 = memblokir fungsi dasar**, **P1 = bikin tidak nyaman**,
 | F0.2 | `rtwn_probe --join/--txnull` (auth + assoc + uji TX data) | validasi TX data tanpa kernel | ✅ dibuat, uji frame lulus | `--join <ssid> --txnull` → ada TX report |
 | F0.3 | `scripts/collect-m4.sh` | satu boot = semua bukti | ✅ dibuat | `logs/m4-<ts>.txt` lengkap |
 | F0.4 | Keluarkan build eksperimental dari ESP | boot selalu aman | ✅ ESP bersih (11 kext standar, `Kernel->Add` 12 → 11) | reboot → `kextstat` tidak ada RTL8188E |
+| F0.5 | **Boot loader tanpa ESP** — LaunchDaemon memuat kext dari `/usr/local/lib` + fallback vendor | kext tetap otomatis saat boot, tapi binary bisa diganti tanpa reboot | ✅ `scripts/install-m4-boot.sh` | `/var/log/rtl8188e-start.log` |
 
 **Cara pakai F0:**
 
