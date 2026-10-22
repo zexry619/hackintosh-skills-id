@@ -32,6 +32,9 @@ run "Keamanan rtwn_seq — regression F1/F4/F5" bash -c \
 run "Keseimbangan lock/unlock (regression PANIC #4)" bash -c \
 	'python3 scripts/lint-locks.py'
 
+run "Tabel & applier HAL 8188E (ekstraksi vendor)" bash -c \
+	'clang -O2 -o /tmp/t_hal tools/test_hal_tables.c src/urtwn/rtwn_hal_8188e.c src/urtwn/rtwn_mp_8188e.c -Isrc/urtwn && /tmp/t_hal'
+
 run "Build kext (AMAN, inert)" bash -c './scripts/build-m1.sh | tail -3'
 run "Build probe (user space)" bash -c './scripts/build-probe.sh | tail -1'
 

@@ -34,7 +34,12 @@ enum {
 	 * Tahap "poweron" adalah langkah paling kecil yang benar-benar
 	 * menyalakan chip, dengan traffic USB paling sedikit.
 	 */
-	M1_MODE_POWERON  = 2
+	M1_MODE_POWERON  = 2,
+	/*
+	 * Tahap lanjut: power-on + DMA + firmware + EFUSE + **HAL tables**
+	 * (PHY/RF/MAC register config dari vendor).
+	 */
+	M1_MODE_HAL      = 3
 };
 
 static inline int m1CurrentMode(void)
@@ -84,7 +89,8 @@ static inline int m1EffectiveMode(int buildAllowsTraffic)
 	 */
 #ifdef M1_TEST_MODE
 	return (M1_TEST_MODE == 0) ? M1_MODE_READONLY :
-	    (M1_TEST_MODE == 1) ? M1_MODE_POWERON : M1_MODE_FULL;
+	    (M1_TEST_MODE == 1) ? M1_MODE_POWERON :
+	    (M1_TEST_MODE == 2) ? M1_MODE_FULL : M1_MODE_HAL;
 #else
 	if (PE_parse_boot_argn(M1_MODE_ARG, buf, sizeof(buf))) {
 		if (buf[0] == 'r' || buf[0] == 'R') {

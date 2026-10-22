@@ -68,6 +68,8 @@ SOURCES=(
 	"$SRC/urtwn/rtwn_flow.c"
 	"$SRC/urtwn/rtwn_efuse_8188e.c"
 	"$SRC/urtwn/rtwn_usb.c"
+	"$SRC/urtwn/rtwn_mp_8188e.c"
+	"$SRC/urtwn/rtwn_hal_8188e.c"
 	"$SRC/urtwn/rtwn_platform_kernel.c"
 	"$SRC/urtwn/firmware_rtl8188eufw.cpp"
 	"$SRC/usb/usb_compat.cpp"

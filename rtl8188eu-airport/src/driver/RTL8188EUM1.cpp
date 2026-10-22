@@ -31,6 +31,7 @@
 #include "rtwn_m1.h"
 #include "rtwn_seq.h"
 #include "rtwn_usb.h"
+#include "rtwn_hal_8188e.h"
 #include "r92creg.h"
 #include "m1_mode.h"
 
@@ -1322,6 +1323,53 @@ void RTL8188EUM1::runInitSequence()
 		m1Mark(this, "M1Efuse", "gagal");
 	}
 	
+	/*
+	 * ── HAL tables (PHY / RF / MAC) ────────────────────────────────
+	 *
+	 * Tabel "MP" 8188E diekstrak dari binary vendor (lihat
+	 * tools/extract_mp_tables.py → src/urtwn/rtwn_mp_8188e.c).
+	 * File MP gaya Windows tidak ada di macOS, jadi tabel built-in
+	 * inilah yang benar-benar dipakai driver vendor.
+	 *
+	 * CATATAN FIDELITAS: entri 0x4xxxxxxx di vendor juga membandingkan
+	 * dengan field kanal/bandwidth milik adapter (dm+0x4f/0x52/0x58/
+	 * 0x59/0x5e). Bagian itu belum dimodelkan di sini → cabangnya
+	 * ditentukan hanya dari perbandingan MAC. Kalau chip ternyata tidak
+	 * TX/RX setelah mode HAL, ini kandidat utama penyebabnya.
+	 */
+	if (mode == M1_MODE_HAL) {
+		rtwn_hal_ctx_t hc;
+		int applied = 0;
+
+		m1Mark(this, "M1State", "hal");
+		rtwn_hal_init(&hc, m1Read, m1Write, this);
+		if (fChip.efuseValid) {
+			rtwn_hal_set_mac(&hc, fChip.macaddr);
+		}
+
+		applied += rtwn_hal_apply_table(&hc, rtwn_mp_8188e_mac_reg,
+		    sizeof(rtwn_mp_8188e_mac_reg) / sizeof(rtwn_mp_8188e_mac_reg[0]));
+		applied += rtwn_hal_apply_table(&hc, rtwn_mp_8188e_phy_reg,
+		    sizeof(rtwn_mp_8188e_phy_reg) / sizeof(rtwn_mp_8188e_phy_reg[0]));
+		applied += rtwn_hal_apply_table(&hc, rtwn_mp_8188e_phy_reg_pg,
+		    sizeof(rtwn_mp_8188e_phy_reg_pg) / sizeof(rtwn_mp_8188e_phy_reg_pg[0]));
+		applied += rtwn_hal_apply_table(&hc, rtwn_mp_8188e_agc_tab,
+		    sizeof(rtwn_mp_8188e_agc_tab) / sizeof(rtwn_mp_8188e_agc_tab[0]));
+		applied += rtwn_hal_apply_table(&hc, rtwn_mp_8188e_radioa,
+		    sizeof(rtwn_mp_8188e_radioa) / sizeof(rtwn_mp_8188e_radioa[0]));
+
+		IOLog(LOGP "HAL tables diterapkan: %d register ditulis\n", applied);
+		{
+			char hb[32];
+			snprintf(hb, sizeof(hb), "%d-register", applied);
+			m1Mark(this, "M1Hal", hb);
+		}
+		m1Mark(this, "M1State", "hal-selesai");
+		m1LogResult("hal-selesai", "-", "-", 0,
+		    fChip.usb.inOk(), fChip.usb.inFail());
+		return;
+	}
+
 	if (mode == M1_MODE_POWERON) {
 		/*
 		 * TAHAP TENGAH — berhenti setelah EFUSE.
