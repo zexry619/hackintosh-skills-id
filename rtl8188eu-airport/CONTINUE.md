@@ -1,11 +1,14 @@
 # LANJUTKAN PROYEK INI — panduan cepat
 
-**Status (22 Okt 2026, malam):** **M2 SELESAI & TERBUKTI DI HARDWARE.**
-Scan 802.11 dari user space berjalan: probe request TX, beacon/probe response
-RX, SSID terbaca (ZEKRI.NET, RIYAN, Ramodal, Sutopo, Vii, …).
+**Status (22 Okt 2026, malam):** **M4 KERANGKA KEXT SELESAI DI-BUILD.**
+`RTL8188EAirport.kext` (IO80211 V2/Skywalk + net80211 + HAL 8188E) berhasil
+kompilasi, link, dan sign. `kextutil -t` membuktikan semua simbol bind ke
+IO80211Family/IOSkywalkFamily/IOUSBHostFamily — hanya kebijakan
+*"not approved to load"* yang tersisa (diatasi injeksi OpenCore, seperti M1).
+**Uji hardware belum dilakukan** (dongle tidak tercolok).
 
-M1 (chip hidup) ✅ · M1c (MAC/xtal dari EFUSE) ✅ · M2 (scan) ✅
-Berikutnya: M3/M4 (integrasi IO80211).
+M1 (chip hidup) ✅ · M1c (MAC/xtal dari EFUSE) ✅ · M2 (scan) ✅ ·
+**M4 (kext IO80211 utuh) ✅ build** · uji menu Wi-Fi ⏳ satu reboot.
 
 **Terobosan metode:** `tools/rtwn_probe` sekarang bisa membuka device dari
 **user space** (API IOKit yang benar). Iterasi jadi hitungan detik —
@@ -24,12 +27,25 @@ sudo ./tools/rtwn_probe --peek 0x610 6  # baca register mentah
 2. Parser EFUSE: `ri++` ganda + bit mask SET berarti **ABSENT (0 byte)**,
    bukan 1 byte.
 
-**Langkah berikutnya:** integrasi M4 — hasil scan M2 disambungkan ke
-`IO80211Controller`/AirportItlwm agar interface muncul di menu Wi-Fi.
+**Audit pra-reboot selesai (tanpa hardware).** Bug kritis yang sudah
+diperbaiki: `if_watchdog` NULL (panic 1 detik setelah Wi-Fi ON), tabel kanal
+2,4 GHz kosong (scan tidak jalan), RX dimulai sebelum net80211 (`ic_bss`
+NULL), RX di workloop USB (race/deadlock), `free()` tanpa `ifdetach`, offset
+RX +2, RSSI palsu, scan tanpa jeda, dan rollback install script. Detail di
+`docs/m4-airport-integration.md` §10.
+
+**Langkah berikutnya:** **colok dongle 2357:010c dulu** (tanpa itu kext
+tidak match), lalu uji satu reboot:
+`ALLOW_BOOT_INJECTION=1 sudo ./scripts/install-m4-esp.sh` (otomatis membuang
+M1 dari ESP), reboot, cek `kextstat | grep RTL8188EAirport` dan menu Wi-Fi.
+Jalur scan sudah lengkap; asosiasi/WPA2 masih minimal (TX 1 Mb/s, HT mati,
+belum rate control).
+
 Risiko terbuka: dongle pernah lepas dari bus (`hardware connection lost`)
 → perlu batas TX power + quiesce sebelum uji berulang (lihat `docs/m2-scan.md` §5).
 
-**Rujukan:** `docs/HANDOVER.md` §16, `docs/userspace-lab.md`,
+**Rujukan:** `docs/HANDOVER.md` §17 (M2) dan §18 (M4),
+`docs/m4-airport-integration.md`, `docs/userspace-lab.md`,
 `docs/re-8188e-efuse.md` §4b/§4c.
 
 ---
@@ -53,12 +69,15 @@ rtl8188eu-airport/
 │   │   ├── rtwn_usb.c         ← descriptor TX/RX + ring TX
 │   │   └── rtwn_platform*.c/h ← lapisan delay (kernel vs user space)
 │   ├── usb/usb_compat.{h,cpp} ← shim USB (control transfer + bulk pipe)
+│   ├── airport/               ← frontend IO80211 V2 (salinan AirportItlwm)
+│   │   ├── AirportItlwm.cpp   ← dipatch: PCI opsional, probe non-PCI
+│   │   ├── IOPCIEDeviceWrapper.{hpp,cpp} ← wrapper IOUSBHostInterface
+│   │   └── Info.plist         ← 2 personality (wrapper + frontend)
 │   └── driver/
 │       ├── RTL8188EUM1.cpp    ← driver IOKit (M1 bring-up)
-│       ├── UsbBackend.cpp     ← scaffolding M4
-│       ├── ItlRtl8188E.cpp    ← scaffolding HAL service M4
+│       ├── ItlRtl8188E.{hpp,cpp} ← HAL M4 (net80211, scan, TX/RX)
 │       ├── m1_mode.h          ← mode compile-time (M1_TEST_MODE)
-│       └── Info.plist         ← personality 2357:010c
+│       └── Info.plist         ← personality 2357:010c (M1)
 ├── scripts/                   ← 28 skrip (lihat §4)
 ├── tools/                     ← probe & test offline
 ├── upstream/openbsd/          ← sumber urtwn asli (referensi)
@@ -132,12 +151,14 @@ varian UJI (bug yang sudah diperbaiki 22 Okt).
 | Milestone | Isi | Status |
 |---|---|---|
 | **M1** | power-on + DMA + firmware + bulk pipe | ✅ (MAC dari EFUSE belum) |
-| **M1c** | MAC + xtal dari EFUSE | ⏳ (offload harus jalan setelah firmware) |
+| **M1c** | MAC + xtal dari EFUSE | ✅ (MAC `98:03:8e:9e:bc:24`) |
 | **M1d** | HAL init lengkap vendor (langkah #11–#42: RDG, InitHalDm, FW_InitializeHALVars, PHY_MACConfig, PHY_BBConfig, PHY_RFConfig8188E, InitQueueReservedPage, _InitTxBufferBoundary, …) | ⬜ **TERBESAR** |
 | **M2** | bulk TX/RX: kirim probe request, terima beacon, baca SSID | ✅ **terbukti 22 Okt 2026** |
-| **M3a** | net80211 scan | ⬜ |
-| **M3b** | net80211 join + WPA2 | ⬜ |
-| **M4** | IO80211 interface → menu Wi-Fi native | ⬜ |
+| **M3a** | net80211 scan (di kernel) | ✅ terpasang di HAL M4 (belum uji HW) |
+| **M3b** | net80211 join + WPA2 | ⏳ jalur ada, software CCMP; belum uji HW |
+| **M4** | IO80211 interface → menu Wi-Fi native | ✅ build+sign+bind; ⏳ uji 1 reboot |
+
+Skrip M4: `./scripts/build-m4.sh`, `ALLOW_BOOT_INJECTION=1 sudo ./scripts/install-m4-esp.sh`.
 
 **Peta net80211** ada di `docs/m3-m4-integration.md`.
 

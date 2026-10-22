@@ -983,3 +983,113 @@ Sementara: jangan scan berulang tanpa jeda; siapkan colok ulang fisik.
 
 - [`m2-scan.md`](m2-scan.md) — arsitektur, format descriptor, bukti, risiko.
 - [`userspace-lab.md`](userspace-lab.md) §5 — cara pakai.
+
+
+---
+
+## 18. ⭐ M4 — kerangka kext IO80211/Skywalk BERHASIL DI-BUILD (22 Okt 2026)
+
+**Status:** kext `RTL8188EAirport.kext` **kompilasi + link + tanda tangan
+selesai** (x86_64). `kextutil -t` membuktikan **seluruh simbol bind** ke
+IO80211Family V2 / IOSkywalkFamily / IOUSBHostFamily di macOS 15.8.1;
+satu-satunya penolakan adalah kebijakan *"not approved to load"* (sama seperti
+M1 — diatasi lewat injeksi OpenCore/BootKC). **Belum diuji di hardware**
+(dongle sedang tidak tercolok).
+
+### Arsitektur (3 lapis)
+
+```
+IOUSBHostInterface 2357:010c
+   └─ IOPCIEDeviceWrapper   (src/airport/IOPCIEDeviceWrapper.cpp)
+        └─ ItlRtl8188E      (src/driver/ItlRtl8188E.cpp)
+             └─ net80211 + rtwn_seq/init/usb (kode M1/M2)
+   └─ AirportItlwm V2       (src/airport/AirportItlwm.cpp)
+        └─ IO80211Controller / Skywalk → menu Wi-Fi native
+```
+
+- Personality pertama menempel di **IOUSBHostInterface**, membuat HAL,
+  lalu `registerService()`.
+- Personality kedua (`AirportItlwm`) menempel di wrapper — pola yang sama
+  dengan AirportItlwm PCIe, tetapi `pciNub = nullptr`.
+- Semua panggilan PCI di frontend dibungkus `if (pciNub)`; `probe()` tidak
+  lagi menolak provider non-PCI.
+
+### Flag build Sequoia (WAJIB)
+
+```
+-DAIRPORT_WCL -DAIRPORT_VTD -D__IO80211_TARGET=__MAC_15_2
+-DIO80211FAMILY_V2 -D__PRIVATE_SPI__ -DAIRPORT -DIEEE80211_STA_ONLY
+```
+
+M4 **membuang `-DAIRPORT_VTD`** (tidak memakai ItlDma). Seluruh `.c`
+net80211 dikompilasi sebagai **C++** (`clang++ -x c++`) meniru
+`GCC_INPUT_FILETYPE = sourcecode.cpp.cpp` milik Xcode.
+
+### Yang sudah jalan di build
+
+| Cek | Hasil |
+|---|---|
+| `./scripts/build-m4.sh` | rc=0 → `src/driver/build-m4/RTL8188EAirport.kext` |
+| Frontend V2 (AirportItlwm, Skywalk, Ethernet, WCL) | 0 error |
+| net80211 + crypto + support | 0 error |
+| Link | hanya undefined simbol kernel/IO80211 (normal, `-undefined dynamic_lookup`) |
+| Bind simbol (`kextutil -t`) | **OK semua**, berhenti di approval |
+| Uji hardware | ⏳ menunggu dongle + 1 reboot |
+
+### Fitur HAL saat ini
+
+- Init chip lengkap: power-on → LLT/DMA → firmware 15.262 B → EFUSE →
+  MAC/BB/RF/core config (dari M1/M2 yang sudah terbukti).
+- net80211 attach, `if_ioctl=ieee80211_ioctl`, media init.
+- Scan: `newstate(SCAN)` → set kanal → timer 120 ms → `ieee80211_next_scan`.
+- TX mgmt (probe/auth/assoc) dan data lewat bulk OUT; descriptor 32 B dengan
+  DRVRATE + HWSEQ; laju dipaku **1 Mb/s CCK**.
+- RX: parse descriptor 24 B + `infosz` → mbuf → `ieee80211_inputm`;
+  RSSI dihitung dari PHY status (`rtwn_r88e_get_rssi`, CCK/OFDM).
+  Callback USB hanya menyalin frame ke ring 64 slot; pemrosesan net80211
+  dijadwalkan ke workloop IO80211 lewat timer 0 ms (hindari race/deadlock).
+- Kripto **software** (CCMP/TKIP/WEP) via net80211 — belum ada offload.
+- `enable()` menyalakan `IFF_UP|IFF_RUNNING` lalu mulai scan;
+  `disable()` membereskan timer dan state.
+
+### Perintah
+
+```bash
+./scripts/build-m4.sh                          # build + sign
+ALLOW_BOOT_INJECTION=1 sudo ./scripts/install-m4-esp.sh   # pasang (buang M1)
+# reboot (satu-satunya langkah yang belum bisa dihindari)
+kextstat | grep RTL8188EAirport
+ioreg -r -c ItlRtl8188E -w0 | head -30
+networksetup -listallhardwareports | grep -A2 -i wi-fi
+```
+
+### Audit pra-reboot (tanpa hardware)
+
+Bug kritis yang ditemukan dan diperbaiki sebelum uji reboot:
+
+| Bug | Akibat | Perbaikan |
+|---|---|---|
+| `if_watchdog` NULL | `watchdogAction` memanggil NULL 1 detik setelah Wi-Fi ON → panic | pasang `watchdogCb` |
+| tabel kanal kosong | scan tidak pernah mengunjungi kanal (menu kosong) | isi `ic_channels[1..13]` sebelum ifattach |
+| RX mulai sebelum net80211 | frame awal → `ic_bss == NULL` → panic | RX dimulai setelah ifattach |
+| RX di workloop USB | race + risiko deadlock control transfer | ring buffer + timer 0 ms di workloop IO80211 |
+| `free()` tanpa ifdetach | timer net80211 menembak memori bebas | `fIfAttached` + ifdetach di `free()` |
+| `sendFrame` error path | mbuf + node bocor | lepas `ni`/`m` di semua jalur |
+| offset RX +2 | stride salah, paket berikutnya dibuang | format OpenBSD `24+infosz` |
+| scan tanpa jeda | TX probe terus-menerus (risiko bus drop) | jeda 800 ms di kanal 1 tiap siklus |
+| HT/AMPDU diiklankan | jalur belum didukung | HT dimatikan untuk uji pertama |
+| install script | config rusak tidak dipulihkan | rollback otomatis + verifikasi executable |
+| laporan C2H di RX | sampah firmware dianggap frame 802.11 | filter `R92E_RXDW2_RPT_C2H`; `CCX_RPT` dimatikan |
+
+### Risiko / yang belum
+
+1. Asosiasi/WPA2 belum diuji; jalur RUN masih minimal (RCR menerima semua,
+   belum set BSSID/EDCA, tanpa rate control/AMPDU).
+2. TX 1 Mb/s → lambat; rate adaptation menyusul.
+3. RSSI sudah dihitung tetapi belum dikalibrasi terhadap hardware nyata.
+4. Mitigasi TX-power hardware belum ada; scan loop sudah diberi jeda 800 ms
+   di kanal 1, tetapi uji data berkelanjutan masih berisiko bus drop.
+5. `install-m4-esp.sh` menghapus M1 dari ESP; rollback dengan
+   `restore-test-esp.sh` atau pasang ulang M1.
+
+Dokumentasi lengkap: [`m4-airport-integration.md`](m4-airport-integration.md).
