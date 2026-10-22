@@ -106,11 +106,27 @@ Prioritas: **P0 = memblokir fungsi dasar**, **P1 = bikin tidak nyaman**,
 
 | # | Item | Kenapa | Status | Verifikasi |
 |---|---|---|---|---|
-| F0.1 | `scripts/dev-loop-m4.sh` (build → hot-load → replug → test → unload) | menghapus reboot dari loop | ✅ dibuat | `kextstat` menunjukkan UUID baru tanpa reboot |
+| F0.1 | `scripts/dev-loop-m4.sh` (build → hot-load → replug → test → unload) | menghapus reboot dari loop | ❌ **TIDAK BERLAKU** — lihat catatan di bawah | — |
 | F0.2 | `rtwn_probe --join/--txnull` (auth + assoc + uji TX data) | validasi TX data tanpa kernel | ✅ dibuat, uji frame lulus | `--join <ssid> --txnull` → ada TX report |
 | F0.3 | `scripts/collect-m4.sh` | satu boot = semua bukti | ✅ dibuat | `logs/m4-<ts>.txt` lengkap |
 | F0.4 | Keluarkan build eksperimental dari ESP | boot selalu aman | ✅ ESP bersih (11 kext standar, `Kernel->Add` 12 → 11) | reboot → `kextstat` tidak ada RTL8188E |
-| F0.5 | **Boot loader tanpa ESP** — LaunchDaemon memuat kext dari `/usr/local/lib` + fallback vendor | kext tetap otomatis saat boot, tapi binary bisa diganti tanpa reboot | ✅ `scripts/install-m4-boot.sh` | `/var/log/rtl8188e-start.log` |
+| F0.5 | Boot loader tanpa ESP (LaunchDaemon) | kext otomatis saat boot tanpa mengunci ESP | ❌ **TIDAK BERLAKU** — sudah dicabut | — |
+
+> **⚠️ Koreksi 23 Okt 07:00 — hot-load tidak mungkin untuk kext ini.**
+> `kmutil load -z -p` untuk `RTL8188EAirport.kext` **selalu** gagal dengan
+> `KMErrorDomain Code=28 "requires a reboot"` — sudah dicoba setelah
+> `kmutil clear-staging`, setelah entri AuxKC dihapus, dan dengan binary
+> yang berbeda. Kext yang bergantung pada `IO80211Family` hanya bisa masuk
+> lewat **BootKC (injeksi OpenCore)** atau **AuxKC (dibangun saat boot)**.
+> Artinya: **setiap perubahan binary tetap butuh satu reboot.**
+>
+> LaunchDaemon F0.5 sudah dicabut (`/Library/LaunchDaemons/com.zekri.rtl8188e-start.plist`
+> dihapus) karena hanya menghasilkan kegagalan saat boot dan, pada kasus
+> terburuk, meninggalkan mesin tanpa driver sama sekali.
+>
+> Konsekuensi untuk rencana: F1–F4 tetap berlaku, tapi verifikasinya
+> **selalu lewat satu reboot**, bukan hot-load. Karena itu setiap batch
+> perubahan harus digabung sebanyak mungkin sebelum reboot.
 
 **Cara pakai F0:**
 

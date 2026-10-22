@@ -30,16 +30,25 @@ M1 (chip hidup) ✅ · M1c (MAC/xtal dari EFUSE) ✅ · M2 (scan) ✅ ·
 > tethering; kalau perlu vendor lagi, jalankan dari Terminal yang punya
 > izin App Management.
 >
-> **Update 23 Okt 06:45 — perbaikan presisi + boot tanpa ESP.**
-> Akar masalah yang diperbaiki: 8188EU memetakan endpoint USB → queue TX
-> (0 VO/mgmt, 1 VI, 2 BE/BK), tapi driver hanya membuka satu bulk-out dan
-> memakai QSEL=BE untuk data → frame data masuk queue mgmt dan tidak pernah
-> keluar. Sekarang `bulkOpen()` membuka 3 pipe dan `sendFrame()` memilih
-> pipe+QSEL per AC/TID; `txdw5` juga mengisi batas retry `0x0001ff00`.
-> Diagnostik baru: `RTL8188E-stat` dan `RTL8188E-wcl` di ioreg.
-> Boot: **tidak lagi lewat ESP** — LaunchDaemon `com.zekri.rtl8188e-start`
-> memuat `/usr/local/lib/RTL8188EAirport.kext` (fallback otomatis ke vendor
-> kalau gagal). Log: `/var/log/rtl8188e-start.log`.
+> **Update 23 Okt 07:00 — koreksi penting: hot-load TIDAK mungkin.**
+> LaunchDaemon sudah dicabut. `kmutil load -z -p` untuk kext ini selalu
+> `Code=28 "requires a reboot"` (sudah dicoba: clear-staging, hapus entri
+> AuxKC, binary beda). Kext yang bergantung `IO80211Family` hanya bisa
+> masuk lewat **BootKC (injeksi OpenCore)** atau **AuxKC (saat boot)** —
+> jadi **setiap perubahan binary tetap butuh satu reboot**.
+> Kondisi mesin sekarang: ESP bersih, driver vendor Realtek dikembalikan ke
+> `/Library/Extensions`, tidak ada kext zekri di AuxKC. Reboot → Wi-Fi
+> vendor normal kembali.
+> Untuk menguji driver native lagi: `ALLOW_BOOT_INJECTION=1 sudo
+> ./scripts/install-m4-esp.sh` lalu reboot (satu paket perubahan per reboot).
+>
+> **Update 23 Okt 06:45 — perbaikan presisi.** Akar masalah yang diperbaiki:
+> 8188EU memetakan endpoint USB → queue TX (0 VO/mgmt, 1 VI, 2 BE/BK), tapi
+> driver hanya membuka satu bulk-out dan memakai QSEL=BE untuk data → frame
+> data masuk queue mgmt dan tidak pernah keluar. Sekarang `bulkOpen()`
+> membuka 3 pipe dan `sendFrame()` memilih pipe+QSEL per AC/TID; `txdw5`
+> juga mengisi batas retry `0x0001ff00`. Diagnostik baru: `RTL8188E-stat`
+> dan `RTL8188E-wcl` di ioreg (dibaca setelah reboot).
 
 **Terobosan metode:** `tools/rtwn_probe` sekarang bisa membuka device dari
 **user space** (API IOKit yang benar). Iterasi jadi hitungan detik —
