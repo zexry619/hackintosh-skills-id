@@ -895,7 +895,9 @@ IOReturn AirportItlwm::setHardwareAddress(const void *addrP, UInt32 addrBytes)
         return kIOReturnSuccess;
     }
 #endif
+    IEEE80211_ADDR_COPY(fHalService->get80211Controller()->ic_myaddr, addrP);
     if_setlladdr(&fHalService->get80211Controller()->ic_ac.ac_if, (const UInt8 *)addrP);
+    fHalService->updateMACAddress((const uint8_t *)addrP);
 #ifdef AIRPORT_WCL
     if (ic->ic_if.if_flags & IFF_RUNNING) {
         ic->ic_wcl_mac_reconfig = true;

@@ -439,9 +439,12 @@ IOReturn AirportItlwmSkywalkInterface::startWCLJoin(AirportWCL::JoinRequest &joi
         joinTimer->setTimeoutMS(30000);
         return kIOReturnSuccess;
     }
-    if (!supported || !(ic->ic_if.if_flags & IFF_RUNNING) || joinPending || scanPending) {
+    if (!supported || !(ic->ic_if.if_flags & IFF_RUNNING) || joinPending) {
         explicit_bzero(&join, sizeof(join));
         return !supported ? kIOReturnUnsupported : kIOReturnBusy;
+    }
+    if (scanPending) {
+        finishWCLScan(kIOReturnAborted);
     }
     if (ic->ic_state == IEEE80211_S_RUN || ic->ic_state == IEEE80211_S_AUTH || ic->ic_state == IEEE80211_S_ASSOC)
         leaveWCLNetwork();
@@ -523,14 +526,18 @@ IOReturn AirportItlwmSkywalkInterface::startWCLJoin(AirportWCL::JoinRequest &joi
     bzero(wclBeaconInfo, sizeof(wclBeaconInfo));
     disassocIsVoluntary = false;
     joinTimer->setTimeoutMS(30000);
-    if (ic->ic_state != IEEE80211_S_SCAN && ic->ic_newstate(ic, IEEE80211_S_SCAN, -1)) {
-        joinPending = false;
-        joinTimer->cancelTimeout();
-        ic->ic_wcl_join_requested = false;
-        clearWCLPMKSA();
-        ic->ic_wcl_enterprise = false;
-        explicit_bzero(ic->ic_psk, sizeof(ic->ic_psk));
-        return kIOReturnError;
+    if (ic->ic_state != IEEE80211_S_SCAN) {
+        if (ic->ic_newstate(ic, IEEE80211_S_SCAN, -1)) {
+            joinPending = false;
+            joinTimer->cancelTimeout();
+            ic->ic_wcl_join_requested = false;
+            clearWCLPMKSA();
+            ic->ic_wcl_enterprise = false;
+            explicit_bzero(ic->ic_psk, sizeof(ic->ic_psk));
+            return kIOReturnError;
+        }
+    } else {
+        ieee80211_begin_scan(&ic->ic_if);
     }
     return kIOReturnSuccess;
 }
@@ -573,6 +580,8 @@ void AirportItlwmSkywalkInterface::finishWCLJoin(uint16_t status, uint16_t reaso
         clearWCLPMKSA();
         ic->ic_wcl_enterprise = false;
         explicit_bzero(ic->ic_psk, sizeof(ic->ic_psk));
+        if (ic->ic_state > IEEE80211_S_SCAN)
+            ieee80211_new_state(ic, IEEE80211_S_SCAN, -1);
     }
 }
 

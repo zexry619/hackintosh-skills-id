@@ -433,10 +433,31 @@ void ItlRtl8188E::detach(IOPCIDevice *device)
 	fEnabled = false;
 }
 
+void ItlRtl8188E::updateMACAddress(const uint8_t *mac)
+{
+	if (!mac)
+		return;
+	for (int i = 0; i < IEEE80211_ADDR_LEN; i++) {
+		fMac[i] = mac[i];
+		fChip.macaddr[i] = mac[i];
+		halWrite(this, R92C_MACID + i, &mac[i], 1);
+	}
+	IOLog(LOGP "MAC address hardware disinkronkan ke %02x:%02x:%02x:%02x:%02x:%02x\n",
+	    mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+}
+
 IOReturn ItlRtl8188E::enable(IONetworkInterface *interface)
 {
 	(void)interface;
 	struct _ifnet *ifp = &fIc.ic_if;
+
+	/* Pastikan register MAC chip cocok dengan ic_myaddr */
+	for (int i = 0; i < IEEE80211_ADDR_LEN; i++) {
+		uint8_t b = fIc.ic_myaddr[i];
+		halWrite(this, R92C_MACID + i, &b, 1);
+		fMac[i] = b;
+		fChip.macaddr[i] = b;
+	}
 
 	if (ifp->if_flags & IFF_UP)
 		return kIOReturnSuccess;
@@ -554,30 +575,34 @@ int ItlRtl8188E::newstateCb(struct ieee80211com *ic,
 	switch (nstate) {
 	case IEEE80211_S_SCAN: {
 		uint8_t ch = 1;
-		int dwell = 120;
+		int dwell;
 
 		me->fScanning = true;
 		if (ic->ic_bss && ic->ic_bss->ni_chan) {
 			me->setChannel(ic->ic_bss->ni_chan);
 			ch = (uint8_t)ieee80211_chan2ieee(ic, ic->ic_bss->ni_chan);
 		}
-		if (ch >= 1 && ch <= 14) {
-			/*
-			 * Siklus scan tanpa asosiasi berputar terus. Beri
-			 * jeda 800 ms di kanal 1 pada siklus kedua dst. agar
-			 * TX probe tidak terus-menerus membebani bus USB
-			 * (dongle ini pernah drop dari bus saat scan intens).
-			 */
-			if (ch == 1 && me->fScanSeen)
-				dwell = 800;
-			if (ch > 1)
-				me->fScanSeen = true;
+#ifdef AIRPORT_WCL
+		if (ic->ic_wcl_scan_requested || ic->ic_wcl_join_requested) {
+			/* Active user scan/join: rapid channel hopping (35ms), no pause */
+			dwell = 35;
+		} else
+#endif
+		{
+			dwell = 80;
+			if (ch >= 1 && ch <= 14) {
+				if (ch == 1 && me->fScanSeen)
+					dwell = 800;
+				if (ch > 1)
+					me->fScanSeen = true;
+			}
 		}
 		timeout_add_msec(&me->fScanTo, dwell);
 		break;
 	}
 	case IEEE80211_S_AUTH:
 		me->fScanning = false;
+		me->fScanSeen = false;
 		if (me->fScanTo)
 			timeout_del(&me->fScanTo);
 		if (ic->ic_bss && ic->ic_bss->ni_chan)
@@ -585,6 +610,7 @@ int ItlRtl8188E::newstateCb(struct ieee80211com *ic,
 		break;
 	case IEEE80211_S_ASSOC:
 		me->fScanning = false;
+		me->fScanSeen = false;
 		if (me->fScanTo)
 			timeout_del(&me->fScanTo);
 		if (ic->ic_bss && ic->ic_bss->ni_chan)
@@ -592,6 +618,7 @@ int ItlRtl8188E::newstateCb(struct ieee80211com *ic,
 		break;
 	case IEEE80211_S_RUN: {
 		me->fScanning = false;
+		me->fScanSeen = false;
 		if (me->fScanTo)
 			timeout_del(&me->fScanTo);
 		if (ic->ic_bss) {
@@ -611,6 +638,7 @@ int ItlRtl8188E::newstateCb(struct ieee80211com *ic,
 	}
 	case IEEE80211_S_INIT:
 		me->fScanning = false;
+		me->fScanSeen = false;
 		if (me->fScanTo)
 			timeout_del(&me->fScanTo);
 		break;

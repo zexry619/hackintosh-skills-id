@@ -47,6 +47,7 @@ public:
 	IOReturn enable(IONetworkInterface *interface) override;
 	IOReturn disable(IONetworkInterface *interface) override;
 	struct ieee80211com *get80211Controller() override;
+	void updateMACAddress(const uint8_t *mac) override;
 	ItlDriverInfo *getDriverInfo() override { return this; }
 	ItlDriverController *getDriverController() override { return this; }
 
