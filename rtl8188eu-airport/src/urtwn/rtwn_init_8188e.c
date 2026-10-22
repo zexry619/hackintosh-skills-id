@@ -292,15 +292,16 @@ rtwn_core_config_8188e(rtwn_read_fn rd, rtwn_write_fn wr, void *ctx,
 	/* Mode station (infra). */
 	wr8(rd, wr, ctx, R92C_MSR, R92C_MSR_NETTYPE_INFRA);
 
-	/* Rx filter: terima semua yang relevan. */
+	/* Rx filter: terima semua yang relevan (mgmt, data, control). */
 	wr32(rd, wr, ctx, R92C_RCR,
 	    R92C_RCR_AAP | R92C_RCR_APM | R92C_RCR_AM | R92C_RCR_AB |
-	    R92C_RCR_APP_ICV | R92C_RCR_AMF | R92C_RCR_HTC_LOC_CTRL |
+	    R92C_RCR_ADF | R92C_RCR_ACF | R92C_RCR_AMF |
+	    R92C_RCR_APP_ICV | R92C_RCR_HTC_LOC_CTRL |
 	    R92C_RCR_APP_MIC | R92C_RCR_APP_PHYSTS);
 	wr32(rd, wr, ctx, R92C_MAR + 0, 0xffffffffu);
 	wr32(rd, wr, ctx, R92C_MAR + 4, 0xffffffffu);
 	wr16(rd, wr, ctx, R92C_RXFLTMAP0, 0xffff);
-	wr16(rd, wr, ctx, R92C_RXFLTMAP1, 0x0000);
+	wr16(rd, wr, ctx, R92C_RXFLTMAP1, 0xffff);
 	wr16(rd, wr, ctx, R92C_RXFLTMAP2, 0xffff);
 
 	/* Semua rate untuk respons/ACK. */
@@ -356,11 +357,12 @@ rtwn_core_config_8188e(rtwn_read_fn rd, rtwn_write_fn wr, void *ctx,
 		wr32(rd, wr, ctx, R92C_FPGA0_RFMOD, reg);
 	}
 
-	/* Enkripsi (wajib untuk WPA2 nanti). */
-	wr16(rd, wr, ctx, R92C_SECCFG,
-	    (uint16_t)(R92C_SECCFG_TXUCKEY_DEF | R92C_SECCFG_RXUCKEY_DEF |
-	    R92C_SECCFG_TXENC_ENA | R92C_SECCFG_RXENC_ENA |
-	    R92C_SECCFG_TXBCKEY_DEF | R92C_SECCFG_RXBCKEY_DEF));
+	/*
+	 * Enkripsi: untuk software crypto (net80211 CCMP), matikan
+	 * engine HW (SECCFG=0) agar tidak mencoba enkripsi ganda atau
+	 * merusak mbuf karena tabel CAM hardware belum diprogram.
+	 */
+	wr16(rd, wr, ctx, R92C_SECCFG, 0x0000);
 
 	/* Hardware sequence numbering. */
 	wr8(rd, wr, ctx, R92C_HWSEQ_CTRL, 0xff);

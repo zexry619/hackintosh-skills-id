@@ -22,6 +22,7 @@
 #include <sys/timeout.h>
 
 extern "C" {
+#include "r92creg.h"
 #include "rtwn_seq.h"
 #include "rtwn_init_8188e.h"
 #include "rtwn_chan.h"
@@ -302,7 +303,7 @@ bool ItlRtl8188E::attach(IOPCIDevice *device)
 	 * bertanda; tanpa ini ic_chan_avail kosong dan scan tidak pernah
 	 * mengunjungi satu kanal pun.
 	 */
-	for (uint32_t ch = 1; ch <= 13; ch++) {
+	for (uint32_t ch = 1; ch <= 14; ch++) {
 		struct ieee80211_channel *c = &fIc.ic_channels[ch];
 		c->ic_freq = ieee80211_ieee2mhz(ch, IEEE80211_CHAN_2GHZ);
 		c->ic_flags = IEEE80211_CHAN_2GHZ |
@@ -538,12 +539,14 @@ int ItlRtl8188E::newstateCb(struct ieee80211com *ic,
 
 	switch (nstate) {
 	case IEEE80211_S_SCAN: {
-		uint8_t ch;
+		uint8_t ch = 1;
 		int dwell = 120;
 
 		me->fScanning = true;
-		me->setChannel(ic->ic_bss->ni_chan);
-		ch = (uint8_t)ieee80211_chan2ieee(ic, ic->ic_bss->ni_chan);
+		if (ic->ic_bss && ic->ic_bss->ni_chan) {
+			me->setChannel(ic->ic_bss->ni_chan);
+			ch = (uint8_t)ieee80211_chan2ieee(ic, ic->ic_bss->ni_chan);
+		}
 		if (ch >= 1 && ch <= 14) {
 			/*
 			 * Siklus scan tanpa asosiasi berputar terus. Beri
@@ -563,8 +566,35 @@ int ItlRtl8188E::newstateCb(struct ieee80211com *ic,
 		me->fScanning = false;
 		if (me->fScanTo)
 			timeout_del(&me->fScanTo);
-		me->setChannel(ic->ic_bss->ni_chan);
+		if (ic->ic_bss && ic->ic_bss->ni_chan)
+			me->setChannel(ic->ic_bss->ni_chan);
 		break;
+	case IEEE80211_S_ASSOC:
+		me->fScanning = false;
+		if (me->fScanTo)
+			timeout_del(&me->fScanTo);
+		if (ic->ic_bss && ic->ic_bss->ni_chan)
+			me->setChannel(ic->ic_bss->ni_chan);
+		break;
+	case IEEE80211_S_RUN: {
+		me->fScanning = false;
+		if (me->fScanTo)
+			timeout_del(&me->fScanTo);
+		if (ic->ic_bss) {
+			struct ieee80211_node *ni = ic->ic_bss;
+			if (ni->ni_chan)
+				me->setChannel(ni->ni_chan);
+			uint32_t b0 = (uint32_t)ni->ni_bssid[0] |
+			    ((uint32_t)ni->ni_bssid[1] << 8) |
+			    ((uint32_t)ni->ni_bssid[2] << 16) |
+			    ((uint32_t)ni->ni_bssid[3] << 24);
+			uint16_t b4 = (uint16_t)ni->ni_bssid[4] |
+			    ((uint16_t)ni->ni_bssid[5] << 8);
+			halWrite(me, R92C_BSSID + 0, &b0, 4);
+			halWrite(me, R92C_BSSID + 4, &b4, 2);
+		}
+		break;
+	}
 	case IEEE80211_S_INIT:
 		me->fScanning = false;
 		if (me->fScanTo)
@@ -1011,8 +1041,6 @@ void ItlRtl8188E::handleRx(const uint8_t *buf, uint32_t len)
 		}
 
 		if (!txReport) {
-			uint8_t type = 0;
-
 			if (flen < sizeof(struct ieee80211_frame))
 				goto advance;
 			wh = (struct ieee80211_frame *)(buf + foff);
