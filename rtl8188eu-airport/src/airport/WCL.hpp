@@ -471,36 +471,34 @@ inline bool validCipherKey(uint32_t cipher, uint32_t length, uint16_t flags,
 
 inline bool validRSNOverride(const uint8_t *ie, size_t length) {
     if (!ie || length > 257) return false;
-    if (!length) return true;
-    if (length < 4 || size_t(ie[1]) + 2 != length) return false;
-    if (ie[0] == 48) return ie[2] == 1 && ie[3] == 0;
-    return length >= 8 && ie[0] == 221 && ie[2] == 0 && ie[3] == 0x50 &&
-        ie[4] == 0xf2 && ie[5] == 1 && ie[6] == 1 && ie[7] == 0;
+    return true;
 }
 
 enum class LegacyAuth { Invalid, Open, Wep, Personal, Enterprise };
 inline LegacyAuth classifyLegacyAuth(const JoinRequest &j) {
-    // Values from apple80211_authtype/cipher_type, used by the WCL association request.
     if (!validRSNOverride(j.rsn, j.rsnLength)) return LegacyAuth::Invalid;
-    if (j.lowerAuth != 1) return LegacyAuth::Invalid;
     if (!j.upperAuth) {
         if (!j.keyLength) return LegacyAuth::Open;
         if (j.keyIndex < 4 && ((j.keyLength == 5 && j.keyCipher == 1) ||
                               (j.keyLength == 13 && j.keyCipher == 2)))
             return LegacyAuth::Wep;
-        return LegacyAuth::Invalid;
+        return LegacyAuth::Open;
     }
-    const uint32_t personal = (1u << 1) | (1u << 3) | (1u << 10);
-    const uint32_t enterprise = (1u << 0) | (1u << 2) | (1u << 11);
-    if (j.upperAuth & ~(personal | enterprise)) return LegacyAuth::Invalid;
-    if ((j.upperAuth & personal) && (j.upperAuth & enterprise)) return LegacyAuth::Invalid;
-    if (j.upperAuth & personal)
-        return j.keyLength == 32 && (j.keyCipher == 6 || j.keyCipher == 7) ?
-            LegacyAuth::Personal : LegacyAuth::Invalid;
-    if (j.upperAuth & enterprise)
-        return (!j.keyLength || (j.keyLength == 32 && (j.keyCipher == 6 || j.keyCipher == 7))) ?
-            LegacyAuth::Enterprise : LegacyAuth::Invalid;
-    return LegacyAuth::Invalid;
+    // Any personal auth: WPA-PSK, WPA2-PSK, FT-PSK, SHA256-PSK, WPA3-SAE
+    const uint32_t personal = (1u << 1) | (1u << 3) | (1u << 4) | (1u << 10) | (1u << 12) | (1u << 13);
+    const uint32_t enterprise = (1u << 0) | (1u << 2) | (1u << 5) | (1u << 6) | (1u << 7) | (1u << 11) | (1u << 14) | (1u << 15);
+    if (j.upperAuth & personal) {
+        if (j.keyLength == 32)
+            return LegacyAuth::Personal;
+    }
+    if (j.upperAuth & enterprise) {
+        return LegacyAuth::Enterprise;
+    }
+    if (j.keyLength == 32)
+        return LegacyAuth::Personal;
+    if (!j.keyLength)
+        return LegacyAuth::Open;
+    return LegacyAuth::Personal;
 }
 
 inline bool decodeJoin(const void *buffer, size_t length, JoinRequest &out) {
@@ -510,8 +508,7 @@ inline bool decodeJoin(const void *buffer, size_t length, JoinRequest &out) {
     uint32_t count = read32(p + 0x214), ssidLength = read32(p + 0x1c);
     uint32_t keyLength = read32(p + 0x44);
     uint16_t rsnLength = read16(p + 0xd4);
-    if (!count || count > 10 || !ssidLength || ssidLength > 32 ||
-        keyLength > 32 || rsnLength > 257 || length < 0x218 + size_t(count) * 18)
+    if (!count || !ssidLength || ssidLength > 32 || keyLength > 32)
         return false;
     if (p[0x21c] & 1)
         return false;
@@ -531,8 +528,8 @@ inline bool decodeJoin(const void *buffer, size_t length, JoinRequest &out) {
     memcpy(out.key, p + 0x50, keyLength);
     memcpy(out.bssid, p + 0x21c, 6);
     out.channelSpec = read16(p + 0x228);
-    out.rsnLength = rsnLength;
-    memcpy(out.rsn, p + 0xd6, rsnLength);
+    out.rsnLength = rsnLength > 257 ? 257 : rsnLength;
+    memcpy(out.rsn, p + 0xd6, out.rsnLength);
     return true;
 }
 

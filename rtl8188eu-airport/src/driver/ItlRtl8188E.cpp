@@ -743,6 +743,15 @@ void ItlRtl8188E::sendFrame(mbuf_t m, struct ieee80211_node *ni, bool isMgmt)
 		}
 	}
 
+	if (!isMgmt) {
+		size_t llcOff = (wh[0] & IEEE80211_FC0_SUBTYPE_QOS) ? 26 : 24;
+		if (len >= llcOff + 8) {
+			uint16_t et = ((uint16_t)wh[llcOff + 6] << 8) | wh[llcOff + 7];
+			if (et == 0x888e)
+				IOLog(LOGP "TX EAPOL handshake frame (len %u)\n", (unsigned)len);
+		}
+	}
+
 	bcast = IEEE80211_IS_MULTICAST(wh + 4);
 	raid = 6;	/* RAID 11B — terbukti di M2 */
 
@@ -830,7 +839,8 @@ void ItlRtl8188E::txStart(struct _ifnet *ifp)
 		sendFrame(m, ni, true);
 	}
 
-	if (ic->ic_state != IEEE80211_S_RUN)
+	if ((ic->ic_state != IEEE80211_S_RUN && ic->ic_state != IEEE80211_S_ASSOC) ||
+	    (ic->ic_xflags & IEEE80211_F_TX_MGMT_ONLY))
 		return;
 
 	while ((m = ifq_dequeue(&ifp->if_snd)) != nullptr) {
@@ -1080,6 +1090,16 @@ void ItlRtl8188E::handleRx(const uint8_t *buf, uint32_t len)
 			if ((wh->i_fc[0] & IEEE80211_FC0_VERSION_MASK) !=
 			    IEEE80211_FC0_VERSION_0)
 				goto advance;
+
+			if ((wh->i_fc[0] & IEEE80211_FC0_TYPE_MASK) == IEEE80211_FC0_TYPE_DATA) {
+				size_t llcOff = (wh->i_fc[0] & IEEE80211_FC0_SUBTYPE_QOS) ? 26 : 24;
+				if (flen >= llcOff + 8) {
+					const uint8_t *p = buf + foff + llcOff;
+					uint16_t et = ((uint16_t)p[6] << 8) | p[7];
+					if (et == 0x888e)
+						IOLog(LOGP "RX EAPOL handshake frame (len %u)\n", (unsigned)flen);
+				}
+			}
 
 			/* RSSI dari PHY status (rtwn_r88e_get_rssi). */
 			if (info.infosz > 0 && info.hasPhyStatus) {
