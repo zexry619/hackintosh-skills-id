@@ -94,15 +94,39 @@ else:
     print("      uakl: sudah ada")
 PY
 
+echo "[3/4] rebuild AuxKC (tanpa KDK)"
+#
+# kmutil create --update-all gagal rc=71 di mesin tanpa KDK. Yang bekerja:
+#   -n aux                    hanya koleksi auxiliary
+#   --allow-missing-kdk       paksa rebuild walau KDK tidak ada
+#   -S / -B                   path SystemKC & BootKC eksplisit; tanpa ini
+#                             dependency com.apple.kpi.* tidak ketemu
+#   -s none                   jangan strip string (log diagnostik hilang
+#                             kalau di-strip)
+SYSC="/System/Library/KernelCollections/SystemKernelExtensions.kc"
+BOOTC="/System/Library/KernelCollections/BootKernelExtensions.kc"
+kmutil create -n aux --allow-missing-kdk --volume-root / \
+	-S "$SYSC" -B "$BOOTC" -s none
+if [ $? -ne 0 ]; then
+	echo "GAGAL: rebuild AuxKC" >&2
+	exit 7
+fi
+
 echo "[4/4] verifikasi"
 STASH_BIN_HASH=$(shasum "$STASH_DIR/RTL8188EAirport.kext/Contents/MacOS/RTL8188EAirport" | awk '{print $1}')
 STASH_CDHASH=$(codesign -dvvv "$STASH_DIR/RTL8188EAirport.kext" 2>&1 | sed -n 's/^CDHash=//p' | head -1)
 STASH_VER=$(/usr/libexec/PlistBuddy -c "Print :CFBundleVersion" "$STASH_DIR/RTL8188EAirport.kext/Contents/Info.plist" 2>/dev/null)
 
-echo "      binary  : $NEW_BIN_HASH"
-echo "      stash   : $STASH_BIN_HASH"
-echo "      cdHash  : $STASH_CDHASH"
-echo "      versi   : $STASH_VER"
+KC="/System/Volumes/Data/Library/KernelCollections/AuxiliaryKernelExtensions.kc"
+KC_VER=$(grep -a -o "$STASH_VER" "$KC" 2>/dev/null | head -1)
+KC_HAS_LOG=$(grep -a -c "rtl8188e" "$KC" 2>/dev/null)
+
+echo "      binary   : $NEW_BIN_HASH"
+echo "      stash    : $STASH_BIN_HASH"
+echo "      cdHash   : $STASH_CDHASH"
+echo "      versi    : $STASH_VER"
+echo "      kc versi : ${KC_VER:-TIDAK ADA}"
+echo "      kc rtl8188e: ${KC_HAS_LOG:-0}"
 
 if [ "$NEW_BIN_HASH" != "$STASH_BIN_HASH" ]; then
 	echo "GAGAL: binary stash berbeda" >&2
@@ -112,5 +136,9 @@ if [ "$NEW_CDHASH" != "$STASH_CDHASH" ]; then
 	echo "GAGAL: cdHash stash berbeda" >&2
 	exit 6
 fi
+if [ "$KC_VER" != "$STASH_VER" ]; then
+	echo "GAGAL: AuxKC belum berisi versi $STASH_VER" >&2
+	exit 8
+fi
 
-echo "OK — reboot untuk memuat build ini"
+echo "OK — reboot untuk memuat build $STASH_VER"
