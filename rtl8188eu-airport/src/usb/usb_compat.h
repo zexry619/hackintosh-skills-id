@@ -78,7 +78,11 @@ public:
 	    fInterface(nullptr), fClient(nullptr), fOpen(false),
 	    fCtlLock(nullptr), fCtlMd(nullptr), fCtlBuf(nullptr), fCtlCap(0),
 	    fBulkClosing(false), fAttached(false), fTxDone(nullptr),
-	    fBulkLock(nullptr), fAlive(nullptr) {}
+	    fBulkLock(nullptr), fAlive(nullptr) {
+		fPipeStalled[0] = false;
+		fPipeStalled[1] = false;
+		fPipeStalled[2] = false;
+	}
 
 	/* Status attach (untuk diagnostik). */
 	enum {
@@ -166,6 +170,7 @@ public:
 	IOUSBHostPipe      *fPipeOut;
 	/* Semua bulk-out, urutan sesuai descriptor (0 = prioritas tertinggi). */
 	IOUSBHostPipe      *fPipeOutAll[3];
+	bool                fPipeStalled[3];
 	int                 fNumOut;
 	rtwn_rx_cb          fRxCb;
 	void               *fRxCtx;

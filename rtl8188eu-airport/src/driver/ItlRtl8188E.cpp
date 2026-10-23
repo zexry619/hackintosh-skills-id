@@ -598,62 +598,14 @@ void ItlRtl8188E::setChannel(struct ieee80211_channel *chan)
  */
 void ItlRtl8188E::applyRsnVariant(uint32_t attempt)
 {
-	struct ieee80211com *ic = &fIc;
-	uint8_t v;
-
-	if (!(ic->ic_flags & IEEE80211_F_RSNON) && attempt <= 1)
-		return;		/* tidak ada RSN aktif, tidak perlu varian */
-
-	/* 1..5 lalu ulang 2..5 (baseline tidak diulang) */
-	v = (uint8_t)(attempt <= 1 ? 1 : ((attempt - 2) % 4) + 2);
-	fRsnVariant = v;
-
-	switch (v) {
-	case 1:
-		IOLog(LOGP "rsn-varian 1: baseline macOS\n");
-		break;
-	case 2:
-		ic->ic_flags |= IEEE80211_F_RSNON;
-		ic->ic_rsnciphers = IEEE80211_CIPHER_CCMP;
-		ic->ic_rsngroupcipher = IEEE80211_CIPHER_CCMP;
-		ic->ic_rsnakms = IEEE80211_AKM_PSK;
-		IOLog(LOGP "rsn-varian 2: CCMP saja\n");
-		break;
-	case 3:
-		ic->ic_flags |= IEEE80211_F_RSNON;
-		ic->ic_rsnprotos = IEEE80211_PROTO_WPA | IEEE80211_PROTO_RSN;
-		ic->ic_rsnciphers = IEEE80211_CIPHER_CCMP |
-		    IEEE80211_CIPHER_TKIP;
-		ic->ic_rsngroupcipher = IEEE80211_CIPHER_CCMP;
-		ic->ic_rsnakms = IEEE80211_AKM_PSK;
-		IOLog(LOGP "rsn-varian 3: WPA1+WPA2 CCMP+TKIP\n");
-		break;
-	case 4:
-		ic->ic_flags |= IEEE80211_F_RSNON;
-		ic->ic_rsnprotos = IEEE80211_PROTO_WPA;
-		ic->ic_rsnciphers = IEEE80211_CIPHER_TKIP |
-		    IEEE80211_CIPHER_CCMP;
-		ic->ic_rsngroupcipher = IEEE80211_CIPHER_TKIP;
-		ic->ic_rsnakms = IEEE80211_AKM_PSK;
-		IOLog(LOGP "rsn-varian 4: WPA1 saja\n");
-		break;
-	case 5:
-	default:
-		/*
-		 * WPA2 + CCMP + PSK + SHA256-PSK (AKM 6). Sebagian AP
-		 * WPA3-transition hanya menerima AKM ini.
-		 * Sengaja TIDAK memakai assoc tanpa RSN: itu bisa membuat
-		 * macOS tampak terhubung tanpa enkripsi dan menyesatkan.
-		 */
-		ic->ic_flags |= IEEE80211_F_RSNON;
-		ic->ic_rsnprotos = IEEE80211_PROTO_RSN;
-		ic->ic_rsnciphers = IEEE80211_CIPHER_CCMP;
-		ic->ic_rsngroupcipher = IEEE80211_CIPHER_CCMP;
-		ic->ic_rsnakms = IEEE80211_AKM_PSK |
-		    IEEE80211_AKM_SHA256_PSK;
-		IOLog(LOGP "rsn-varian 5: WPA2 CCMP PSK+SHA256\n");
-		break;
-	}
+	/*
+	 * Selalu gunakan varian 1 (baseline macOS RSN IE).
+	 * Varian 2..5 (eksperimen lama) mengubah cipher/proto menjadi
+	 * TKIP/WPA1/SHA256 yang ditolak AP ZEKRI.NET dan memicu deauth loop.
+	 */
+	(void)attempt;
+	fRsnVariant = 1;
+	IOLog(LOGP "rsn-varian 1: baseline macOS\n");
 }
 
 /*
@@ -968,7 +920,7 @@ void ItlRtl8188E::sendFrame(mbuf_t m, struct ieee80211_node *ni, bool isMgmt)
 	}
 
 	bcast = IEEE80211_IS_MULTICAST(wh + 4);
-	raid = 6;	/* RAID 11B — terbukti di M2 */
+	raid = 6;	/* R92E_RAID_11BG (6) untuk RTL8188E — terbukti di M2 */
 
 	/*
 	 * Hitung per-subtype. Tanpa ini "auth tidak dikirim" dan
@@ -1056,8 +1008,15 @@ void ItlRtl8188E::sendFrame(mbuf_t m, struct ieee80211_node *ni, bool isMgmt)
 		}
 
 		if (isMgmt) {
+			uint16_t seq = ((uint16_t)wh[22] |
+			    ((uint16_t)wh[23] << 8)) >> IEEE80211_SEQ_SEQ_SHIFT;
+			uint16_t txdseq = (seq & 0x0fff) | 0x8000;
+
 			rtwn_usb_build_mgmt_tx_desc(buf, RTWN_USB_TX_DESC_SIZE,
 			    (uint16_t)len, bcast);
+			buf[14] = (uint8_t)(txdseq & 0xff);
+			buf[15] = (uint8_t)((txdseq >> 8) & 0xff);
+			rtwn_usb_tx_checksum(buf, RTWN_USB_TX_DESC_SIZE);
 		} else {
 			bool qos = (wh[0] & IEEE80211_FC0_SUBTYPE_QOS) != 0;
 			uint16_t seq = ((uint16_t)wh[22] |
@@ -1073,35 +1032,31 @@ void ItlRtl8188E::sendFrame(mbuf_t m, struct ieee80211_node *ni, bool isMgmt)
 			 *   12 txdw3 (16 bit)  14 txdseq  16 txdw4  20 txdw5
 			 * DRVRATE/HWSEQ ada di txdw4, BUKAN txdw3.
 			 */
+			uint16_t txdseq = seq & 0x0fff;
+			uint8_t rtsrate = 8;	/* OFDM24 (R92C_TXDW4_RTSRATE) */
+
 			if (qos) {
-				buf[14] = (uint8_t)(seq & 0xff);
-				buf[15] = (uint8_t)((seq >> 8) & 0xff);
-				buf[16] = 0x40;	/* QOS */
-				buf[17] = 0x01;	/* DRVRATE */
+				buf[14] = (uint8_t)(txdseq & 0xff);
+				buf[15] = (uint8_t)((txdseq >> 8) & 0xff);
+				buf[16] = (uint8_t)(0x40 | (rtsrate & 0x1f));	/* QOS | RTSRATE */
+				buf[17] = 0x01;	/* DRVRATE=1: fallback robust rate */
 			} else {
-				buf[14] = 0x00;
-				buf[15] = 0x80;	/* txdseq: HWSEQEN */
-				buf[16] = 0x80;	/* HWSEQ */
-				buf[17] = 0x01;	/* DRVRATE */
+				txdseq |= 0x8000;	/* R92C_TXDW3_HWSEQEN */
+				buf[14] = (uint8_t)(txdseq & 0xff);
+				buf[15] = (uint8_t)((txdseq >> 8) & 0xff);
+				buf[16] = (uint8_t)(0x80 | (rtsrate & 0x1f));	/* HWSEQ | RTSRATE */
+				buf[17] = 0x01;	/* DRVRATE=1: fallback robust rate */
 			}
 			buf[18] = 0x00;
 			buf[19] = 0x00;
 			/*
-			 * txdw5: DATARATE=0 (CCK 1 Mb/s) + batas retry.
-			 * Tanpa batas retry (0x0001ff00 seperti urtwn), frame
-			 * yang sekali bertabrakan langsung dibuang — cukup
-			 * untuk membuat handshake WPA2 gagal di band 2,4 GHz.
+			 * txdw5: DATARATE=0 (CCK 1 Mb/s) + batas retry 0x0001ff00.
+			 * Terbukti sukses berkomunikasi dua arah dengan router.
 			 */
-			buf[20] = 0x00;
+			buf[20] = 0x00;	/* CCK 1 Mb/s fallback rate */
 			buf[21] = 0xff;
 			buf[22] = 0x01;
 			buf[23] = 0x00;
-			/*
-			 * CCX_RPT AKTIF: laporan TX (C2H) memberi tahu apakah
-			 * frame benar-benar di-ACK AP (R88E_RPTB1_PKT_OK) dan
-			 * berapa kali retry. Tanpa ini kita buta: "sudah kirim"
-			 * dan "sampai ke AP" tidak bisa dibedakan.
-			 */
 			/* (bit CCX_RPT dibiarkan menyala dari builder) */
 			rtwn_usb_tx_checksum(buf, RTWN_USB_TX_DESC_SIZE);
 		}
@@ -1117,8 +1072,11 @@ void ItlRtl8188E::sendFrame(mbuf_t m, struct ieee80211_node *ni, bool isMgmt)
 
 		if (!fChip.usb.bulkSend(buf, (uint32_t)total, nullptr, nullptr,
 		    pipe)) {
-			IOLog(LOGP "bulkSend gagal (%u byte, pipe %d)\n",
-			    (unsigned)total, pipe);
+			static int failLog = 0;
+			if (failLog++ < 10 || (failLog % 100) == 0) {
+				IOLog(LOGP "bulkSend gagal (%u byte, pipe %d, count %d)\n",
+				    (unsigned)total, pipe, failLog);
+			}
 			fTxFail++;
 		} else if (isMgmt) {
 			fTxMgmt++;
