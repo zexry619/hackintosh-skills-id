@@ -765,6 +765,7 @@ struct rxstat {
 	int transfers;
 	int frames;
 	int txrep;
+	int txok;
 	int crc;
 };
 
@@ -1306,27 +1307,41 @@ run_join(const char *ssid, const char *bssid_opt, int force_chan, int doTxNull,
 
 				for (k = 0; k < n; k++) {
 					if (fr[k].txrep) {
+						/* r88e_tx_rpt_ccx: rptb1 bit6 =
+						 * PKT_OK (di-ACK AP), rptb2 =
+						 * jumlah retry. */
+						bool ok = (fr[k].p[1] & 0x40) != 0;
+						unsigned rty =
+						    fr[k].p[2] & 0x3f;
+
 						printf("  round %d: TX report "
-						    "dw3=0x%08x [%02x %02x %02x "
-						    "%02x %02x %02x %02x %02x]\n",
+						    "dw3=0x%08x %s retry=%u "
+						    "[%02x %02x %02x %02x %02x "
+						    "%02x %02x %02x]\n",
 						    round, fr[k].dw3,
+						    ok ? "ACK" : "no-ack", rty,
 						    fr[k].p[0], fr[k].p[1],
 						    fr[k].p[2], fr[k].p[3],
 						    fr[k].p[4], fr[k].p[5],
 						    fr[k].p[6], fr[k].p[7]);
+						if (ok) {
+							st.txok++;
+						}
 					}
 				}
 			}
 		}
 		printf("── Hasil ──\n");
-		printf("  transfer=%d frame=%d txreport=%d crc=%d\n",
-		    st.transfers, st.frames, st.txrep, st.crc);
-		if (st.txrep > 0) {
-			printf("  ✓ chip melaporkan status TX untuk frame data "
-			    "→ jalur data hidup\n");
+		printf("  transfer=%d frame=%d txreport=%d ack=%d crc=%d\n",
+		    st.transfers, st.frames, st.txrep, st.txok, st.crc);
+		if (st.txok > 0) {
+			printf("  ✓ frame data TERKIRIM dan di-ACK AP\n");
+		} else if (st.txrep > 0) {
+			printf("  ! frame terkirim tapi TIDAK di-ACK "
+			    "(AP belum menganggap kita terasosiasi)\n");
 		} else {
 			printf("  ✗ tidak ada TX report: frame data tidak "
-			    "dikirim/di-ACK\n");
+			    "dikirim\n");
 		}
 	}
 

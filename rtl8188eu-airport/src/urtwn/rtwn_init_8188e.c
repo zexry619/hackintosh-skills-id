@@ -324,6 +324,22 @@ rtwn_core_config_8188e(rtwn_read_fn rd, rtwn_write_fn wr, void *ctx,
 	wr16(rd, wr, ctx, R92C_RESP_SIFS_OFDM, 0x100a);
 	wr32(rd, wr, ctx, R92C_EDCA_RANDOM_GEN, 0x12345678u);
 
+	/*
+	 * Parameter EDCA per access category.
+	 *
+	 * Diambil byte-per-byte dari driver vendor yang berjalan di mesin ini:
+	 * `_InitEDCA_8188EU` di RtWlanU.kext (offset 0xb33f9):
+	 *   0x500 = 0x2fa226 (VO)   0x504 = 0x5ea324 (VI)
+	 *   0x508 = 0x5ea42b (BE)   0x50c = 0x00a44f (BK)
+	 *
+	 * Tanpa ini queue BE memakai nilai reset chip. Driver vendor — yang
+	 * terbukti bisa konek — selalu menulisnya, jadi kita samakan.
+	 */
+	wr32(rd, wr, ctx, R92C_EDCA_VO_PARAM, 0x002fa226u);
+	wr32(rd, wr, ctx, R92C_EDCA_VI_PARAM, 0x005ea324u);
+	wr32(rd, wr, ctx, R92C_EDCA_BE_PARAM, 0x005ea42bu);
+	wr32(rd, wr, ctx, R92C_EDCA_BK_PARAM, 0x0000a44fu);
+
 	/* AMPDU retry baru + ACK timeout. */
 	if (rd(ctx, R92C_FWHW_TXQ_CTRL, &m, 1) == 0) {
 		wr8(rd, wr, ctx, R92C_FWHW_TXQ_CTRL,
