@@ -1051,7 +1051,7 @@ void ItlRtl8188E::sendFrame(mbuf_t m, struct ieee80211_node *ni, bool isMgmt)
 		}
 	}
 
-	bcast = IEEE80211_IS_MULTICAST(wh + 4) || (!isMgmt && len >= 22 && IEEE80211_IS_MULTICAST(wh + 16));
+	bcast = IEEE80211_IS_MULTICAST(wh + 4);
 	raid = isMgmt ? 6 /* R92C_RAID_11B */ : 4 /* R92C_RAID_11BG */;
 
 	/*
@@ -1172,11 +1172,6 @@ void ItlRtl8188E::sendFrame(mbuf_t m, struct ieee80211_node *ni, bool isMgmt)
 			/* QSEL (txdw1 bit 8-12) harus sama dengan queue pipe. */
 			buf[5] = (uint8_t)((buf[5] & 0xe0) | (qsel & 0x1f));
 
-			if (!bcast) {
-				/* MACID = 1 untuk station AP terasosiasi di STA mode (seperti vendor driver) */
-				buf[4] = (uint8_t)((buf[4] & 0xc0) | 0x01);
-			}
-
 			if (is_prot && k && k->k_cipher == IEEE80211_CIPHER_CCMP) {
 				/* R92C_TXDW1_CIPHER_AES (bit 22-23 = 3 -> byte 6 |= 0xc0) */
 				buf[6] |= 0xc0;
@@ -1185,26 +1180,29 @@ void ItlRtl8188E::sendFrame(mbuf_t m, struct ieee80211_node *ni, bool isMgmt)
 			}
 
 			uint16_t txdseq = seq & 0x0fff;
+			uint8_t rtsrate = 8;	/* OFDM24 (R92C_TXDW4_RTSRATE) */
 
 			if (qos) {
 				buf[14] = (uint8_t)(txdseq & 0xff);
 				buf[15] = (uint8_t)((txdseq >> 8) & 0xff);
-				buf[16] = 0x40;	/* QOS */
-				buf[17] = 0x00;	/* DRVRATE=0: biarkan silikon auto-rate via RAID */
+				buf[16] = (uint8_t)(0x40 | (rtsrate & 0x1f));	/* QOS | RTSRATE */
+				buf[17] = 0x01;	/* DRVRATE=1 */
 			} else {
 				/* Data polos non-QoS (misal EAPOL sebelum encrypt) */
 				txdseq |= 0x8000;				/* R92C_TXDW3_HWSEQEN */
 				buf[14] = (uint8_t)(txdseq & 0xff);
 				buf[15] = (uint8_t)((txdseq >> 8) & 0xff);
-				buf[16] = 0x80;					/* HWSEQ */
-				buf[17] = 0x00;					/* DRVRATE=0: biarkan silikon auto-rate via RAID */
+				buf[16] = (uint8_t)(0x80 | (rtsrate & 0x1f));	/* HWSEQ | RTSRATE */
+				buf[17] = 0x01;					/* DRVRATE=1 */
 			}
 			buf[18] = 0x00;
 			buf[19] = 0x00;
 			/*
-			 * txdw5: 0x0001ff00 (retry limit standar tanpa memaksa datarate tetap)
+			 * txdw5: Gunakan OFDM 24M (8) dengan retry limit 0x0001ff00.
+			 * Hardware akan otomatis mencoba rate OFDM standar ini dan turun
+			 * bertahap bila ada retry (kompatibel dengan AP 802.11n).
 			 */
-			buf[20] = 0x00;
+			buf[20] = 0x08;	/* DATARATE: OFDM 24M */
 			buf[21] = 0xff;
 			buf[22] = 0x01;
 			buf[23] = 0x00;
