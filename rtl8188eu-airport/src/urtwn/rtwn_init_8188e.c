@@ -374,11 +374,26 @@ rtwn_core_config_8188e(rtwn_read_fn rd, rtwn_write_fn wr, void *ctx,
 	}
 
 	/*
-	 * Enkripsi: untuk software crypto (net80211 CCMP), matikan
-	 * engine HW (SECCFG=0) agar tidak mencoba enkripsi ganda atau
-	 * merusak mbuf karena tabel CAM hardware belum diprogram.
+	 * Hardware Security Engine: Aktifkan engine CAM hardware (0x00cf).
+	 * Mengikuti rtwn OpenBSD & RtWlanU vendor:
+	 * TXUCKEY_DEF | RXUCKEY_DEF | TXENC_ENA | RXENC_ENA | TXBCKEY_DEF | RXBCKEY_DEF
+	 * Hardware Realtek melakukan offload enkripsi & dekripsi AES-CCMP melalui
+	 * tabel CAM (registers 0x670/0x674).
 	 */
-	wr16(rd, wr, ctx, R92C_SECCFG, 0x0000);
+	wr16(rd, wr, ctx, R92C_SECCFG,
+	    R92C_SECCFG_TXUCKEY_DEF | R92C_SECCFG_RXUCKEY_DEF |
+	    R92C_SECCFG_TXENC_ENA   | R92C_SECCFG_RXENC_ENA   |
+	    R92C_SECCFG_TXBCKEY_DEF | R92C_SECCFG_RXBCKEY_DEF);
+
+	/* Bersihkan seluruh 32 entri CAM saat init agar tidak ada sisa key usang. */
+	for (int entry = 0; entry < 32; entry++) {
+		wr32(rd, wr, ctx, R92C_CAMWRITE, 0);
+		wr32(rd, wr, ctx, R92C_CAMCMD,
+		    R92C_CAMCMD_POLLING | R92C_CAMCMD_WRITE | (uint32_t)(entry * 8 + 0));
+		wr32(rd, wr, ctx, R92C_CAMWRITE, 0);
+		wr32(rd, wr, ctx, R92C_CAMCMD,
+		    R92C_CAMCMD_POLLING | R92C_CAMCMD_WRITE | (uint32_t)(entry * 8 + 1));
+	}
 
 	/* Hardware sequence numbering. */
 	wr8(rd, wr, ctx, R92C_HWSEQ_CTRL, 0xff);

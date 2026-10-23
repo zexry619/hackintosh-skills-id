@@ -165,8 +165,18 @@ public:
 	    enum ieee80211_state nstate, int arg);
 	static void scanTimeoutCb(void *arg);
 	static void watchdogCb(struct _ifnet *ifp);
+	static int  setKeyCb(struct ieee80211com *ic,
+	    struct ieee80211_node *ni, struct ieee80211_key *k);
+	static void deleteKeyCb(struct ieee80211com *ic,
+	    struct ieee80211_node *ni, struct ieee80211_key *k);
 	void rxTimerAction(IOTimerEventSource *timer);
 	void rxQueueFree(void);
+
+	/* Hardware CAM Security Engine (registers 0x670/0x674) */
+	void camWrite(uint32_t addr, uint32_t data);
+	int  setCamKey(int entry, uint8_t key_id, uint8_t algo,
+	    const uint8_t *macaddr, const uint8_t *key, int keylen);
+	void deleteCamKey(int entry);
 
 	void handleRx(const uint8_t *buf, uint32_t len);
 	void txStart(struct _ifnet *ifp);

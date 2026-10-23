@@ -332,6 +332,9 @@ bool ItlRtl8188E::attach(IOPCIDevice *device)
 
 	fOrigNewstate = fIc.ic_newstate;
 	fIc.ic_newstate = newstateCb;
+	fIc.ic_softc = this;
+	fIc.ic_set_key = setKeyCb;
+	fIc.ic_delete_key = deleteKeyCb;
 
 	timeout_set(&fScanTo, scanTimeoutCb, this);
 	fIfAttached = true;
@@ -631,6 +634,121 @@ void ItlRtl8188E::updateSlot(struct ieee80211com *ic)
 	    (ic->ic_flags & IEEE80211_F_SHSLOT) ? 1 : 0, irts);
 }
 
+void ItlRtl8188E::camWrite(uint32_t addr, uint32_t data)
+{
+	rtwn_m1_write_4(&fChip, R92C_CAMWRITE, data);
+	rtwn_m1_write_4(&fChip, R92C_CAMCMD,
+	    R92C_CAMCMD_POLLING | R92C_CAMCMD_WRITE |
+	    ((addr & R92C_CAMCMD_ADDR_M) << R92C_CAMCMD_ADDR_S));
+}
+
+int ItlRtl8188E::setCamKey(int entry, uint8_t key_id, uint8_t algo,
+    const uint8_t *macaddr, const uint8_t *key, int keylen)
+{
+	uint8_t keybuf[16];
+	memset(keybuf, 0, sizeof(keybuf));
+	if (key && keylen > 0) {
+		size_t copylen = (size_t)keylen;
+		if (copylen > sizeof(keybuf))
+			copylen = sizeof(keybuf);
+		memcpy(keybuf, key, copylen);
+	}
+
+	/* Tulis 4 DWORD key (16 byte AES-128). */
+	for (int i = 0; i < 4; i++) {
+		uint32_t k = (uint32_t)keybuf[i * 4] |
+		    ((uint32_t)keybuf[i * 4 + 1] << 8) |
+		    ((uint32_t)keybuf[i * 4 + 2] << 16) |
+		    ((uint32_t)keybuf[i * 4 + 3] << 24);
+		camWrite((uint32_t)R92C_CAM_KEY(entry, i), k);
+	}
+
+	/* Tulis CTL1: MAC[2..5]. */
+	uint32_t ctl1 = (uint32_t)macaddr[2] |
+	    ((uint32_t)macaddr[3] << 8) |
+	    ((uint32_t)macaddr[4] << 16) |
+	    ((uint32_t)macaddr[5] << 24);
+	camWrite((uint32_t)R92C_CAM_CTL1(entry), ctl1);
+
+	/* Tulis CTL0 terakhir untuk memvalidasi entri CAM. */
+	uint32_t ctl0 = ((uint32_t)macaddr[0] << 16) |
+	    ((uint32_t)macaddr[1] << 24) |
+	    (((uint32_t)algo & 0x07) << 2) |
+	    ((uint32_t)key_id & 0x03) |
+	    R92C_CAM_VALID;
+	camWrite((uint32_t)R92C_CAM_CTL0(entry), ctl0);
+
+	return 0;
+}
+
+void ItlRtl8188E::deleteCamKey(int entry)
+{
+	camWrite((uint32_t)R92C_CAM_CTL0(entry), 0);
+	camWrite((uint32_t)R92C_CAM_CTL1(entry), 0);
+	for (int i = 0; i < 4; i++)
+		camWrite((uint32_t)R92C_CAM_KEY(entry, i), 0);
+}
+
+int ItlRtl8188E::setKeyCb(struct ieee80211com *ic, struct ieee80211_node *ni,
+    struct ieee80211_key *k)
+{
+	ItlRtl8188E *that = (ItlRtl8188E *)ic->ic_softc;
+	int err = ieee80211_set_key(ic, ni, k);
+	if (err != 0)
+		return err;
+
+	if (!that || !k)
+		return 0;
+
+	uint8_t algo = R92C_CAM_ALGO_NONE;
+	switch (k->k_cipher) {
+	case IEEE80211_CIPHER_CCMP:
+		algo = R92C_CAM_ALGO_AES;
+		break;
+	case IEEE80211_CIPHER_TKIP:
+		algo = R92C_CAM_ALGO_TKIP;
+		break;
+	case IEEE80211_CIPHER_WEP40:
+		algo = R92C_CAM_ALGO_WEP40;
+		break;
+	case IEEE80211_CIPHER_WEP104:
+		algo = R92C_CAM_ALGO_WEP104;
+		break;
+	default:
+		return 0;
+	}
+
+	static const uint8_t bcast_mac[6] = { 0xff, 0xff, 0xff, 0xff, 0xff, 0xff };
+	const uint8_t *mac;
+	int entry;
+
+	if (k->k_flags & IEEE80211_KEY_GROUP) {
+		entry = k->k_id & 0x03;
+		mac = bcast_mac;
+	} else {
+		entry = 4;
+		mac = ic->ic_bss ? ic->ic_bss->ni_macaddr :
+		    (ni ? ni->ni_macaddr : bcast_mac);
+	}
+
+	that->setCamKey(entry, k->k_id, algo, mac, k->k_key, k->k_len);
+	IOLog(LOGP "CAM key %d installed (%s, algo=%u, mac=%02x:%02x:%02x:%02x:%02x:%02x)\n",
+	    entry, (entry == 4) ? "PAIRWISE" : "GROUP", (unsigned)algo,
+	    mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+
+	return 0;
+}
+
+void ItlRtl8188E::deleteKeyCb(struct ieee80211com *ic, struct ieee80211_node *ni,
+    struct ieee80211_key *k)
+{
+	ItlRtl8188E *that = (ItlRtl8188E *)ic->ic_softc;
+	int entry = (k && (k->k_flags & IEEE80211_KEY_GROUP)) ? (k->k_id & 0x03) : 4;
+	if (that)
+		that->deleteCamKey(entry);
+	ieee80211_delete_key(ic, ni, k);
+}
+
 int ItlRtl8188E::newstateCb(struct ieee80211com *ic,
     enum ieee80211_state nstate, int arg)
 {
@@ -877,34 +995,20 @@ void ItlRtl8188E::sendFrame(mbuf_t m, struct ieee80211_node *ni, bool isMgmt)
 	}
 
 	/*
-	 * Kripto software: 8188E tidak memakai offload CCMP di jalur ini.
-	 * net80211 yang menambah header CCMP + MIC.
+	 * Hardware CAM Offload: RTL8188EUS mengenkripsi frame CCMP di silicon
+	 * menggunakan entri tabel CAM (registers 0x670/0x674).
+	 * Software hanya menyisipkan 8-byte CCMP header (PN/IV) dengan payload plaintext.
 	 */
-	if (!isMgmt && (wh[1] & IEEE80211_FC1_PROTECTED)) {
-		struct ieee80211_key *k = ieee80211_get_txkey(&fIc,
-		    (struct ieee80211_frame *)wh, ni);
+	bool is_prot = (!isMgmt && (wh[1] & IEEE80211_FC1_PROTECTED) != 0);
+	struct ieee80211_key *k = nullptr;
+	if (is_prot) {
+		k = ieee80211_get_txkey(&fIc, (struct ieee80211_frame *)wh, ni);
 		if (!k) {
 			/* Frame terproteksi tanpa key jangan dikirim polos. */
 			mbuf_freem(m);
 			if (ni)
 				ieee80211_release_node(&fIc, ni);
 			return;
-		}
-		if (k) {
-			mbuf_t enc = ieee80211_encrypt(&fIc, m, k);
-			if (!enc) {
-				/*
-				 * ieee80211_encrypt() sudah membebaskan m
-				 * (baik sukses maupun gagal). Jangan free lagi.
-				 */
-				fEncryptFail++;
-				if (ni)
-					ieee80211_release_node(&fIc, ni);
-				return;
-			}
-			m = enc;
-			wh = (uint8_t *)mbuf_data(m);
-			len = mbuf_pkthdr_len(m);
 		}
 	}
 
@@ -1003,7 +1107,14 @@ void ItlRtl8188E::sendFrame(mbuf_t m, struct ieee80211_node *ni, bool isMgmt)
 			}
 		}
 
-		total = RTWN_USB_TX_DESC_SIZE + len;
+		size_t hdrlen = (wh[0] & IEEE80211_FC0_SUBTYPE_QOS) ? 26 : 24;
+		size_t chip_pktlen = len;
+		if (is_prot && k && k->k_cipher == IEEE80211_CIPHER_CCMP) {
+			/* Sisipkan 8 byte CCMP header (IV/KeyID) di antara 802.11 hdr dan payload */
+			chip_pktlen += 8;
+		}
+
+		total = RTWN_USB_TX_DESC_SIZE + chip_pktlen;
 		buf = (uint8_t *)IOMalloc(total);
 		if (!buf) {
 			mbuf_freem(m);
@@ -1024,15 +1135,21 @@ void ItlRtl8188E::sendFrame(mbuf_t m, struct ieee80211_node *ni, bool isMgmt)
 			rtwn_usb_tx_checksum(buf, RTWN_USB_TX_DESC_SIZE);
 		} else {
 			bool qos = (wh[0] & IEEE80211_FC0_SUBTYPE_QOS) != 0;
-			bool is_prot = (wh[1] & IEEE80211_FC1_PROTECTED) != 0;
 			uint16_t seq = ((uint16_t)wh[22] |
 			    ((uint16_t)wh[23] << 8)) >> IEEE80211_SEQ_SEQ_SHIFT;
 
 			rtwn_usb_build_tx_desc(buf, RTWN_USB_TX_DESC_SIZE,
-			    (uint16_t)len, RTWN_USB_TX_DESC_SIZE, bcast, true,
+			    (uint16_t)chip_pktlen, RTWN_USB_TX_DESC_SIZE, bcast, true,
 			    raid, false, false, 0);
 			/* QSEL (txdw1 bit 8-12) harus sama dengan queue pipe. */
 			buf[5] = (uint8_t)((buf[5] & 0xe0) | (qsel & 0x1f));
+
+			if (is_prot && k && k->k_cipher == IEEE80211_CIPHER_CCMP) {
+				/* R92C_TXDW1_CIPHER_AES (bit 22-23 = 3 -> byte 6 |= 0xc0) */
+				buf[6] |= 0xc0;
+				/* R88E_TXDW2_AGGBK (DW2 bit 16 -> byte 10 |= 0x01) */
+				buf[10] |= 0x01;
+			}
 
 			uint16_t txdseq = seq & 0x0fff;
 			uint8_t rtsrate = 8;	/* OFDM24 (R92C_TXDW4_RTSRATE) */
@@ -1042,16 +1159,6 @@ void ItlRtl8188E::sendFrame(mbuf_t m, struct ieee80211_node *ni, bool isMgmt)
 				buf[15] = (uint8_t)((txdseq >> 8) & 0xff);
 				buf[16] = (uint8_t)(0x40 | (rtsrate & 0x1f));	/* QOS | RTSRATE */
 				buf[17] = 0x01;	/* DRVRATE=1 */
-			} else if (is_prot) {
-				/*
-				 * Frame data terenkripsi CCMP: jangan aktifkan HWSEQ/HWSEQEN.
-				 * Software sudah mengisi nomor urut dan membungkus AAD.
-				 * Menimpa seq di hardware merusak MIC/AAD dan replay window AP.
-				 */
-				buf[14] = (uint8_t)(txdseq & 0xff);
-				buf[15] = (uint8_t)((txdseq >> 8) & 0xff);
-				buf[16] = (uint8_t)(rtsrate & 0x1f);		/* RTSRATE saja, tanpa HWSEQ */
-				buf[17] = 0x01;					/* DRVRATE=1 */
 			} else {
 				/* Data polos non-QoS (misal EAPOL sebelum encrypt) */
 				txdseq |= 0x8000;				/* R92C_TXDW3_HWSEQEN */
@@ -1074,13 +1181,24 @@ void ItlRtl8188E::sendFrame(mbuf_t m, struct ieee80211_node *ni, bool isMgmt)
 			rtwn_usb_tx_checksum(buf, RTWN_USB_TX_DESC_SIZE);
 		}
 
-		pktlen = len;
-		if (mbuf_copydata(m, 0, pktlen, buf + RTWN_USB_TX_DESC_SIZE) != 0) {
-			IOFree(buf, total);
-			mbuf_freem(m);
-			if (ni)
-				ieee80211_release_node(&fIc, ni);
-			return;
+		if (is_prot && k && k->k_cipher == IEEE80211_CIPHER_CCMP) {
+			/* 1. Header 802.11 */
+			mbuf_copydata(m, 0, hdrlen, buf + RTWN_USB_TX_DESC_SIZE);
+			/* 2. Header CCMP 8 byte */
+			k->k_tsc++;
+			uint8_t *ivp = buf + RTWN_USB_TX_DESC_SIZE + hdrlen;
+			ivp[0] = (uint8_t)(k->k_tsc & 0xff);
+			ivp[1] = (uint8_t)((k->k_tsc >> 8) & 0xff);
+			ivp[2] = 0x00;
+			ivp[3] = (uint8_t)((k->k_id & 0x03) | 0x20);	/* ExtIV */
+			ivp[4] = (uint8_t)((k->k_tsc >> 16) & 0xff);
+			ivp[5] = (uint8_t)((k->k_tsc >> 24) & 0xff);
+			ivp[6] = (uint8_t)((k->k_tsc >> 32) & 0xff);
+			ivp[7] = (uint8_t)((k->k_tsc >> 40) & 0xff);
+			/* 3. Plaintext payload */
+			mbuf_copydata(m, hdrlen, len - hdrlen, buf + RTWN_USB_TX_DESC_SIZE + hdrlen + 8);
+		} else {
+			mbuf_copydata(m, 0, len, buf + RTWN_USB_TX_DESC_SIZE);
 		}
 
 		static int sDataLogCount = 0;
@@ -1521,6 +1639,15 @@ void ItlRtl8188E::handleRx(const uint8_t *buf, uint32_t len)
 				}
 			}
 
+			bool is_prot = (wh->i_fc[1] & IEEE80211_FC1_PROTECTED) != 0;
+			if (is_prot && flen >= 24 + 8 + 8) {
+				/*
+				 * Hardware RTL8188E CAM engine sudah mendekripsi payload di silicon.
+				 * Buang MIC 8 byte di ujung frame sebelum dikirim ke net80211.
+				 */
+				flen -= 8;
+			}
+
 			m = getController() ?
 			    getController()->allocatePacket(flen) : nullptr;
 			if (m) {
@@ -1545,6 +1672,9 @@ void ItlRtl8188E::handleRx(const uint8_t *buf, uint32_t len)
 						    &fIc, wh);
 					}
 					memset(&rxi, 0, sizeof(rxi));
+					if (is_prot) {
+						rxi.rxi_flags |= IEEE80211_RXI_HWDEC;
+					}
 					/*
 					 * Port net80211 ini memakai RSSI ternormalisasi
 					 * 0..ic_max_rssi (bukan dBm), sama seperti iwm:
