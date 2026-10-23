@@ -896,19 +896,25 @@ void ItlRtl8188E::sendFrame(mbuf_t m, struct ieee80211_node *ni, bool isMgmt)
 		return;
 	}
 
-	/* Frame panjang (mis. CCMP) → pastikan kontigu. */
+	/*
+	 * Pastikan header 802.11 + LLC (maks 40 byte) kontigu di mbuf pertama.
+	 * JANGAN pernah pullup seluruh frame ('len'): di Darwin 64-bit, MHLEN
+	 * hanya ~88 byte. Pullup > 88 byte (mis. DHCP 360B atau TCP 1500B)
+	 * memicu "m_pullup: failed len ... too big" di XNU kernel, membebaskan
+	 * mbuf, dan membuang semua frame data keluar!
+	 * mbuf_copydata() di bawah sudah menyalin seluruh chain mbuf ke buffer DMA.
+	 */
 	len = mbuf_pkthdr_len(m);
-	if (mbuf_len(m) < len) {
-		/*
-		 * mbuf_pullup() MEMBEBASKAN seluruh chain kalau gagal —
-		 * jangan panggil mbuf_freem() lagi di sini (double free).
-		 */
-		if (mbuf_pullup(&m, len) != 0) {
-			if (ni)
-				ieee80211_release_node(&fIc, ni);
-			return;
+	{
+		size_t hdrPull = (len < 40) ? len : 40;
+		if (mbuf_len(m) < hdrPull) {
+			if (mbuf_pullup(&m, hdrPull) != 0) {
+				if (ni)
+					ieee80211_release_node(&fIc, ni);
+				return;
+			}
+			wh = (uint8_t *)mbuf_data(m);
 		}
-		wh = (uint8_t *)mbuf_data(m);
 	}
 
 	if (len < sizeof(struct ieee80211_frame)) {
@@ -1118,6 +1124,8 @@ void ItlRtl8188E::sendFrame(mbuf_t m, struct ieee80211_node *ni, bool isMgmt)
 			fTxMgmt++;
 		} else {
 			fTxData++;
+			if (fIc.ic_if.netStat)
+				fIc.ic_if.netStat->outputPackets++;
 		}
 
 		IOFree(buf, total);
