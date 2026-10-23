@@ -815,21 +815,18 @@ void ItlRtl8188E::sendFrame(mbuf_t m, struct ieee80211_node *ni, bool isMgmt)
 		    sub == IEEE80211_FC0_SUBTYPE_REASSOC_REQ) {
 			fTxAssocReq++;
 			/*
-			 * Hexdump lengkap assoc request. AP diam (bukan
-			 * menolak) berarti frame dibuang — hanya isi frame
-			 * yang bisa menjelaskan kenapa.
+			 * Ringkas: header + capability + awal SSID/RSN.
+			 * snprintf per-byte di kernel tidak andal untuk
+			 * buffer panjang, jadi pakai dword.
 			 */
 			if (len >= 24) {
-				char hx[3 * 64 + 1];
-				uint32_t n = len < 64 ? len : 64, i;
+				const uint32_t *dw = (const uint32_t *)wh;
 
-				for (i = 0; i < n; i++) {
-					snprintf(hx + i * 3, 4, "%02x ",
-					    wh[i]);
-				}
-				hx[n * 3] = '\0';
-				IOLog(LOGP "TX assoc req len=%u: %s\n",
-				    (unsigned)len, hx);
+				IOLog(LOGP "TX assoc len=%u fc=%02x%02x "
+				    "dw1=%08x dw2=%08x dw3=%08x "
+				    "dw4=%08x dw5=%08x\n",
+				    (unsigned)len, wh[0], wh[1],
+				    dw[1], dw[2], dw[3], dw[4], dw[5]);
 			}
 		}
 	}
@@ -1172,7 +1169,16 @@ void ItlRtl8188E::handleRx(const uint8_t *buf, uint32_t len)
 		txReport = ((dw3 >> 14) & 0x3) != 0;
 
 		if (info.crcError || info.icvError) {
-			/* Sama seperti OpenBSD: frame korup jangan masuk net80211. */
+			/*
+			 * Frame korup dibuang (sama seperti OpenBSD). Tapi
+			 * kalau yang dibuang justru assoc response, kita
+			 * buta. Catat fc + panjang supaya kelihatan.
+			 */
+			if (foff + 2 <= len) {
+				IOLog(LOGP "RX crc-err fc=%02x%02x len=%u\n",
+				    buf[foff], buf[foff + 1],
+				    (unsigned)flen);
+			}
 			txReport = true;
 		}
 
@@ -1267,6 +1273,15 @@ void ItlRtl8188E::handleRx(const uint8_t *buf, uint32_t len)
 					fRxAssocResp++;
 					IOLog(LOGP "RX assoc resp (len %u)\n",
 					    (unsigned)flen);
+				} else if (sub != IEEE80211_FC0_SUBTYPE_BEACON &&
+				    sub != IEEE80211_FC0_SUBTYPE_PROBE_RESP) {
+					/*
+					 * Selain beacon/probe-resp: deauth,
+					 * disassoc, action. Berguna untuk
+					 * melihat AP bereaksi atau tidak.
+					 */
+					IOLog(LOGP "RX mgmt sub=%02x len=%u\n",
+					    sub, (unsigned)flen);
 				}
 			}
 
