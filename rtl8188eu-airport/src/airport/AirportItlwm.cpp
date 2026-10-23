@@ -151,6 +151,14 @@ bool AirportItlwm::init(OSDictionary *properties)
     bool ret = super::init(properties);
     awdlSyncEnable = true;
     power_state = 0;
+    /*
+     * Harus 0: setLinkStatus() early-return kalau status == currentStatus.
+     * Tanpa inisialisasi, nilai awal tak tentu — kalau kebetulan sama
+     * dengan kIONetworkLinkValid|kIONetworkLinkActive, pemberitahuan
+     * link UP pertama tidak pernah diteruskan ke IO80211 dan interface
+     * tetap "inactive" (DHCP tidak jalan).
+     */
+    currentStatus = 0;
     memset(geo_location_cc, 0, sizeof(geo_location_cc));
     return ret;
 }
@@ -685,7 +693,11 @@ setLinkStatus(UInt32 status, const IONetworkMedium * activeMedium, UInt64 speed,
             bsdInterface->startOutputThread();
 #endif
             getCommandGate()->runAction(setLinkStateGated, (void *)kIO80211NetworkLinkUp, (void *)0);
-//            fNetIf->setLinkQualityMetric(100);
+            /*
+             * Kualitas link dilaporkan lewat updateWCLLinkQuality()
+             * (WCL), bukan setLinkQualityMetric() — method itu tidak
+             * ada di IO80211InfraInterface yang kita pakai.
+             */
         } else if (!(status & kIONetworkLinkNoNetworkChange)) {
 #ifdef __PRIVATE_SPI__
             bsdInterface->stopOutputThread();

@@ -262,18 +262,15 @@ void AirportItlwmSkywalkInterface::setGTK(const u_int8_t *gtk, size_t key_len, u
             XYLog("marking port %s valid\n",
                   ether_sprintf(ni->ni_macaddr));
             ni->ni_port_valid = 1;
-            ieee80211_set_link_state(ic, LINK_STATE_UP);
             /*
-             * Beri tahu IO80211 bahwa link UP.
-             *
-             * ieee80211_set_link_state() hanya mengubah variabel
-             * internal net80211. Tanpa panggilan di bawah, macOS tetap
-             * melihat interface "inactive" (ifconfig status: inactive)
-             * meski net80211 sudah RUN dan PTK/GTK terpasang. Akibatnya
-             * IPConfiguration tidak pernah menjalankan DHCP — tidak ada
-             * satu pun DHCP discover keluar dari interface.
+             * Cukup ini. ieee80211_set_link_state() (net80211) sendiri
+             * memanggil ifp->controller->setLinkStatus(kIONetworkLinkValid
+             * | kIONetworkLinkActive), yang berujung ke
+             * setLinkStateGated -> bsdInterface->setLinkState() +
+             * handleWCLLink(). Memanggil setLinkState() di sini juga
+             * (seperti di 0.6.2) adalah duplikasi.
              */
-            setLinkState(kIO80211NetworkLinkUp, 0, false, 0);
+            ieee80211_set_link_state(ic, LINK_STATE_UP);
             ni->ni_assoc_fail = 0;
             if (ic->ic_opmode == IEEE80211_M_STA)
                 ic->ic_rsngroupcipher = ni->ni_rsngroupcipher;
