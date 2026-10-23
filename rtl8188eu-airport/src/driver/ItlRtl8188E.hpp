@@ -127,6 +127,12 @@ public:
 	uint32_t     fRxDelivered;
 	uint32_t     fRxDataLogged;
 	void         applyRsnVariant(uint32_t attempt);
+	/*
+	 * Setara rtwn_updateslot() + INIRTS_RATE_SEL di OpenBSD.
+	 * Slot time menentukan DIFS/backoff; kalau tidak cocok dengan AP,
+	 * frame bisa dikirim pada jendela yang salah dan bertabrakan.
+	 */
+	void         updateSlot(struct ieee80211com *ic);
 	void publishStats(void);
 
 	/* net80211 */

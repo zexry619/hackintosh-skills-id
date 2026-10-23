@@ -653,6 +653,29 @@ void ItlRtl8188E::applyRsnVariant(uint32_t attempt)
 	}
 }
 
+/*
+ * Setara rtwn_updateslot() + bagian INIRTS_RATE_SEL di rtwn_newstate()
+ * (OpenBSD sys/dev/ic/rtwn.c).
+ *
+ * R92C_SLOT tidak pernah ditulis di port ini. Nilai bawaan chip belum
+ * tentu cocok dengan AP: AP yang mengiklankan short slot (capability
+ * bit 10, seperti ZEKRI.NET dengan cap=0x0431) memakai 9 us, sedangkan
+ * long slot 20 us. Slot time menentukan DIFS dan backoff — kalau client
+ * dan AP berbeda, frame dikirim pada jendela yang salah dan bertabrakan,
+ * sehingga assoc request bisa hilang tanpa pernah sampai ke AP.
+ */
+void ItlRtl8188E::updateSlot(struct ieee80211com *ic)
+{
+	uint8_t slot = (ic->ic_flags & IEEE80211_F_SHSLOT) ?
+	    IEEE80211_DUR_DS_SHSLOT : IEEE80211_DUR_DS_SLOT;
+	uint8_t irts = (ic->ic_curmode == IEEE80211_MODE_11B) ? 0 : 3;
+
+	halWrite(this, R92C_SLOT, &slot, 1);
+	halWrite(this, R92C_INIRTS_RATE_SEL, &irts, 1);
+	IOLog(LOGP "slot=%u us shslot=%d irts=%u\n", slot,
+	    (ic->ic_flags & IEEE80211_F_SHSLOT) ? 1 : 0, irts);
+}
+
 int ItlRtl8188E::newstateCb(struct ieee80211com *ic,
     enum ieee80211_state nstate, int arg)
 {
@@ -725,6 +748,7 @@ int ItlRtl8188E::newstateCb(struct ieee80211com *ic,
 				    (unsigned)me->fJoinTry);
 			}
 			me->fJoinTry++;
+			me->updateSlot(ic);
 			me->applyRsnVariant(me->fJoinTry);
 			me->publishStats();
 		}
@@ -747,6 +771,7 @@ int ItlRtl8188E::newstateCb(struct ieee80211com *ic,
 		}
 		if (nstate == IEEE80211_S_RUN) {
 			uint8_t msr = R92C_MSR_NETTYPE_INFRA;
+			me->updateSlot(ic);
 			halWrite(me, R92C_MSR, &msr, 1);
 			uint16_t flt2 = 0xffff;
 			halWrite(me, R92C_RXFLTMAP2, &flt2, 2);
