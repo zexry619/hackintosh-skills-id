@@ -88,6 +88,10 @@ bool ItlRtl8188E::init()
 	fFirmwareVersion[0] = 0;
 	fCountryCode[0] = 0;
 	memset(fMac, 0, sizeof(fMac));
+	fTxMgmt = fTxData = fTxEapol = fTxFail = 0;
+	fRxMgmt = fRxData = fRxEapol = fEncryptFail = 0;
+	fTxReport = fTxOk = fTxRetry = 0;
+	fTxAuthReq = fTxAssocReq = fRxAuth = fRxAssocResp = 0;
 	return true;
 }
 
@@ -537,12 +541,15 @@ void ItlRtl8188E::publishStats(void)
 
 	snprintf(s, sizeof(s),
 	    "txm=%u txd=%u txe=%u txf=%u rpt=%u txok=%u rty=%u "
-	    "rxm=%u rxd=%u rxe=%u encf=%u pipe=%d",
+	    "rxm=%u rxd=%u rxe=%u encf=%u pipe=%d "
+	    "auth=%u/%u assoc=%u/%u",
 	    (unsigned)fTxMgmt, (unsigned)fTxData, (unsigned)fTxEapol,
 	    (unsigned)fTxFail, (unsigned)fTxReport, (unsigned)fTxOk,
 	    (unsigned)fTxRetry, (unsigned)fRxMgmt, (unsigned)fRxData,
 	    (unsigned)fRxEapol, (unsigned)fEncryptFail,
-	    fChip.usb.txPipeCount());
+	    fChip.usb.txPipeCount(),
+	    (unsigned)fTxAuthReq, (unsigned)fRxAuth,
+	    (unsigned)fTxAssocReq, (unsigned)fRxAssocResp);
 	setDiag("RTL8188E-stat", s);
 }
 
@@ -794,6 +801,21 @@ void ItlRtl8188E::sendFrame(mbuf_t m, struct ieee80211_node *ni, bool isMgmt)
 
 	bcast = IEEE80211_IS_MULTICAST(wh + 4);
 	raid = 6;	/* RAID 11B — terbukti di M2 */
+
+	/*
+	 * Hitung per-subtype. Tanpa ini "auth tidak dikirim" dan
+	 * "auth dikirim tapi AP diam" terlihat sama di statistik.
+	 */
+	if (isMgmt) {
+		uint8_t sub = wh[0] & IEEE80211_FC0_SUBTYPE_MASK;
+
+		if (sub == IEEE80211_FC0_SUBTYPE_AUTH) {
+			fTxAuthReq++;
+		} else if (sub == IEEE80211_FC0_SUBTYPE_ASSOC_REQ ||
+		    sub == IEEE80211_FC0_SUBTYPE_REASSOC_REQ) {
+			fTxAssocReq++;
+		}
+	}
 
 	/*
 	 * Pilih queue TX (dan bulk-out pipe) sesuai access category.
@@ -1212,7 +1234,23 @@ void ItlRtl8188E::handleRx(const uint8_t *buf, uint32_t len)
 				}
 			} else if ((wh->i_fc[0] & IEEE80211_FC0_TYPE_MASK) ==
 			    IEEE80211_FC0_TYPE_MGT) {
+				uint8_t sub = wh->i_fc[0] &
+				    IEEE80211_FC0_SUBTYPE_MASK;
+
 				fRxMgmt++;
+				if (sub == IEEE80211_FC0_SUBTYPE_AUTH) {
+					fRxAuth++;
+					IOLog(LOGP "RX auth resp (len %u, seq %u)\n",
+					    (unsigned)flen,
+					    (unsigned)(((uint16_t)wh->i_seq[0] |
+					    ((uint16_t)wh->i_seq[1] << 8)) >>
+					    IEEE80211_SEQ_SEQ_SHIFT));
+				} else if (sub ==
+				    IEEE80211_FC0_SUBTYPE_ASSOC_RESP) {
+					fRxAssocResp++;
+					IOLog(LOGP "RX assoc resp (len %u)\n",
+					    (unsigned)flen);
+				}
 			}
 
 			/* RSSI dari PHY status (rtwn_r88e_get_rssi). */

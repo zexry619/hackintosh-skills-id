@@ -103,6 +103,15 @@ public:
 	uint32_t     fTxReport;		/* laporan TX diterima */
 	uint32_t     fTxOk;		/* frame di-ACK AP */
 	uint32_t     fTxRetry;		/* frame yang butuh retry */
+	/*
+	 * Per-subtype management: satu-satunya cara membedakan
+	 * "auth tidak pernah dikirim" dari "auth dikirim tapi AP
+	 * tidak membalas" — dua masalah dengan perbaikan berbeda.
+	 */
+	uint32_t     fTxAuthReq;	/* auth request dikirim */
+	uint32_t     fTxAssocReq;	/* assoc request dikirim */
+	uint32_t     fRxAuth;		/* auth response diterima */
+	uint32_t     fRxAssocResp;	/* assoc response diterima */
 	void publishStats(void);
 
 	/* net80211 */
