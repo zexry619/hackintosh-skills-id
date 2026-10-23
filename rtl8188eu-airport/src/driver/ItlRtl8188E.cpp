@@ -920,7 +920,7 @@ void ItlRtl8188E::sendFrame(mbuf_t m, struct ieee80211_node *ni, bool isMgmt)
 	}
 
 	bcast = IEEE80211_IS_MULTICAST(wh + 4);
-	raid = 6;	/* R92E_RAID_11BG (6) untuk RTL8188E — terbukti di M2 */
+	raid = isMgmt ? 6 /* R92C_RAID_11B */ : 4 /* R92C_RAID_11BG */;
 
 	/*
 	 * Hitung per-subtype. Tanpa ini "auth tidak dikirim" dan
@@ -970,15 +970,17 @@ void ItlRtl8188E::sendFrame(mbuf_t m, struct ieee80211_node *ni, bool isMgmt)
 	/*
 	 * Pilih queue TX (dan bulk-out pipe) sesuai access category.
 	 *
-	 * 8188EU memetakan endpoint USB ke queue hardware: 0 = VO/mgmt,
-	 * 1 = VI, 2 = BE/BK. Sebelumnya semua frame — termasuk data —
-	 * dikirim lewat pipe 0 dengan QSEL=BE. Chip memasukkannya ke queue
-	 * mgmt, sehingga frame data tidak pernah keluar dan DHCP selalu
-	 * "no server". Ini yang diperbaiki di sini.
+	 * 8188EU punya 2 bulk-out pipe:
+	 *   0 = VO/mgmt/high (EP 0x02, High Queue FIFO)
+	 *   1 = BE/BK data    (EP 0x03, Normal Queue FIFO)
+	 *
+	 * Frame data (DHCP, ARP, TCP) HARUS lewat pipe 1 (NQ). Mengirimkannya
+	 * ke pipe 0 membuat chip mengabaikan QSEL=BE atau membuangnya.
 	 */
 	{
+		int ntx = fChip.usb.txPipeCount();
 		uint8_t qsel = 0x00;	/* BE */
-		int pipe = 2;
+		int pipe = (ntx >= 3) ? 2 : ((ntx == 2) ? 1 : 0);
 
 		if (isMgmt) {
 			qsel = 0x12;	/* MGNT */
@@ -986,15 +988,18 @@ void ItlRtl8188E::sendFrame(mbuf_t m, struct ieee80211_node *ni, bool isMgmt)
 		} else if (wh[0] & IEEE80211_FC0_SUBTYPE_QOS) {
 			uint8_t tid = wh[24] & 0x0f;
 
-			if (tid >= 1 && tid <= 2) {
-				qsel = 0x02;	/* BK */
-				pipe = 2;
-			} else if (tid >= 4 && tid <= 5) {
-				qsel = 0x05;	/* VI */
-				pipe = 1;
-			} else if (tid >= 6) {
+			if (tid >= 6) {
 				qsel = 0x07;	/* VO */
 				pipe = 0;
+			} else if (tid >= 4) {
+				qsel = 0x05;	/* VI */
+				pipe = (ntx >= 3) ? 1 : 0;
+			} else if (tid >= 1 && tid <= 2) {
+				qsel = 0x02;	/* BK */
+				pipe = (ntx >= 3) ? 2 : ((ntx == 2) ? 1 : 0);
+			} else {
+				qsel = 0x00;	/* BE */
+				pipe = (ntx >= 3) ? 2 : ((ntx == 2) ? 1 : 0);
 			}
 		}
 
@@ -1019,6 +1024,7 @@ void ItlRtl8188E::sendFrame(mbuf_t m, struct ieee80211_node *ni, bool isMgmt)
 			rtwn_usb_tx_checksum(buf, RTWN_USB_TX_DESC_SIZE);
 		} else {
 			bool qos = (wh[0] & IEEE80211_FC0_SUBTYPE_QOS) != 0;
+			bool is_prot = (wh[1] & IEEE80211_FC1_PROTECTED) != 0;
 			uint16_t seq = ((uint16_t)wh[22] |
 			    ((uint16_t)wh[23] << 8)) >> IEEE80211_SEQ_SEQ_SHIFT;
 
@@ -1027,11 +1033,7 @@ void ItlRtl8188E::sendFrame(mbuf_t m, struct ieee80211_node *ni, bool isMgmt)
 			    raid, false, false, 0);
 			/* QSEL (txdw1 bit 8-12) harus sama dengan queue pipe. */
 			buf[5] = (uint8_t)((buf[5] & 0xe0) | (qsel & 0x1f));
-			/*
-			 * Layout r92c_tx_desc_usb:
-			 *   12 txdw3 (16 bit)  14 txdseq  16 txdw4  20 txdw5
-			 * DRVRATE/HWSEQ ada di txdw4, BUKAN txdw3.
-			 */
+
 			uint16_t txdseq = seq & 0x0fff;
 			uint8_t rtsrate = 8;	/* OFDM24 (R92C_TXDW4_RTSRATE) */
 
@@ -1039,25 +1041,36 @@ void ItlRtl8188E::sendFrame(mbuf_t m, struct ieee80211_node *ni, bool isMgmt)
 				buf[14] = (uint8_t)(txdseq & 0xff);
 				buf[15] = (uint8_t)((txdseq >> 8) & 0xff);
 				buf[16] = (uint8_t)(0x40 | (rtsrate & 0x1f));	/* QOS | RTSRATE */
-				buf[17] = 0x01;	/* DRVRATE=1: fallback robust rate */
+				buf[17] = 0x01;	/* DRVRATE=1 */
+			} else if (is_prot) {
+				/*
+				 * Frame data terenkripsi CCMP: jangan aktifkan HWSEQ/HWSEQEN.
+				 * Software sudah mengisi nomor urut dan membungkus AAD.
+				 * Menimpa seq di hardware merusak MIC/AAD dan replay window AP.
+				 */
+				buf[14] = (uint8_t)(txdseq & 0xff);
+				buf[15] = (uint8_t)((txdseq >> 8) & 0xff);
+				buf[16] = (uint8_t)(rtsrate & 0x1f);		/* RTSRATE saja, tanpa HWSEQ */
+				buf[17] = 0x01;					/* DRVRATE=1 */
 			} else {
-				txdseq |= 0x8000;	/* R92C_TXDW3_HWSEQEN */
+				/* Data polos non-QoS (misal EAPOL sebelum encrypt) */
+				txdseq |= 0x8000;				/* R92C_TXDW3_HWSEQEN */
 				buf[14] = (uint8_t)(txdseq & 0xff);
 				buf[15] = (uint8_t)((txdseq >> 8) & 0xff);
 				buf[16] = (uint8_t)(0x80 | (rtsrate & 0x1f));	/* HWSEQ | RTSRATE */
-				buf[17] = 0x01;	/* DRVRATE=1: fallback robust rate */
+				buf[17] = 0x01;					/* DRVRATE=1 */
 			}
 			buf[18] = 0x00;
 			buf[19] = 0x00;
 			/*
-			 * txdw5: DATARATE=0 (CCK 1 Mb/s) + batas retry 0x0001ff00.
-			 * Terbukti sukses berkomunikasi dua arah dengan router.
+			 * txdw5: Gunakan OFDM 24M (8) dengan retry limit 0x0001ff00.
+			 * Hardware akan otomatis mencoba rate OFDM standar ini dan turun
+			 * bertahap bila ada retry (kompatibel dengan AP 802.11n).
 			 */
-			buf[20] = 0x00;	/* CCK 1 Mb/s fallback rate */
+			buf[20] = 0x08;	/* DATARATE: OFDM 24M */
 			buf[21] = 0xff;
 			buf[22] = 0x01;
 			buf[23] = 0x00;
-			/* (bit CCX_RPT dibiarkan menyala dari builder) */
 			rtwn_usb_tx_checksum(buf, RTWN_USB_TX_DESC_SIZE);
 		}
 
@@ -1068,6 +1081,27 @@ void ItlRtl8188E::sendFrame(mbuf_t m, struct ieee80211_node *ni, bool isMgmt)
 			if (ni)
 				ieee80211_release_node(&fIc, ni);
 			return;
+		}
+
+		static int sDataLogCount = 0;
+		if (!isMgmt && sDataLogCount < 3) {
+			sDataLogCount++;
+			IOLog(LOGP "TX DATA[%d] total=%u len=%u pipe=%d qsel=%02x raid=%u\n",
+			    sDataLogCount, (unsigned)total, (unsigned)len, pipe, qsel, raid);
+			IOLog(LOGP "TX DESC: %02x %02x %02x %02x  %02x %02x %02x %02x  %02x %02x %02x %02x  %02x %02x %02x %02x\n",
+			    buf[0], buf[1], buf[2], buf[3], buf[4], buf[5], buf[6], buf[7],
+			    buf[8], buf[9], buf[10], buf[11], buf[12], buf[13], buf[14], buf[15]);
+			IOLog(LOGP "TX DESCw4+: %02x %02x %02x %02x  %02x %02x %02x %02x  %02x %02x %02x %02x  %02x %02x %02x %02x\n",
+			    buf[16], buf[17], buf[18], buf[19], buf[20], buf[21], buf[22], buf[23],
+			    buf[24], buf[25], buf[26], buf[27], buf[28], buf[29], buf[30], buf[31]);
+			if (len >= 24) {
+				const uint8_t *f = buf + RTWN_USB_TX_DESC_SIZE;
+				IOLog(LOGP "TX HDR: fc=%02x%02x ra=%02x:%02x:%02x:%02x:%02x:%02x ta=%02x:%02x:%02x:%02x:%02x:%02x da=%02x:%02x:%02x:%02x:%02x:%02x seq=%02x%02x\n",
+				    f[0], f[1], f[4], f[5], f[6], f[7], f[8], f[9],
+				    f[10], f[11], f[12], f[13], f[14], f[15],
+				    f[16], f[17], f[18], f[19], f[20], f[21],
+				    f[22], f[23]);
+			}
 		}
 
 		if (!fChip.usb.bulkSend(buf, (uint32_t)total, nullptr, nullptr,
