@@ -828,6 +828,22 @@ void ItlRtl8188E::sendFrame(mbuf_t m, struct ieee80211_node *ni, bool isMgmt)
 				    (unsigned)len, wh[0], wh[1],
 				    dw[1], dw[2], dw[3], dw[4], dw[5]);
 			}
+			/*
+			 * Body: dw6 = capability+listen, dw7.. = IE.
+			 * AP diam tanpa assoc response berarti body yang
+			 * dibuang — capability atau RSN IE salah.
+			 */
+			if (len >= 56) {
+				const uint32_t *dw = (const uint32_t *)wh;
+
+				IOLog(LOGP "TX assoc body cap=%04x li=%u "
+				    "dw7=%08x dw8=%08x dw9=%08x "
+				    "dw10=%08x dw11=%08x dw12=%08x\n",
+				    (unsigned)(wh[24] | (wh[25] << 8)),
+				    (unsigned)(wh[26] | (wh[27] << 8)),
+				    dw[7], dw[8], dw[9], dw[10], dw[11],
+				    dw[12]);
+			}
 		}
 	}
 
