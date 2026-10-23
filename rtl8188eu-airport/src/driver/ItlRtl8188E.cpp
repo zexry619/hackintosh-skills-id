@@ -708,6 +708,22 @@ int ItlRtl8188E::newstateCb(struct ieee80211com *ic,
 		 * mencoba beberapa kombinasi tanpa reboot.
 		 */
 		if (nstate == IEEE80211_S_AUTH) {
+			/*
+			 * Percobaan ulang: beritahu AP dulu bahwa sesi
+			 * lama berakhir. Tanpa deauth, AP menyimpan
+			 * state "authenticated" untuk MAC kita dan
+			 * mengabaikan assoc request berikutnya (AP hanya
+			 * membalas deauth reason 2, assoc response tidak
+			 * pernah datang).
+			 */
+			if (me->fJoinTry > 0 && ic->ic_bss &&
+			    ic->ic_bss->ni_bssid[0] != 0) {
+				IEEE80211_SEND_MGMT(ic, ic->ic_bss,
+				    IEEE80211_FC0_SUBTYPE_DEAUTH,
+				    IEEE80211_REASON_AUTH_LEAVE);
+				IOLog(LOGP "deauth sebelum retry #%u\n",
+				    (unsigned)me->fJoinTry);
+			}
 			me->fJoinTry++;
 			me->applyRsnVariant(me->fJoinTry);
 			me->publishStats();
@@ -748,6 +764,15 @@ int ItlRtl8188E::newstateCb(struct ieee80211com *ic,
 		me->fScanSeen = false;
 		if (me->fScanTo)
 			timeout_del(&me->fScanTo);
+		/*
+		 * Tinggalkan AP dengan rapi. Tanpa ini AP tetap
+		 * menganggap kita terasosiasi; join berikutnya (bahkan
+		 * setelah reboot) bisa diabaikan AP.
+		 */
+		if (ic->ic_bss && ic->ic_bss->ni_bssid[0] != 0)
+			IEEE80211_SEND_MGMT(ic, ic->ic_bss,
+			    IEEE80211_FC0_SUBTYPE_DEAUTH,
+			    IEEE80211_REASON_AUTH_LEAVE);
 		break;
 	default:
 		break;
