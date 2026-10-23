@@ -10,6 +10,7 @@
 #define AirportItlwmV2_hpp
 
 #include "Apple80211.h"
+#include <IOKit/80211/IO80211VirtualInterface.h>
 #ifdef AIRPORT_WCL
 #if __IO80211_TARGET == __MAC_15_2
 #include <Airport/macOS15/FaultReporter.h>

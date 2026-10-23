@@ -731,6 +731,19 @@ setLinkStateGated(OSObject *target, void *arg0, void *arg1, void *arg2, void *ar
      */
     that->fNetIf->setRunningState(
         (IO80211LinkState)(uint64_t)arg0 == kIO80211NetworkLinkUp);
+    /*
+     * Beri tahu SystemConfiguration bahwa status link berubah.
+     *
+     * Tanpa ini IPConfiguration tidak pernah melihat link UP dan DHCP
+     * tertahan di state INIT selamanya ("DHCP en2: INIT waiting at
+     * 34.1 for 8.26"), sehingga tidak ada DHCP discover yang dikirim.
+     * Cabang non-WCL di bawah sudah melakukannya; cabang WCL belum.
+     */
+    that->fNetIf->postMessage(APPLE80211_M_LINK_CHANGED, NULL, 0, false);
+    if ((IO80211LinkState)(uint64_t)arg0 == kIO80211NetworkLinkUp) {
+        that->fNetIf->postMessage(APPLE80211_M_BSSID_CHANGED, NULL, 0, false);
+        that->fNetIf->postMessage(APPLE80211_M_SSID_CHANGED, NULL, 0, false);
+    }
     return kIOReturnSuccess;
 #else
     IOReturn ret = that->fNetIf->setLinkState((IO80211LinkState)(uint64_t)arg0, (unsigned int)(uint64_t)arg1);
