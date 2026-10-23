@@ -172,8 +172,9 @@ public:
 	void rxTimerAction(IOTimerEventSource *timer);
 	void rxQueueFree(void);
 
-	/* Hardware CAM Security Engine (registers 0x670/0x674) */
+	/* Hardware CAM Security Engine (registers 0x670/0x674/0x678) */
 	void camWrite(uint32_t addr, uint32_t data);
+	uint32_t camRead(uint32_t addr);
 	int  setCamKey(int entry, uint8_t key_id, uint8_t algo,
 	    const uint8_t *macaddr, const uint8_t *key, int keylen);
 	void deleteCamKey(int entry);

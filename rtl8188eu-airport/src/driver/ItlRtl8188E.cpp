@@ -642,6 +642,14 @@ void ItlRtl8188E::camWrite(uint32_t addr, uint32_t data)
 	    ((addr & R92C_CAMCMD_ADDR_M) << R92C_CAMCMD_ADDR_S));
 }
 
+uint32_t ItlRtl8188E::camRead(uint32_t addr)
+{
+	rtwn_m1_write_4(&fChip, R92C_CAMCMD,
+	    R92C_CAMCMD_POLLING |
+	    ((addr & R92C_CAMCMD_ADDR_M) << R92C_CAMCMD_ADDR_S));
+	return rtwn_m1_read_4(&fChip, R92C_CAMREAD);
+}
+
 int ItlRtl8188E::setCamKey(int entry, uint8_t key_id, uint8_t algo,
     const uint8_t *macaddr, const uint8_t *key, int keylen)
 {
@@ -669,10 +677,21 @@ int ItlRtl8188E::setCamKey(int entry, uint8_t key_id, uint8_t algo,
 	camWrite((uint32_t)R92C_CAM_KEY(entry, 4), 0);
 	camWrite((uint32_t)R92C_CAM_KEY(entry, 5), 0);
 
-	/* 
-	 * Tulis CTL0 (offset +0) lalu CTL1 (offset +1) seperti driver vendor:
-	 * Untuk Pairwise (entry >= 4), key_id HARUS 0.
+	/*
+	 * KRUSIAL: Tulis CTL1 (offset +1: MAC[2..5]) TERLEBIH DAHULU, lalu
+	 * CTL0 (offset +0: MAC[0..1] + config + R92C_CAM_VALID) TERAKHIR!
+	 * Menurut dokumentasi resmi Realtek dan OpenBSD:
+	 * "Write CTL0 last since that will validate the CAM entry."
+	 * Jika CTL0 ditulis mendahului CTL1, hardware silikon langsung
+	 * memvalidasi entri sebelum MAC[2..5] terisi (macaddr menjadi 00:00:00:00),
+	 * sehingga pencarian CAM di jalur TX selalu miss!
 	 */
+	uint32_t ctl1 = (uint32_t)macaddr[2] |
+	    ((uint32_t)macaddr[3] << 8) |
+	    ((uint32_t)macaddr[4] << 16) |
+	    ((uint32_t)macaddr[5] << 24);
+	camWrite((uint32_t)R92C_CAM_CTL1(entry), ctl1);
+
 	uint32_t ctl0 = ((uint32_t)macaddr[0] << 16) |
 	    ((uint32_t)macaddr[1] << 24) |
 	    (((uint32_t)algo & 0x07) << 2) |
@@ -680,12 +699,12 @@ int ItlRtl8188E::setCamKey(int entry, uint8_t key_id, uint8_t algo,
 	    R92C_CAM_VALID;
 	camWrite((uint32_t)R92C_CAM_CTL0(entry), ctl0);
 
-	/* Tulis CTL1: MAC[2..5]. */
-	uint32_t ctl1 = (uint32_t)macaddr[2] |
-	    ((uint32_t)macaddr[3] << 8) |
-	    ((uint32_t)macaddr[4] << 16) |
-	    ((uint32_t)macaddr[5] << 24);
-	camWrite((uint32_t)R92C_CAM_CTL1(entry), ctl1);
+	/* Verifikasi baca kembali dari register hardware CAM */
+	uint32_t r_ctl0 = camRead((uint32_t)R92C_CAM_CTL0(entry));
+	uint32_t r_ctl1 = camRead((uint32_t)R92C_CAM_CTL1(entry));
+	uint32_t r_k0   = camRead((uint32_t)R92C_CAM_KEY(entry, 0));
+	IOLog(LOGP "CAM key %d VERIFY: CTL0=%08x (exp %08x) CTL1=%08x (exp %08x) K0=%08x\n",
+	    entry, r_ctl0, ctl0, r_ctl1, ctl1, r_k0);
 
 	return 0;
 }
@@ -1032,7 +1051,7 @@ void ItlRtl8188E::sendFrame(mbuf_t m, struct ieee80211_node *ni, bool isMgmt)
 		}
 	}
 
-	bcast = IEEE80211_IS_MULTICAST(wh + 4);
+	bcast = IEEE80211_IS_MULTICAST(wh + 4) || (!isMgmt && len >= 22 && IEEE80211_IS_MULTICAST(wh + 16));
 	raid = isMgmt ? 6 /* R92C_RAID_11B */ : 4 /* R92C_RAID_11BG */;
 
 	/*
@@ -1153,6 +1172,11 @@ void ItlRtl8188E::sendFrame(mbuf_t m, struct ieee80211_node *ni, bool isMgmt)
 			/* QSEL (txdw1 bit 8-12) harus sama dengan queue pipe. */
 			buf[5] = (uint8_t)((buf[5] & 0xe0) | (qsel & 0x1f));
 
+			if (!bcast) {
+				/* MACID = 1 untuk station AP terasosiasi di STA mode (seperti vendor driver) */
+				buf[4] = (uint8_t)((buf[4] & 0xc0) | 0x01);
+			}
+
 			if (is_prot && k && k->k_cipher == IEEE80211_CIPHER_CCMP) {
 				/* R92C_TXDW1_CIPHER_AES (bit 22-23 = 3 -> byte 6 |= 0xc0) */
 				buf[6] |= 0xc0;
@@ -1161,29 +1185,26 @@ void ItlRtl8188E::sendFrame(mbuf_t m, struct ieee80211_node *ni, bool isMgmt)
 			}
 
 			uint16_t txdseq = seq & 0x0fff;
-			uint8_t rtsrate = 8;	/* OFDM24 (R92C_TXDW4_RTSRATE) */
 
 			if (qos) {
 				buf[14] = (uint8_t)(txdseq & 0xff);
 				buf[15] = (uint8_t)((txdseq >> 8) & 0xff);
-				buf[16] = (uint8_t)(0x40 | (rtsrate & 0x1f));	/* QOS | RTSRATE */
-				buf[17] = 0x01;	/* DRVRATE=1 */
+				buf[16] = 0x40;	/* QOS */
+				buf[17] = 0x00;	/* DRVRATE=0: biarkan silikon auto-rate via RAID */
 			} else {
 				/* Data polos non-QoS (misal EAPOL sebelum encrypt) */
 				txdseq |= 0x8000;				/* R92C_TXDW3_HWSEQEN */
 				buf[14] = (uint8_t)(txdseq & 0xff);
 				buf[15] = (uint8_t)((txdseq >> 8) & 0xff);
-				buf[16] = (uint8_t)(0x80 | (rtsrate & 0x1f));	/* HWSEQ | RTSRATE */
-				buf[17] = 0x01;					/* DRVRATE=1 */
+				buf[16] = 0x80;					/* HWSEQ */
+				buf[17] = 0x00;					/* DRVRATE=0: biarkan silikon auto-rate via RAID */
 			}
 			buf[18] = 0x00;
 			buf[19] = 0x00;
 			/*
-			 * txdw5: Gunakan OFDM 24M (8) dengan retry limit 0x0001ff00.
-			 * Hardware akan otomatis mencoba rate OFDM standar ini dan turun
-			 * bertahap bila ada retry (kompatibel dengan AP 802.11n).
+			 * txdw5: 0x0001ff00 (retry limit standar tanpa memaksa datarate tetap)
 			 */
-			buf[20] = 0x08;	/* DATARATE: OFDM 24M */
+			buf[20] = 0x00;
 			buf[21] = 0xff;
 			buf[22] = 0x01;
 			buf[23] = 0x00;
@@ -1199,7 +1220,7 @@ void ItlRtl8188E::sendFrame(mbuf_t m, struct ieee80211_node *ni, bool isMgmt)
 			ivp[0] = (uint8_t)(k->k_tsc & 0xff);
 			ivp[1] = (uint8_t)((k->k_tsc >> 8) & 0xff);
 			ivp[2] = 0x00;
-			ivp[3] = (uint8_t)((k->k_id & 0x03) | 0x20);	/* ExtIV */
+			ivp[3] = (uint8_t)(((k->k_id & 0x03) << 6) | 0x20);	/* ExtIV, KeyID bits 6-7 */
 			ivp[4] = (uint8_t)((k->k_tsc >> 16) & 0xff);
 			ivp[5] = (uint8_t)((k->k_tsc >> 24) & 0xff);
 			ivp[6] = (uint8_t)((k->k_tsc >> 32) & 0xff);
@@ -1211,10 +1232,10 @@ void ItlRtl8188E::sendFrame(mbuf_t m, struct ieee80211_node *ni, bool isMgmt)
 		}
 
 		static int sDataLogCount = 0;
-		if (!isMgmt && sDataLogCount < 3) {
+		if (!isMgmt && sDataLogCount < 20) {
 			sDataLogCount++;
-			IOLog(LOGP "TX DATA[%d] total=%u len=%u pipe=%d qsel=%02x raid=%u\n",
-			    sDataLogCount, (unsigned)total, (unsigned)len, pipe, qsel, raid);
+			IOLog(LOGP "TX DATA[%d] total=%u len=%u pipe=%d qsel=%02x raid=%u bcast=%d\n",
+			    sDataLogCount, (unsigned)total, (unsigned)len, pipe, qsel, raid, bcast ? 1 : 0);
 			IOLog(LOGP "TX DESC: %02x %02x %02x %02x  %02x %02x %02x %02x  %02x %02x %02x %02x  %02x %02x %02x %02x\n",
 			    buf[0], buf[1], buf[2], buf[3], buf[4], buf[5], buf[6], buf[7],
 			    buf[8], buf[9], buf[10], buf[11], buf[12], buf[13], buf[14], buf[15]);
@@ -1228,6 +1249,12 @@ void ItlRtl8188E::sendFrame(mbuf_t m, struct ieee80211_node *ni, bool isMgmt)
 				    f[10], f[11], f[12], f[13], f[14], f[15],
 				    f[16], f[17], f[18], f[19], f[20], f[21],
 				    f[22], f[23]);
+			}
+			if (is_prot && k && k->k_cipher == IEEE80211_CIPHER_CCMP) {
+				const uint8_t *iv = buf + RTWN_USB_TX_DESC_SIZE + hdrlen;
+				IOLog(LOGP "TX CCMP IV: %02x %02x %02x %02x %02x %02x %02x %02x (tsc=%llu kid=%u)\n",
+				    iv[0], iv[1], iv[2], iv[3], iv[4], iv[5], iv[6], iv[7],
+				    (unsigned long long)k->k_tsc, (unsigned)k->k_id);
 			}
 		}
 
