@@ -510,7 +510,13 @@ IOReturn AirportItlwmSkywalkInterface::startWCLJoin(AirportWCL::JoinRequest &joi
             wpa.i_protos = IEEE80211_WPA_PROTO_WPA2;
         if (!wpa.i_akms)
             wpa.i_akms = personal ? IEEE80211_WPA_AKM_PSK : IEEE80211_WPA_AKM_8021X;
-        wpa.i_ciphers = IEEE80211_WPA_CIPHER_CCMP | IEEE80211_WPA_CIPHER_TKIP;
+        /*
+         * AP ZEKRI.NET mengiklankan ucast={aes_ccm} saja. Menyertakan
+         * TKIP di pairwise list membuat sebagian AP WPA3-transition
+         * membuang assoc request tanpa balasan (bukan menolak dengan
+         * status). Pakai CCMP saja supaya RSN IE cocok dengan AP.
+         */
+        wpa.i_ciphers = IEEE80211_WPA_CIPHER_CCMP;
         wpa.i_groupcipher = IEEE80211_WPA_CIPHER_CCMP;
         if (join.rsnLength >= 8 && join.rsn[0] == IEEE80211_ELEMID_RSN &&
             join.rsn[4] == 0 && join.rsn[5] == 0x0f && join.rsn[6] == 0xac) {

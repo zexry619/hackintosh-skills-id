@@ -814,6 +814,23 @@ void ItlRtl8188E::sendFrame(mbuf_t m, struct ieee80211_node *ni, bool isMgmt)
 		} else if (sub == IEEE80211_FC0_SUBTYPE_ASSOC_REQ ||
 		    sub == IEEE80211_FC0_SUBTYPE_REASSOC_REQ) {
 			fTxAssocReq++;
+			/*
+			 * Hexdump lengkap assoc request. AP diam (bukan
+			 * menolak) berarti frame dibuang — hanya isi frame
+			 * yang bisa menjelaskan kenapa.
+			 */
+			if (len >= 24) {
+				char hx[3 * 64 + 1];
+				uint32_t n = len < 64 ? len : 64, i;
+
+				for (i = 0; i < n; i++) {
+					snprintf(hx + i * 3, 4, "%02x ",
+					    wh[i]);
+				}
+				hx[n * 3] = '\0';
+				IOLog(LOGP "TX assoc req len=%u: %s\n",
+				    (unsigned)len, hx);
+			}
 		}
 	}
 
