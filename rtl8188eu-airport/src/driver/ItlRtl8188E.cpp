@@ -709,6 +709,19 @@ int ItlRtl8188E::newstateCb(struct ieee80211com *ic,
 	case IEEE80211_S_SCAN: {
 		int dwell = 30;
 
+		/*
+		 * Turunkan link state internal sebelum scan.
+		 *
+		 * ieee80211_set_link_state() hanya memanggil
+		 * setLinkStatus(kIONetworkLinkActive) kalau if_link_state
+		 * BERUBAH. Kalau nilainya masih UP dari sesi sebelumnya
+		 * (reconnect tanpa reboot), transisi UP berikutnya tidak
+		 * memicu apa pun: IOLinkActiveCount tetap 0, Skywalk tidak
+		 * menyerahkan paket, dan TX data mati sampai interface
+		 * di-down/up manual.
+		 */
+		ieee80211_set_link_state(ic, LINK_STATE_DOWN);
+
 		me->fScanning = true;
 		if (ic->ic_bss && ic->ic_bss->ni_chan)
 			me->setChannel(ic->ic_bss->ni_chan);
