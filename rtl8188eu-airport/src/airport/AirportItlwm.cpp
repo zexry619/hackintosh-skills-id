@@ -716,6 +716,13 @@ setLinkStateGated(OSObject *target, void *arg0, void *arg1, void *arg2, void *ar
 {
     AirportItlwm *that = OSDynamicCast(AirportItlwm, target);
 #ifdef AIRPORT_WCL
+    /*
+     * bsdInterface->setLinkState() hanya men-set IFF_UP|IFF_RUNNING di
+     * ifnet. Yang memberi tahu Skywalk/IO80211 (dan memulai aliran
+     * output) adalah fNetIf->setLinkState() versi dua parameter —
+     * seperti di cabang non-WCL.
+     */
+    that->fNetIf->setLinkState((IO80211LinkState)(uint64_t)arg0, 0, false, 0);
     that->bsdInterface->setLinkState((IO80211LinkState)(uint64_t)arg0);
     static_cast<AirportItlwmSkywalkInterface *>(that->fNetIf)->handleWCLLink(
         (IO80211LinkState)(uint64_t)arg0 == kIO80211NetworkLinkUp);
