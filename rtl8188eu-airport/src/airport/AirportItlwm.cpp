@@ -741,6 +741,20 @@ IOReturn AirportItlwm::outputStart(IONetworkInterface *interface, IOOptionBits o
 {
     struct _ifnet *ifp = &fHalService->get80211Controller()->ic_ac.ac_if;
     mbuf_t m = NULL;
+    /*
+     * Diagnostik TX: Opkts=0 di netstat berarti paket tidak pernah
+     * sampai ke sini. Log 8 panggilan pertama cukup untuk memastikan
+     * apakah IO80211 memanggil outputStart sama sekali, dan kalau ya,
+     * apakah queue/oactive yang menghalangi.
+     */
+    static int ostartLog = 0;
+    if (ostartLog < 8) {
+        ostartLog++;
+        IOLog("rtl8188e: outputStart #%d q=%d oactive=%d empty=%d\n",
+            ostartLog, ifp->if_snd.queue ? 1 : 0,
+            ifq_is_oactive(&ifp->if_snd) ? 1 : 0,
+            ifp->if_snd.queue ? (ifq_empty(&ifp->if_snd) ? 1 : 0) : -1);
+    }
 #ifdef AIRPORT_WCL
     if (!ifp->if_snd.queue)
         return kIOReturnNoResources;

@@ -546,7 +546,8 @@ void ItlRtl8188E::publishStats(void)
 	snprintf(s, sizeof(s),
 	    "txm=%u txd=%u txe=%u txf=%u rpt=%u txok=%u rty=%u "
 	    "rxm=%u rxd=%u rxe=%u encf=%u pipe=%d "
-	    "auth=%u/%u assoc=%u/%u try=%u rsnv=%u dlv=%u",
+	    "auth=%u/%u assoc=%u/%u try=%u rsnv=%u dlv=%u "
+	    "st=%d xf=%08x sndq=%d",
 	    (unsigned)fTxMgmt, (unsigned)fTxData, (unsigned)fTxEapol,
 	    (unsigned)fTxFail, (unsigned)fTxReport, (unsigned)fTxOk,
 	    (unsigned)fTxRetry, (unsigned)fRxMgmt, (unsigned)fRxData,
@@ -555,7 +556,9 @@ void ItlRtl8188E::publishStats(void)
 	    (unsigned)fTxAuthReq, (unsigned)fRxAuth,
 	    (unsigned)fTxAssocReq, (unsigned)fRxAssocResp,
 	    (unsigned)fJoinTry, (unsigned)fRsnVariant,
-	    (unsigned)fRxDelivered);
+	    (unsigned)fRxDelivered,
+	    (int)fIc.ic_state, (unsigned)fIc.ic_xflags,
+	    fIc.ic_if.if_snd.queue ? 1 : 0);
 	setDiag("RTL8188E-stat", s);
 }
 
@@ -1119,6 +1122,23 @@ void ItlRtl8188E::txStart(struct _ifnet *ifp)
 	struct ieee80211com *ic = &fIc;
 	struct ieee80211_node *ni;
 	mbuf_t m;
+
+	/*
+	 * Diagnostik: apakah if_start benar-benar dipanggil, dan kalau ya
+	 * apakah loop data di bawah terlewati karena state/xflags.
+	 */
+	{
+		static int txsLog = 0;
+		if (txsLog < 8) {
+			txsLog++;
+			IOLog(LOGP "txStart #%d state=%d xf=%08x sndq=%d empty=%d\n",
+			    txsLog, (int)ic->ic_state,
+			    (unsigned)ic->ic_xflags,
+			    ifp->if_snd.queue ? 1 : 0,
+			    ifp->if_snd.queue ?
+			    (ifq_empty(&ifp->if_snd) ? 1 : 0) : -1);
+		}
+	}
 
 	while ((m = mq_dequeue(&ic->ic_mgtq)) != nullptr) {
 		ni = (struct ieee80211_node *)mbuf_pkthdr_rcvif(m);
