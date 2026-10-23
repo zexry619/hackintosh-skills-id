@@ -92,6 +92,8 @@ bool ItlRtl8188E::init()
 	fRxMgmt = fRxData = fRxEapol = fEncryptFail = 0;
 	fTxReport = fTxOk = fTxRetry = 0;
 	fTxAuthReq = fTxAssocReq = fRxAuth = fRxAssocResp = 0;
+	fJoinTry = 0;
+	fRsnVariant = 0;
 	return true;
 }
 
@@ -542,14 +544,15 @@ void ItlRtl8188E::publishStats(void)
 	snprintf(s, sizeof(s),
 	    "txm=%u txd=%u txe=%u txf=%u rpt=%u txok=%u rty=%u "
 	    "rxm=%u rxd=%u rxe=%u encf=%u pipe=%d "
-	    "auth=%u/%u assoc=%u/%u",
+	    "auth=%u/%u assoc=%u/%u try=%u rsnv=%u",
 	    (unsigned)fTxMgmt, (unsigned)fTxData, (unsigned)fTxEapol,
 	    (unsigned)fTxFail, (unsigned)fTxReport, (unsigned)fTxOk,
 	    (unsigned)fTxRetry, (unsigned)fRxMgmt, (unsigned)fRxData,
 	    (unsigned)fRxEapol, (unsigned)fEncryptFail,
 	    fChip.usb.txPipeCount(),
 	    (unsigned)fTxAuthReq, (unsigned)fRxAuth,
-	    (unsigned)fTxAssocReq, (unsigned)fRxAssocResp);
+	    (unsigned)fTxAssocReq, (unsigned)fRxAssocResp,
+	    (unsigned)fJoinTry, (unsigned)fRsnVariant);
 	setDiag("RTL8188E-stat", s);
 }
 
@@ -565,6 +568,85 @@ void ItlRtl8188E::setChannel(struct ieee80211_channel *chan)
 		setDiag("RTL8188E-scan", stage);
 		if (rtwn_set_chan_8188e(halRead, halWrite, this, ch) != 0)
 			IOLog(LOGP "set kanal %u gagal\n", ch);
+	}
+}
+
+/*
+ * Varian RSN per percobaan join.
+ *
+ * AP ZEKRI.NET mengiklankan WPA2-PSK-CCMP tetapi juga WPA3-transition
+ * (RSN caps MFPC+MFPR). Driver tidak membalas assoc request apa pun
+ * varian RSN yang dipakai net80211 dari macOS — AP diam, bukan menolak.
+ *
+ * Karena kext IO80211 hanya bisa dimuat saat boot, mencoba satu varian
+ * per reboot terlalu mahal. Fungsi ini mengganti parameter RSN pada
+ * setiap siklus join, jadi SATU boot mencoba beberapa kombinasi sampai
+ * ada yang diterima AP.
+ *
+ *   1  apa adanya dari macOS (baseline)
+ *   2  CCMP saja (buang TKIP)
+ *   3  WPA1+WPA2, CCMP+TKIP (kompatibilitas maksimum)
+ *   4  WPA1 saja, TKIP+CCMP (AP lama)
+ *   5  tanpa RSN (open assoc) — diagnostik: membuktikan apakah RSN IE
+ *      yang membuat AP diam
+ */
+void ItlRtl8188E::applyRsnVariant(uint32_t attempt)
+{
+	struct ieee80211com *ic = &fIc;
+	uint8_t v;
+
+	if (!(ic->ic_flags & IEEE80211_F_RSNON) && attempt <= 1)
+		return;		/* tidak ada RSN aktif, tidak perlu varian */
+
+	/* 1..5 lalu ulang 2..5 (baseline tidak diulang) */
+	v = (uint8_t)(attempt <= 1 ? 1 : ((attempt - 2) % 4) + 2);
+	fRsnVariant = v;
+
+	switch (v) {
+	case 1:
+		IOLog(LOGP "rsn-varian 1: baseline macOS\n");
+		break;
+	case 2:
+		ic->ic_flags |= IEEE80211_F_RSNON;
+		ic->ic_rsnciphers = IEEE80211_CIPHER_CCMP;
+		ic->ic_rsngroupcipher = IEEE80211_CIPHER_CCMP;
+		ic->ic_rsnakms = IEEE80211_AKM_PSK;
+		IOLog(LOGP "rsn-varian 2: CCMP saja\n");
+		break;
+	case 3:
+		ic->ic_flags |= IEEE80211_F_RSNON;
+		ic->ic_rsnprotos = IEEE80211_PROTO_WPA | IEEE80211_PROTO_RSN;
+		ic->ic_rsnciphers = IEEE80211_CIPHER_CCMP |
+		    IEEE80211_CIPHER_TKIP;
+		ic->ic_rsngroupcipher = IEEE80211_CIPHER_CCMP;
+		ic->ic_rsnakms = IEEE80211_AKM_PSK;
+		IOLog(LOGP "rsn-varian 3: WPA1+WPA2 CCMP+TKIP\n");
+		break;
+	case 4:
+		ic->ic_flags |= IEEE80211_F_RSNON;
+		ic->ic_rsnprotos = IEEE80211_PROTO_WPA;
+		ic->ic_rsnciphers = IEEE80211_CIPHER_TKIP |
+		    IEEE80211_CIPHER_CCMP;
+		ic->ic_rsngroupcipher = IEEE80211_CIPHER_TKIP;
+		ic->ic_rsnakms = IEEE80211_AKM_PSK;
+		IOLog(LOGP "rsn-varian 4: WPA1 saja\n");
+		break;
+	case 5:
+	default:
+		/*
+		 * WPA2 + CCMP + PSK + SHA256-PSK (AKM 6). Sebagian AP
+		 * WPA3-transition hanya menerima AKM ini.
+		 * Sengaja TIDAK memakai assoc tanpa RSN: itu bisa membuat
+		 * macOS tampak terhubung tanpa enkripsi dan menyesatkan.
+		 */
+		ic->ic_flags |= IEEE80211_F_RSNON;
+		ic->ic_rsnprotos = IEEE80211_PROTO_RSN;
+		ic->ic_rsnciphers = IEEE80211_CIPHER_CCMP;
+		ic->ic_rsngroupcipher = IEEE80211_CIPHER_CCMP;
+		ic->ic_rsnakms = IEEE80211_AKM_PSK |
+		    IEEE80211_AKM_SHA256_PSK;
+		IOLog(LOGP "rsn-varian 5: WPA2 CCMP PSK+SHA256\n");
+		break;
 	}
 }
 
@@ -616,6 +698,17 @@ int ItlRtl8188E::newstateCb(struct ieee80211com *ic,
 		me->fScanSeen = false;
 		if (me->fScanTo)
 			timeout_del(&me->fScanTo);
+		/*
+		 * Setiap kali masuk AUTH adalah percobaan join baru
+		 * (net80211 kembali ke SCAN dulu setelah gagal). Pakai
+		 * kesempatan itu untuk mengganti varian RSN — satu boot
+		 * mencoba beberapa kombinasi tanpa reboot.
+		 */
+		if (nstate == IEEE80211_S_AUTH) {
+			me->fJoinTry++;
+			me->applyRsnVariant(me->fJoinTry);
+			me->publishStats();
+		}
 		if (ic->ic_bss) {
 			struct ieee80211_node *ni = ic->ic_bss;
 			if (ni->ni_chan)

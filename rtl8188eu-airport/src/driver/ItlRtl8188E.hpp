@@ -112,6 +112,14 @@ public:
 	uint32_t     fTxAssocReq;	/* assoc request dikirim */
 	uint32_t     fRxAuth;		/* auth response diterima */
 	uint32_t     fRxAssocResp;	/* assoc response diterima */
+	/*
+	 * Percobaan join ke-N. Setiap siklus join memakai varian RSN
+	 * berbeda (lihat applyRsnVariant) supaya satu boot bisa
+	 * menemukan kombinasi yang diterima AP tanpa reboot berulang.
+	 */
+	uint32_t     fJoinTry;
+	uint8_t      fRsnVariant;
+	void         applyRsnVariant(uint32_t attempt);
 	void publishStats(void);
 
 	/* net80211 */
