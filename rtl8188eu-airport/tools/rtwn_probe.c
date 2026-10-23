@@ -29,6 +29,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
+#include <time.h>
 #include <unistd.h>
 #include <IOKit/IOKitLib.h>
 #include <IOKit/IOCFPlugIn.h>
@@ -826,7 +827,8 @@ rx_collect(uint8_t *buf, uint32_t bufsz, uint32_t timeout_ms,
 	while (want + RTWN_USB_RX_DESC_SIZE <= len && n < max) {
 		rtwn_usb_rxinfo_t info;
 		const uint8_t *f;
-		uint32_t foff = 0, stride;
+		uint32_t foff = 0, stride, dw3;
+		bool isrep;
 
 		if (!rtwn_usb_parse_rx_desc(buf + want, len - want, &info)) {
 			break;
@@ -839,20 +841,26 @@ rx_collect(uint8_t *buf, uint32_t bufsz, uint32_t timeout_ms,
 			st->crc++;
 		}
 
-		f = frame_in_slot(buf + want, len - want, &info, &foff);
-		if (f && info.pktlen >= 10) {
-			uint32_t dw3 = (uint32_t)buf[want + 12] |
-			    ((uint32_t)buf[want + 13] << 8) |
-			    ((uint32_t)buf[want + 14] << 16) |
-			    ((uint32_t)buf[want + 15] << 24);
+		dw3 = (uint32_t)buf[want + 12] |
+		    ((uint32_t)buf[want + 13] << 8) |
+		    ((uint32_t)buf[want + 14] << 16) |
+		    ((uint32_t)buf[want + 15] << 24);
+		isrep = ((dw3 >> 14) & 0x3) != 0;
 
-			out[n].p = f;
+		f = frame_in_slot(buf + want, len - want, &info, &foff);
+		/*
+		 * TX report BUKAN frame 802.11: payload-nya struct
+		 * r88e_tx_rpt_ccx. Jangan disaring oleh frame_in_slot —
+		 * kalau disaring, report yang ada pun tidak terhitung.
+		 */
+		if (f != NULL || isrep) {
+			out[n].p = f ? f : (buf + want + foff);
 			out[n].len = info.pktlen;
 			out[n].dw3 = dw3;
-			out[n].txrep = ((dw3 >> 14) & 0x3) != 0;
+			out[n].txrep = isrep;
 			if (st) {
 				st->frames++;
-				if (out[n].txrep) {
+				if (isrep) {
 					st->txrep++;
 				}
 			}
@@ -1011,13 +1019,41 @@ find_target(const char *ssid, const uint8_t sta[6], uint8_t bssid[6],
 	return -1;
 }
 
+/* Kirim Deauth supaya AP tidak menyimpan asosiasi lama (tes bisa diulang). */
+static void
+send_deauth(const uint8_t bssid[6], const uint8_t sta[6], uint16_t seq)
+{
+	uint8_t buf[RTWN_USB_TX_DESC_SIZE + 32];
+	uint8_t *f = buf + RTWN_USB_TX_DESC_SIZE;
+	size_t flen = 26;
+
+	memset(buf, 0, sizeof(buf));
+	f[0] = 0xc0;			/* mgmt / deauth */
+	f[1] = 0x00;
+	memcpy(f + 4, bssid, 6);
+	memcpy(f + 10, sta, 6);
+	memcpy(f + 16, bssid, 6);
+	f[22] = (uint8_t)((seq << 4) & 0xff);
+	f[23] = (uint8_t)(((seq << 4) >> 8) & 0xff);
+	f[24] = 0x03;			/* reason: STA leaving */
+	f[25] = 0x00;
+
+	if (!rtwn_usb_build_mgmt_tx_desc(buf, RTWN_USB_TX_DESC_SIZE,
+	    (uint16_t)flen, false)) {
+		return;
+	}
+	bulk_write(buf, RTWN_USB_TX_DESC_SIZE + (uint32_t)flen, 300);
+	usleep(20 * 1000);
+}
+
 /*
  * Join (open auth + assoc) lalu — kalau diminta — kirim QoS-Null untuk
  * membuktikan jalur TX data. Tidak ada kripto di sini: tujuan tes ini
  * memisahkan "TX data rusak" dari "WPA2 gagal".
  */
 static int
-run_join(const char *ssid, const char *bssid_opt, int force_chan, int doTxNull)
+run_join(const char *ssid, const char *bssid_opt, int force_chan, int doTxNull,
+    const char *mac_opt)
 {
 	rtwn_seq_result_t res;
 	uint8_t bssid[6] = { 0 };
@@ -1029,6 +1065,35 @@ run_join(const char *ssid, const char *bssid_opt, int force_chan, int doTxNull)
 	printf("── Bring-up chip ──\n");
 	if (chip_bringup(&res) != 0) {
 		return -1;
+	}
+
+	/*
+	 * MAC alternatif: AP sering menyimpan state "already associated" untuk
+	 * MAC yang sama, sehingga assoc berikutnya diabaikan. Untuk pengujian
+	 * berulang, pakai MAC baru tiap run.
+	 */
+	if (mac_opt != NULL) {
+		uint8_t m[6];
+
+		if (strcmp(mac_opt, "rand") == 0) {
+			uint32_t r = (uint32_t)time(NULL) ^ (uint32_t)getpid();
+
+			m[0] = 0x02;			/* locally administered */
+			m[1] = (uint8_t)(r & 0xff);
+			m[2] = (uint8_t)((r >> 8) & 0xff);
+			m[3] = (uint8_t)((r >> 16) & 0xff);
+			m[4] = (uint8_t)((r >> 24) & 0xff);
+			m[5] = (uint8_t)((r ^ 0x5a) & 0xff);
+		} else if (parse_mac(mac_opt, m) != 0) {
+			printf("!! --mac tidak valid\n");
+			return -1;
+		}
+		memcpy(res.mac, m, 6);
+		for (int i = 0; i < 6; i++) {
+			probe_write(NULL, (uint16_t)(0x610 + i), &m[i], 1);
+		}
+		printf("  MAC uji: %02x:%02x:%02x:%02x:%02x:%02x\n",
+		    m[0], m[1], m[2], m[3], m[4], m[5]);
 	}
 
 	if (bssid_opt != NULL) {
@@ -1058,6 +1123,9 @@ run_join(const char *ssid, const char *bssid_opt, int force_chan, int doTxNull)
 		return -1;
 	}
 	usleep(15 * 1000);
+
+	/* Bersihkan asosiasi lama dari run sebelumnya (kalau ada). */
+	send_deauth(bssid, res.mac, seq++);
 
 	/* ── auth open ── */
 	printf("── Auth (open) ──\n");
@@ -1144,8 +1212,20 @@ run_join(const char *ssid, const char *bssid_opt, int force_chan, int doTxNull)
 			for (k = 0; k < n; k++) {
 				uint16_t status = 0;
 
-				if (fr[k].txrep ||
-				    !rtwn_frame_for(fr[k].p, fr[k].len, res.mac)) {
+				if (fr[k].txrep) {
+					continue;
+				}
+				if (!rtwn_frame_for(fr[k].p, fr[k].len, res.mac)) {
+					/* Bukan untuk kita — catat kalau mgmt ke
+					 * alamat lain (mis. deauth broadcast). */
+					if ((fr[k].p[0] & 0x0c) == 0 &&
+					    (fr[k].p[0] & 0xf0) == 0xc0) {
+						printf("    (deauth dari %02x:%02x:"
+						    "%02x:%02x:%02x:%02x)\n",
+						    fr[k].p[10], fr[k].p[11],
+						    fr[k].p[12], fr[k].p[13],
+						    fr[k].p[14], fr[k].p[15]);
+					}
 					continue;
 				}
 				if (rtwn_parse_assoc_resp(fr[k].p, fr[k].len,
@@ -1156,6 +1236,8 @@ run_join(const char *ssid, const char *bssid_opt, int force_chan, int doTxNull)
 					ret = (status == 0) ? 0 : 1;
 					break;
 				}
+				printf("    (frame untuk kita: fc=%02x %02x len=%u)\n",
+				    fr[k].p[0], fr[k].p[1], fr[k].len);
 			}
 		}
 		if (got) {
@@ -1164,8 +1246,18 @@ run_join(const char *ssid, const char *bssid_opt, int force_chan, int doTxNull)
 		printf("  (percobaan %d: tidak ada jawaban)\n", attempt + 1);
 	}
 	if (ret != 0) {
-		printf("  ✗ assoc gagal\n");
-		return ret;
+		/*
+		 * Assoc response sering tidak tertangkap (agregasi RX), padahal
+		 * AP sudah menganggap kita terasosiasi — terlihat dari deauth
+		 * yang dikirim AP setelah EAPOL timeout. Untuk uji TX data,
+		 * jendela itu cukup: lanjutkan saja.
+		 */
+		if (!doTxNull) {
+			printf("  ✗ assoc gagal\n");
+			return ret;
+		}
+		printf("  ! assoc resp tidak tertangkap — lanjut uji TX "
+		    "(AP tetap menganggap kita asosiasi sesaat)\n");
 	}
 
 	/* ── uji TX data ── */
@@ -1215,8 +1307,13 @@ run_join(const char *ssid, const char *bssid_opt, int force_chan, int doTxNull)
 				for (k = 0; k < n; k++) {
 					if (fr[k].txrep) {
 						printf("  round %d: TX report "
-						    "dw3=0x%08x\n", round,
-						    fr[k].dw3);
+						    "dw3=0x%08x [%02x %02x %02x "
+						    "%02x %02x %02x %02x %02x]\n",
+						    round, fr[k].dw3,
+						    fr[k].p[0], fr[k].p[1],
+						    fr[k].p[2], fr[k].p[3],
+						    fr[k].p[4], fr[k].p[5],
+						    fr[k].p[6], fr[k].p[7]);
 					}
 				}
 			}
@@ -1233,6 +1330,17 @@ run_join(const char *ssid, const char *bssid_opt, int force_chan, int doTxNull)
 		}
 	}
 
+	/* Tinggalkan AP dengan rapi supaya run berikutnya tidak bentrok. */
+	send_deauth(bssid, res.mac, seq++);
+
+	/*
+	 * Matikan radio sebelum keluar. Tanpa ini chip tertinggal dalam
+	 * keadaan sudah di-init (firmware jalan) dan driver vendor tidak
+	 * bisa mengambil alih tanpa cabut-colok dongle.
+	 */
+	rtwn_flow_radio_off_8188e(probe_read, probe_write, NULL);
+	printf("  radio dimatikan (chip ditinggal dalam keadaan aman)\n");
+
 	return ret;
 }
 
@@ -1245,6 +1353,7 @@ int main(int argc, char **argv)
 	int scanCh1 = 1, scanCh2 = 13;
 	const char *joinSsid = NULL, *joinBssid = NULL;
 	int doTxNull = 0, joinChan = 0;
+	const char *joinMac = NULL;
 	uint32_t a1 = 0, a2 = 0;
 	int i, ret = 0;
 
@@ -1258,6 +1367,8 @@ int main(int argc, char **argv)
 			joinSsid = argv[++i];
 		else if (strcmp(argv[i], "--bssid") == 0 && i + 1 < argc)
 			joinBssid = argv[++i];
+		else if (strcmp(argv[i], "--mac") == 0 && i + 1 < argc)
+			joinMac = argv[++i];
 		else if (strcmp(argv[i], "--chan") == 0 && i + 1 < argc)
 			joinChan = (int)hexarg(argv[++i]);
 		else if (strcmp(argv[i], "--scan") == 0) {
@@ -1296,7 +1407,7 @@ int main(int argc, char **argv)
 			ret = 1;
 			goto done;
 		}
-		ret = run_join(joinSsid, joinBssid, joinChan, doTxNull);
+		ret = run_join(joinSsid, joinBssid, joinChan, doTxNull, joinMac);
 		close_interface();
 		goto done;
 	}

@@ -61,6 +61,15 @@ int main(void)
 	kr = (*dev)->ResetDevice(dev);
 	printf("ResetDevice returned: 0x%x\n", kr);
 
+	/*
+	 * Re-enumerate = "cabut-colok" secara software. Diperlukan setelah
+	 * driver userspace meninggalkan chip dalam keadaan sudah di-init
+	 * (firmware jalan) — driver vendor tidak bisa mengambil alih tanpa
+	 * enumerasi ulang.
+	 */
+	kr = (*dev)->USBDeviceReEnumerate(dev, 0);
+	printf("ReEnumerate returned: 0x%x\n", kr);
+
 	(*dev)->USBDeviceClose(dev);
 	(*dev)->Release(dev);
 	return 0;

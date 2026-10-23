@@ -100,6 +100,9 @@ public:
 	uint32_t     fRxData;
 	uint32_t     fRxEapol;
 	uint32_t     fEncryptFail;
+	uint32_t     fTxReport;		/* laporan TX diterima */
+	uint32_t     fTxOk;		/* frame di-ACK AP */
+	uint32_t     fTxRetry;		/* frame yang butuh retry */
 	void publishStats(void);
 
 	/* net80211 */

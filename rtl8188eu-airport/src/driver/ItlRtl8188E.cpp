@@ -536,9 +536,11 @@ void ItlRtl8188E::publishStats(void)
 	char s[192];
 
 	snprintf(s, sizeof(s),
-	    "txm=%u txd=%u txe=%u txf=%u rxm=%u rxd=%u rxe=%u encf=%u pipe=%d",
+	    "txm=%u txd=%u txe=%u txf=%u rpt=%u txok=%u rty=%u "
+	    "rxm=%u rxd=%u rxe=%u encf=%u pipe=%d",
 	    (unsigned)fTxMgmt, (unsigned)fTxData, (unsigned)fTxEapol,
-	    (unsigned)fTxFail, (unsigned)fRxMgmt, (unsigned)fRxData,
+	    (unsigned)fTxFail, (unsigned)fTxReport, (unsigned)fTxOk,
+	    (unsigned)fTxRetry, (unsigned)fRxMgmt, (unsigned)fRxData,
 	    (unsigned)fRxEapol, (unsigned)fEncryptFail,
 	    fChip.usb.txPipeCount());
 	setDiag("RTL8188E-stat", s);
@@ -875,10 +877,12 @@ void ItlRtl8188E::sendFrame(mbuf_t m, struct ieee80211_node *ni, bool isMgmt)
 			buf[22] = 0x01;
 			buf[23] = 0x00;
 			/*
-			 * CCX_RPT dimatikan: laporan TX (C2H) belum diproses
-			 * dan bisa disalahartikan sebagai frame 802.11.
+			 * CCX_RPT AKTIF: laporan TX (C2H) memberi tahu apakah
+			 * frame benar-benar di-ACK AP (R88E_RPTB1_PKT_OK) dan
+			 * berapa kali retry. Tanpa ini kita buta: "sudah kirim"
+			 * dan "sampai ke AP" tidak bisa dibedakan.
 			 */
-			buf[10] &= (uint8_t)~0x08;
+			/* (bit CCX_RPT dibiarkan menyala dari builder) */
 			rtwn_usb_tx_checksum(buf, RTWN_USB_TX_DESC_SIZE);
 		}
 
@@ -1131,6 +1135,24 @@ void ItlRtl8188E::handleRx(const uint8_t *buf, uint32_t len)
 		if (info.crcError || info.icvError) {
 			/* Sama seperti OpenBSD: frame korup jangan masuk net80211. */
 			txReport = true;
+		}
+
+		/*
+		 * Laporan TX (r88e_tx_rpt_ccx) menempel langsung setelah
+		 * descriptor 24 byte — tanpa PHY status.
+		 *   rptb1 bit6   = PKT_OK (frame di-ACK AP)
+		 *   rptb2 bit0-5 = jumlah retry, bit7 = retry habis
+		 */
+		if (txReport && off + RTWN_USB_RX_DESC_SIZE + 4 <= len) {
+			const uint8_t *rpt = buf + off + RTWN_USB_RX_DESC_SIZE;
+
+			fTxReport++;
+			if (rpt[1] & 0x40) {
+				fTxOk++;
+			}
+			if (rpt[2] & 0x3f) {
+				fTxRetry++;
+			}
 		}
 
 		/*
