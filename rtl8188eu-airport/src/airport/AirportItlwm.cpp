@@ -719,6 +719,18 @@ setLinkStateGated(OSObject *target, void *arg0, void *arg1, void *arg2, void *ar
     that->bsdInterface->setLinkState((IO80211LinkState)(uint64_t)arg0);
     static_cast<AirportItlwmSkywalkInterface *>(that->fNetIf)->handleWCLLink(
         (IO80211LinkState)(uint64_t)arg0 == kIO80211NetworkLinkUp);
+    /*
+     * WAJIB juga di jalur WCL.
+     *
+     * setRunningState() memberi tahu Skywalk bahwa interface siap
+     * mengirim/menerima. Tanpa ini Skywalk tidak pernah memanggil
+     * outputStart(), sehingga semua paket data tertahan di stack:
+     * netstat Opkts=0 dan Oerrs=0 (outputPacket tidak pernah dipanggil),
+     * DHCP tidak pernah mengirim discover, dan ping tidak keluar
+     * walaupun join + RX sudah berjalan.
+     */
+    that->fNetIf->setRunningState(
+        (IO80211LinkState)(uint64_t)arg0 == kIO80211NetworkLinkUp);
     return kIOReturnSuccess;
 #else
     IOReturn ret = that->fNetIf->setLinkState((IO80211LinkState)(uint64_t)arg0, (unsigned int)(uint64_t)arg1);
