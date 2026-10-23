@@ -654,7 +654,11 @@ int ItlRtl8188E::setCamKey(int entry, uint8_t key_id, uint8_t algo,
 		memcpy(keybuf, key, copylen);
 	}
 
-	/* Tulis 4 DWORD key (16 byte AES-128). */
+	/* 
+	 * Tulis 6 DWORD (offsets +2..+7) persis seperti CAM_program_entry vendor driver:
+	 * DWORD 0..3: AES-128 key material (16 byte).
+	 * DWORD 4..5: zero padding untuk MIC/reserved di silikon RTL8188E.
+	 */
 	for (int i = 0; i < 4; i++) {
 		uint32_t k = (uint32_t)keybuf[i * 4] |
 		    ((uint32_t)keybuf[i * 4 + 1] << 8) |
@@ -662,6 +666,19 @@ int ItlRtl8188E::setCamKey(int entry, uint8_t key_id, uint8_t algo,
 		    ((uint32_t)keybuf[i * 4 + 3] << 24);
 		camWrite((uint32_t)R92C_CAM_KEY(entry, i), k);
 	}
+	camWrite((uint32_t)R92C_CAM_KEY(entry, 4), 0);
+	camWrite((uint32_t)R92C_CAM_KEY(entry, 5), 0);
+
+	/* 
+	 * Tulis CTL0 (offset +0) lalu CTL1 (offset +1) seperti driver vendor:
+	 * Untuk Pairwise (entry >= 4), key_id HARUS 0.
+	 */
+	uint32_t ctl0 = ((uint32_t)macaddr[0] << 16) |
+	    ((uint32_t)macaddr[1] << 24) |
+	    (((uint32_t)algo & 0x07) << 2) |
+	    ((entry >= 4) ? 0 : ((uint32_t)key_id & 0x03)) |
+	    R92C_CAM_VALID;
+	camWrite((uint32_t)R92C_CAM_CTL0(entry), ctl0);
 
 	/* Tulis CTL1: MAC[2..5]. */
 	uint32_t ctl1 = (uint32_t)macaddr[2] |
@@ -669,14 +686,6 @@ int ItlRtl8188E::setCamKey(int entry, uint8_t key_id, uint8_t algo,
 	    ((uint32_t)macaddr[4] << 16) |
 	    ((uint32_t)macaddr[5] << 24);
 	camWrite((uint32_t)R92C_CAM_CTL1(entry), ctl1);
-
-	/* Tulis CTL0 terakhir untuk memvalidasi entri CAM. */
-	uint32_t ctl0 = ((uint32_t)macaddr[0] << 16) |
-	    ((uint32_t)macaddr[1] << 24) |
-	    (((uint32_t)algo & 0x07) << 2) |
-	    ((uint32_t)key_id & 0x03) |
-	    R92C_CAM_VALID;
-	camWrite((uint32_t)R92C_CAM_CTL0(entry), ctl0);
 
 	return 0;
 }
@@ -1147,8 +1156,8 @@ void ItlRtl8188E::sendFrame(mbuf_t m, struct ieee80211_node *ni, bool isMgmt)
 			if (is_prot && k && k->k_cipher == IEEE80211_CIPHER_CCMP) {
 				/* R92C_TXDW1_CIPHER_AES (bit 22-23 = 3 -> byte 6 |= 0xc0) */
 				buf[6] |= 0xc0;
-				/* R88E_TXDW2_AGGBK (DW2 bit 16 -> byte 10 |= 0x01) */
-				buf[10] |= 0x01;
+				/* R88E_TXDW2_AGGBK & CCX (DW2 bit 16..22 -> byte 10 |= 0x70) seperti driver vendor */
+				buf[10] |= 0x70;
 			}
 
 			uint16_t txdseq = seq & 0x0fff;

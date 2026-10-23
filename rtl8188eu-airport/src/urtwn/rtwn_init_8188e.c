@@ -380,8 +380,16 @@ rtwn_core_config_8188e(rtwn_read_fn rd, rtwn_write_fn wr, void *ctx,
 	 * Hardware Realtek melakukan offload enkripsi & dekripsi AES-CCMP melalui
 	 * tabel CAM (registers 0x670/0x674).
 	 */
+	/*
+	 * R92C_SECCFG:
+	 * TXENC_ENA (0x0004) + RXENC_ENA (0x0008) + TXBCKEY_DEF (0x0040) + RXBCKEY_DEF (0x0080) = 0x00cc.
+	 * JANGAN set TXUCKEY_DEF (0x0001) atau RXUCKEY_DEF (0x0002)!
+	 * Bit 0 dan 1 memaksa chip mencari kunci unicast di Default Key (entri 0-3).
+	 * Karena kunci WPA2 Pairwise dipasang di CAM Entri 4, bit 0 dan 1 HARUS 0
+	 * agar silikon hardware membaca kunci dari CAM Entri 4 (BSSID AP).
+	 * Persis seperti disassembly driver vendor RtWlanU (andb $-0x2, 0x680).
+	 */
 	wr16(rd, wr, ctx, R92C_SECCFG,
-	    R92C_SECCFG_TXUCKEY_DEF | R92C_SECCFG_RXUCKEY_DEF |
 	    R92C_SECCFG_TXENC_ENA   | R92C_SECCFG_RXENC_ENA   |
 	    R92C_SECCFG_TXBCKEY_DEF | R92C_SECCFG_RXBCKEY_DEF);
 

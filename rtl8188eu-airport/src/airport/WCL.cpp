@@ -721,8 +721,20 @@ void AirportItlwmSkywalkInterface::handleWCLLink(bool up)
         wclBssValid = false;
         instance->postMessage(this, AirportWCL::LinkStatus, &event, sizeof(event), true);
     }
-    if (up && joinPending && firstBeaconNotified)
+    if (up && joinPending) {
+        if (!firstBeaconNotified) {
+            firstBeaconNotified = true;
+            AirportWCL::LinkStatusEvent link = {};
+            memcpy(link.bssid, joinBSSID, sizeof(link.bssid));
+            link.up = 1;
+            link.reason = 255;
+            wclLinkIndicated = true;
+            gWclLink++;
+            publishWclStats(this);
+            instance->postMessage(this, AirportWCL::LinkStatus, &link, sizeof(link), true);
+        }
         finishWCLJoin(0, 0, kIOReturnSuccess);
+    }
     updateWCLLinkQuality(true);
 }
 
