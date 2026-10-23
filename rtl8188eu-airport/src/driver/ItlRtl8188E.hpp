@@ -119,6 +119,13 @@ public:
 	 */
 	uint32_t     fJoinTry;
 	uint8_t      fRsnVariant;
+	/*
+	 * RX: berapa frame yang benar-benar lolos ke network stack
+	 * (ml dari ieee80211_inputm). Selisih dengan fRxData menunjukkan
+	 * net80211 membuang frame — mis. dekripsi gagal atau node salah.
+	 */
+	uint32_t     fRxDelivered;
+	uint32_t     fRxDataLogged;
 	void         applyRsnVariant(uint32_t attempt);
 	void publishStats(void);
 

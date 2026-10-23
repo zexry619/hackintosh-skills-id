@@ -94,6 +94,8 @@ bool ItlRtl8188E::init()
 	fTxAuthReq = fTxAssocReq = fRxAuth = fRxAssocResp = 0;
 	fJoinTry = 0;
 	fRsnVariant = 0;
+	fRxDelivered = 0;
+	fRxDataLogged = 0;
 	return true;
 }
 
@@ -544,7 +546,7 @@ void ItlRtl8188E::publishStats(void)
 	snprintf(s, sizeof(s),
 	    "txm=%u txd=%u txe=%u txf=%u rpt=%u txok=%u rty=%u "
 	    "rxm=%u rxd=%u rxe=%u encf=%u pipe=%d "
-	    "auth=%u/%u assoc=%u/%u try=%u rsnv=%u",
+	    "auth=%u/%u assoc=%u/%u try=%u rsnv=%u dlv=%u",
 	    (unsigned)fTxMgmt, (unsigned)fTxData, (unsigned)fTxEapol,
 	    (unsigned)fTxFail, (unsigned)fTxReport, (unsigned)fTxOk,
 	    (unsigned)fTxRetry, (unsigned)fRxMgmt, (unsigned)fRxData,
@@ -552,7 +554,8 @@ void ItlRtl8188E::publishStats(void)
 	    fChip.usb.txPipeCount(),
 	    (unsigned)fTxAuthReq, (unsigned)fRxAuth,
 	    (unsigned)fTxAssocReq, (unsigned)fRxAssocResp,
-	    (unsigned)fJoinTry, (unsigned)fRsnVariant);
+	    (unsigned)fJoinTry, (unsigned)fRsnVariant,
+	    (unsigned)fRxDelivered);
 	setDiag("RTL8188E-stat", s);
 }
 
@@ -1356,6 +1359,24 @@ void ItlRtl8188E::handleRx(const uint8_t *buf, uint32_t len)
 				size_t llcOff = (wh->i_fc[0] & IEEE80211_FC0_SUBTYPE_QOS) ? 26 : 24;
 
 				fRxData++;
+				/*
+				 * Sampel 3 frame data pertama: apakah bit
+				 * Protected menyala (frame terenkripsi dari
+				 * udara) dan berapa panjangnya. Kalau bit
+				 * ini tidak menyala padahal RSN aktif,
+				 * net80211 akan membuang frame.
+				 */
+				if (fRxDataLogged < 3) {
+					fRxDataLogged++;
+					IOLog(LOGP "RX data fc=%02x%02x len=%u "
+					    "prot=%d qos=%d\n",
+					    wh->i_fc[0], wh->i_fc[1],
+					    (unsigned)flen,
+					    (wh->i_fc[1] &
+					    IEEE80211_FC1_PROTECTED) ? 1 : 0,
+					    (wh->i_fc[0] &
+					    IEEE80211_FC0_SUBTYPE_QOS) ? 1 : 0);
+				}
 				if (flen >= llcOff + 8) {
 					const uint8_t *p = buf + foff + llcOff;
 					uint16_t et = ((uint16_t)p[6] << 8) | p[7];
@@ -1422,7 +1443,24 @@ void ItlRtl8188E::handleRx(const uint8_t *buf, uint32_t len)
 			if (m) {
 				if (mbuf_copyback(m, 0, flen, buf + foff,
 				    MBUF_WAITOK) == 0) {
-					ni = ieee80211_find_rxnode(&fIc, wh);
+					/*
+					 * Dalam STA mode semua frame data
+					 * datang dari/via AP, jadi node-nya
+					 * ic_bss — satu-satunya node yang
+					 * memegang PTK/GTK hasil handshake.
+					 * find_rxnode() bisa mengembalikan
+					 * node lain tanpa key, dan net80211
+					 * lalu membuang frame karena gagal
+					 * dekripsi.
+					 */
+					if (fIc.ic_state ==
+					    IEEE80211_S_RUN && fIc.ic_bss) {
+						ni = ieee80211_ref_node(
+						    fIc.ic_bss);
+					} else {
+						ni = ieee80211_find_rxnode(
+						    &fIc, wh);
+					}
 					memset(&rxi, 0, sizeof(rxi));
 					/*
 					 * Port net80211 ini memakai RSSI ternormalisasi
@@ -1454,6 +1492,8 @@ advance:
 		off = next;
 	}
 
+	if (ml.ml_len > 0)
+		fRxDelivered += ml.ml_len;
 	if_input(ifp, &ml);
 }
 
