@@ -30,6 +30,16 @@ M1 (chip hidup) ✅ · M1c (MAC/xtal dari EFUSE) ✅ · M2 (scan) ✅ ·
 > tethering; kalau perlu vendor lagi, jalankan dari Terminal yang punya
 > izin App Management.
 >
+> **Update 23 Okt 07:05 — Wi-Fi vendor pulih + autoload.**
+> Reboot 06:59 sempat tanpa driver: entri AuxKC untuk `RtWlanU` menyimpan
+> path lama `/Library/Extensions.disabled-m1/...` sehingga tidak ikut
+> termuat saat boot. Solusi yang terbukti: `kmutil load -z -p
+> /Library/Extensions/RtWlanU.kext` **berhasil saat runtime** (tanpa reboot).
+> Sekarang ada LaunchDaemon `com.zekri.realtek-autoload`
+> (`scripts/install-vendor-autoload.sh`) yang memuat kedua kext vendor
+> 4 detik setelah boot. Status terverifikasi: `en2` MAC `98:03:8e:9e:bc:24`,
+> IP 192.168.1.235, default route via 192.168.1.1, HTTPS 200.
+>
 > **Update 23 Okt 07:00 — koreksi penting: hot-load TIDAK mungkin.**
 > LaunchDaemon sudah dicabut. `kmutil load -z -p` untuk kext ini selalu
 > `Code=28 "requires a reboot"` (sudah dicoba: clear-staging, hapus entri
