@@ -496,8 +496,12 @@ void rtwnBulkComplete(void *owner, void *param, IOReturn status, uint32_t bytes)
 		} else {
 			self->fTxFail++;
 		}
+		OSDecrementAtomic(&self->fTxInFlight);
 		if (ctx->txCb) {
 			ctx->txCb(ctx->txCtx, status == kIOReturnSuccess ? 0 : -1);
+		}
+		if (self->fTxInFlight <= 8 && self->fTxDoneCb) {
+			self->fTxDoneCb(self->fTxDoneCtx);
 		}
 		/*
 		 * ATURAN A1: TIDAK membebaskan ctx/md di sini.
@@ -601,6 +605,7 @@ bool RtwnUsb::bulkOpen(IOUSBHostInterface *interface)
 
 	IOLog(LOGP "usb: pipe bulk IN=%p OUT=%d (ep0=%p) siap\n",
 	    (void *)fPipeIn, fNumOut, (void *)fPipeOut);
+	fTxInFlight = 0;
 	for (int i = 0; i < 3; i++) {
 		fPipeStalled[i] = false;
 	}
@@ -615,6 +620,7 @@ void RtwnUsb::bulkClose()
 	 * dan tidak akan memakai pipe yang sebentar lagi dibebaskan.
 	 */
 	fBulkClosing = true;
+	fTxInFlight = 0;
 
 	if (fPipeIn) {
 		fPipeIn->abort(0, kIOReturnAborted);
@@ -677,6 +683,9 @@ bool RtwnUsb::bulkSend(const uint8_t *data, uint32_t len, rtwn_tx_cb cb,
 	IOUSBHostPipe *pipe;
 
 	if (!data || len == 0 || fBulkClosing || !fAttached || fNumOut <= 0) {
+		return false;
+	}
+	if (fTxInFlight >= 24) {
 		return false;
 	}
 	if (pipeIdx < 0) {
@@ -747,5 +756,6 @@ bool RtwnUsb::bulkSend(const uint8_t *data, uint32_t len, rtwn_tx_cb cb,
 		fTxFail++;
 		return false;
 	}
+	OSIncrementAtomic(&fTxInFlight);
 	return true;
 }

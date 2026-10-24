@@ -833,6 +833,39 @@ IOReturn AirportItlwm::networkInterfaceNotification(
 
 extern const char* hexdump(uint8_t *buf, size_t len);
 
+static inline bool isPacketHighPriority(mbuf_t m)
+{
+    if (!m || mbuf_type(m) == MBUF_TYPE_FREE || !(mbuf_flags(m) & MBUF_PKTHDR))
+        return false;
+    size_t len = mbuf_len(m);
+    if (len < sizeof(ether_header_t))
+        return false;
+    const ether_header_t *eh = (const ether_header_t *)mbuf_data(m);
+    uint16_t et = ntohs(eh->ether_type);
+    if (et == 0x0806 || et == 0x888e) /* ARP or EAPOL */
+        return true;
+    if (et == 0x0800 && len >= sizeof(ether_header_t) + 20) { /* IPv4 */
+        const uint8_t *ip = (const uint8_t *)mbuf_data(m) + sizeof(ether_header_t);
+        uint8_t proto = ip[9];
+        if (proto == 1 /* ICMP */ || proto == 2 /* IGMP */)
+            return true;
+        if (proto == 17 && len >= sizeof(ether_header_t) + 28) { /* UDP DNS */
+            uint16_t dport = ((uint16_t)ip[22] << 8) | ip[23];
+            if (dport == 53) return true;
+        }
+    } else if (et == 0x86dd && len >= sizeof(ether_header_t) + 40) { /* IPv6 */
+        const uint8_t *ip6 = (const uint8_t *)mbuf_data(m) + sizeof(ether_header_t);
+        uint8_t nh = ip6[6];
+        if (nh == 58 /* ICMPv6 */)
+            return true;
+        if (nh == 17 && len >= sizeof(ether_header_t) + 48) { /* UDP DNS */
+            uint16_t dport = ((uint16_t)ip6[42] << 8) | ip6[43];
+            if (dport == 53) return true;
+        }
+    }
+    return false;
+}
+
 #ifdef AIRPORT_WCL
 UInt32 AirportItlwm::outputPacket(mbuf_t m, void *param)
 {
@@ -860,9 +893,14 @@ UInt32 AirportItlwm::enqueuePacket(mbuf_t m)
     auto ic = fHalService->get80211Controller();
     auto ifp = &ic->ic_ac.ac_if;
     if (ic->ic_state == IEEE80211_S_RUN && ifp->if_snd.queue &&
-        m && mbuf_type(m) != MBUF_TYPE_FREE && (mbuf_flags(m) & MBUF_PKTHDR) &&
-        ifp->if_snd.queue->lockEnqueue(m))
-        return kIOReturnOutputSuccess;
+        m && mbuf_type(m) != MBUF_TYPE_FREE && (mbuf_flags(m) & MBUF_PKTHDR)) {
+        if (isPacketHighPriority(m)) {
+            ifp->if_snd.queue->lockPrepend(m);
+            return kIOReturnOutputSuccess;
+        }
+        if (ifp->if_snd.queue->lockEnqueue(m))
+            return kIOReturnOutputSuccess;
+    }
     if (ifp->netStat)
         ++ifp->netStat->outputErrors;
     if (m && mbuf_type(m) != MBUF_TYPE_FREE)
@@ -905,7 +943,14 @@ UInt32 AirportItlwm::outputPacket(mbuf_t m, void *param)
         if (dump)
             IOFree((void*)dump, 3 * len + 1);
     }
-    if (!ifp->if_snd.queue->lockEnqueue(m)) {
+    bool enqueued = false;
+    if (isPacketHighPriority(m)) {
+        ifp->if_snd.queue->lockPrepend(m);
+        enqueued = true;
+    } else if (ifp->if_snd.queue->lockEnqueue(m)) {
+        enqueued = true;
+    }
+    if (!enqueued) {
         freePacket(m);
         ret = kIOReturnOutputDropped;
     }

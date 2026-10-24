@@ -28,6 +28,7 @@ typedef void (*RtwnTraceFn)(void *ctx, const char *msg);
 /* Callback transport bulk. */
 typedef void (*rtwn_rx_cb)(void *ctx, const uint8_t *data, uint32_t len);
 typedef void (*rtwn_tx_cb)(void *ctx, int status);
+typedef void (*rtwn_tx_done_cb)(void *ctx);
 
 class RtwnUsb;
 
@@ -73,12 +74,17 @@ class RtwnUsb {
 public:
 	void setTrace(RtwnTraceFn fn, void *ctx) { fTrace = fn; fTraceCtx = ctx; }
 
-	RtwnUsb() : fTimeoutMs(250), fMaxFails(12), fConsecutiveFails(0), fInOk(0), fInFail(0), fOutOk(0), fOutFail(0),
-	    fTrace(nullptr), fTraceCtx(nullptr), fDevice(nullptr),
-	    fInterface(nullptr), fClient(nullptr), fOpen(false),
-	    fCtlLock(nullptr), fCtlMd(nullptr), fCtlBuf(nullptr), fCtlCap(0),
+	RtwnUsb() : fPipeIn(nullptr), fPipeOut(nullptr), fNumOut(0),
+	    fRxCb(nullptr), fRxCtx(nullptr), fRxCount(0), fTxOk(0), fTxFail(0),
+	    fTxInFlight(0), fTxDoneCb(nullptr), fTxDoneCtx(nullptr),
 	    fBulkClosing(false), fAttached(false), fTxDone(nullptr),
-	    fBulkLock(nullptr), fAlive(nullptr) {
+	    fBulkLock(nullptr), fAlive(nullptr),
+	    fCtlLock(nullptr), fCtlMd(nullptr), fCtlBuf(nullptr), fCtlCap(0),
+	    fTimeoutMs(250), fMaxFails(12), fConsecutiveFails(0),
+	    fInOk(0), fInFail(0), fOutOk(0), fOutFail(0),
+	    fTrace(nullptr), fTraceCtx(nullptr),
+	    fDevice(nullptr), fInterface(nullptr), fClient(nullptr), fOpen(false) {
+		fPipeOutAll[0] = fPipeOutAll[1] = fPipeOutAll[2] = nullptr;
 		fPipeStalled[0] = false;
 		fPipeStalled[1] = false;
 		fPipeStalled[2] = false;
@@ -152,6 +158,9 @@ public:
 	uint32_t txFail() const { return fTxFail; }
 
 	void setRxCallback(rtwn_rx_cb cb, void *ctx) { fRxCb = cb; fRxCtx = ctx; }
+	void setTxDoneCb(rtwn_tx_done_cb cb, void *ctx) { fTxDoneCb = cb; fTxDoneCtx = ctx; }
+	int32_t txInFlight() const { return fTxInFlight; }
+	bool txBusy() const { return fTxInFlight >= 16; }
 
 private:
 	/* Satu control transfer dengan batas waktu sendiri (buffers di heap). */
@@ -177,6 +186,9 @@ public:
 	uint32_t            fRxCount;
 	uint32_t            fTxOk;
 	uint32_t            fTxFail;
+	volatile int32_t    fTxInFlight;
+	rtwn_tx_done_cb     fTxDoneCb;
+	void               *fTxDoneCtx;
 
 	/*
 	 * Di Publik karena completion callback (fungsi bebas di

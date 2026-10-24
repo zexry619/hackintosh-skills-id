@@ -147,6 +147,7 @@ public:
 	 */
 	static const uint32_t kRxQueueDepth = 256;
 	IOTimerEventSource *fRxTimer;
+	IOTimerEventSource *fTxTimer;
 	IOLock             *fRxLock;
 	uint8_t            *fRxBuf[kRxQueueDepth];
 	uint32_t            fRxLen[kRxQueueDepth];
@@ -169,7 +170,9 @@ public:
 	    struct ieee80211_node *ni, struct ieee80211_key *k);
 	static void deleteKeyCb(struct ieee80211com *ic,
 	    struct ieee80211_node *ni, struct ieee80211_key *k);
+	static void txDoneHook(void *ctx);
 	void rxTimerAction(IOTimerEventSource *timer);
+	void txTimerAction(IOTimerEventSource *timer);
 	void rxQueueFree(void);
 
 	/* Hardware CAM Security Engine (registers 0x670/0x674/0x678) */

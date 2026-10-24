@@ -79,6 +79,7 @@ bool ItlRtl8188E::init()
 	fSawRx = false;
 	fTxQueueSize = 64;
 	fRxTimer = nullptr;
+	fTxTimer = nullptr;
 	fRxLock = nullptr;
 	fRxHead = 0;
 	fRxCount = 0;
@@ -125,6 +126,13 @@ void ItlRtl8188E::free()
 			getMainWorkLoop()->removeEventSource(fRxTimer);
 		fRxTimer->release();
 		fRxTimer = nullptr;
+	}
+	if (fTxTimer) {
+		fTxTimer->cancelTimeout();
+		if (getMainWorkLoop())
+			getMainWorkLoop()->removeEventSource(fTxTimer);
+		fTxTimer->release();
+		fTxTimer = nullptr;
 	}
 	rxQueueFree();
 	if (fRxLock) {
@@ -240,6 +248,7 @@ int ItlRtl8188E::initChip(void)
 void ItlRtl8188E::stopChip(void)
 {
 	if (fBulkReady) {
+		fChip.usb.setTxDoneCb(nullptr, nullptr);
 		fChip.usb.setRxCallback(nullptr, nullptr);
 		fChip.usb.bulkClose();
 		fBulkReady = false;
@@ -348,11 +357,11 @@ bool ItlRtl8188E::attach(IOPCIDevice *device)
 	if_attach(ifp);
 	ieee80211_ifattach(ifp, getController());
 	/*
-	 * Batasi antrean TX (if_snd) ke 128 paket (bukan default 2048).
+	 * Batasi antrean TX (if_snd) ke 64 paket (bukan default 2048).
 	 * Antrean 2048 paket memicu bufferbloat parah hingga ~700 ms saat upload.
-	 * 128 paket memberikan throughput maksimal sekaligus menjaga latensi < 20 ms.
+	 * 64 paket (~25 ms) memberikan throughput maksimal sekaligus menjaga latensi sub-20 ms.
 	 */
-	ifq_set_maxlen(&ifp->if_snd, 128);
+	ifq_set_maxlen(&ifp->if_snd, 64);
 	ieee80211_media_init(ifp);
 
 	fOrigNewstate = fIc.ic_newstate;
@@ -373,12 +382,22 @@ bool ItlRtl8188E::attach(IOPCIDevice *device)
 	fRxTimer = IOTimerEventSource::timerEventSource(this,
 	    OSMemberFunctionCast(IOTimerEventSource::Action, this,
 	    &ItlRtl8188E::rxTimerAction));
-	if (!fRxLock || !fRxTimer || !getMainWorkLoop() ||
-	    getMainWorkLoop()->addEventSource(fRxTimer) != kIOReturnSuccess) {
-		IOLog(LOGP "gagal membuat RX event source\n");
+	fTxTimer = IOTimerEventSource::timerEventSource(this,
+	    OSMemberFunctionCast(IOTimerEventSource::Action, this,
+	    &ItlRtl8188E::txTimerAction));
+	if (!fRxLock || !fRxTimer || !fTxTimer || !getMainWorkLoop() ||
+	    getMainWorkLoop()->addEventSource(fRxTimer) != kIOReturnSuccess ||
+	    getMainWorkLoop()->addEventSource(fTxTimer) != kIOReturnSuccess) {
+		IOLog(LOGP "gagal membuat RX/TX event source\n");
 		if (fRxTimer) {
+			getMainWorkLoop()->removeEventSource(fRxTimer);
 			fRxTimer->release();
 			fRxTimer = nullptr;
+		}
+		if (fTxTimer) {
+			getMainWorkLoop()->removeEventSource(fTxTimer);
+			fTxTimer->release();
+			fTxTimer = nullptr;
 		}
 		if (fRxLock) {
 			IOLockFree(fRxLock);
@@ -390,15 +409,21 @@ bool ItlRtl8188E::attach(IOPCIDevice *device)
 		return false;
 	}
 	fRxTimer->enable();
+	fTxTimer->enable();
 	fRxRunning = true;
+	fChip.usb.setTxDoneCb(txDoneHook, this);
 	fChip.usb.setRxCallback(rxCb, this);
 	if (!fChip.usb.bulkQueueRx(16)) {
 		IOLog(LOGP "gagal antre RX\n");
 		fRxRunning = false;
+		fChip.usb.setTxDoneCb(nullptr, nullptr);
 		fChip.usb.setRxCallback(nullptr, nullptr);
 		getMainWorkLoop()->removeEventSource(fRxTimer);
 		fRxTimer->release();
 		fRxTimer = nullptr;
+		getMainWorkLoop()->removeEventSource(fTxTimer);
+		fTxTimer->release();
+		fTxTimer = nullptr;
 		ieee80211_ifdetach(&fIc.ic_if);
 		fIfAttached = false;
 		stopChip();
@@ -441,6 +466,13 @@ void ItlRtl8188E::detach(IOPCIDevice *device)
 			getMainWorkLoop()->removeEventSource(fRxTimer);
 		fRxTimer->release();
 		fRxTimer = nullptr;
+	}
+	if (fTxTimer) {
+		fTxTimer->cancelTimeout();
+		if (getMainWorkLoop())
+			getMainWorkLoop()->removeEventSource(fTxTimer);
+		fTxTimer->release();
+		fTxTimer = nullptr;
 	}
 	rxQueueFree();
 	if (fRxLock) {
@@ -573,14 +605,14 @@ void ItlRtl8188E::publishStats(void)
 
 	snprintf(s, sizeof(s),
 	    "txm=%u txd=%u txe=%u txf=%u rpt=%u txok=%u rty=%u "
-	    "rxm=%u rxd=%u rxe=%u encf=%u pipe=%d "
+	    "rxm=%u rxd=%u rxe=%u encf=%u pipe=%d inf=%d "
 	    "auth=%u/%u assoc=%u/%u try=%u rsnv=%u dlv=%u "
 	    "st=%d xf=%08x sndq=%d",
 	    (unsigned)fTxMgmt, (unsigned)fTxData, (unsigned)fTxEapol,
 	    (unsigned)fTxFail, (unsigned)fTxReport, (unsigned)fTxOk,
 	    (unsigned)fTxRetry, (unsigned)fRxMgmt, (unsigned)fRxData,
 	    (unsigned)fRxEapol, (unsigned)fEncryptFail,
-	    fChip.usb.txPipeCount(),
+	    fChip.usb.txPipeCount(), fChip.usb.txInFlight(),
 	    (unsigned)fTxAuthReq, (unsigned)fRxAuth,
 	    (unsigned)fTxAssocReq, (unsigned)fRxAssocResp,
 	    (unsigned)fJoinTry, (unsigned)fRsnVariant,
@@ -1014,6 +1046,54 @@ void ItlRtl8188E::sendFrame(mbuf_t m, struct ieee80211_node *ni, bool isMgmt)
 	}
 
 	/*
+	 * Cek jenis frame (EAPOL, ARP, ICMP ping, DNS) SEBELUM enkripsi CCMP!
+	 * Setelah ieee80211_encrypt(), payload 802.11 sudah menjadi ciphertext AES,
+	 * sehingga pengecekan ether_type / IP proto di bawah tidak akan pernah cocok
+	 * jika dilakukan setelah enkripsi.
+	 */
+	bool isEapol = false;
+	bool isControl = isMgmt;
+	if (!isMgmt) {
+		size_t llcOff = (wh[0] & IEEE80211_FC0_SUBTYPE_QOS) ? 26 : 24;
+		if (len >= llcOff + 8) {
+			uint16_t et = ((uint16_t)wh[llcOff + 6] << 8) | wh[llcOff + 7];
+			if (et == 0x888e) {
+				isEapol = true;
+				isControl = true;
+				fTxEapol++;
+				IOLog(LOGP "TX EAPOL handshake frame (len %u)\n", (unsigned)len);
+			} else if (et == 0x0806) {
+				/* ARP: latency-sensitive */
+				isControl = true;
+			} else if (et == 0x0800 && len >= llcOff + 8 + 20) {
+				/* IPv4: periksa protokol di byte 9 dari header IP (1 = ICMP / ping, 2 = IGMP) */
+				uint8_t proto = wh[llcOff + 8 + 9];
+				if (proto == 1 /* ICMP */ || proto == 2 /* IGMP */) {
+					isControl = true;
+				} else if (proto == 17 && len >= llcOff + 8 + 28) {
+					/* UDP: port 53 (DNS) */
+					uint16_t dport = ((uint16_t)wh[llcOff + 8 + 22] << 8) | wh[llcOff + 8 + 23];
+					if (dport == 53) {
+						isControl = true;
+					}
+				}
+			} else if (et == 0x86dd && len >= llcOff + 8 + 40) {
+				/* IPv6: periksa next header (byte 6) (58 = ICMPv6) */
+				uint8_t nexthdr = wh[llcOff + 8 + 6];
+				if (nexthdr == 58 /* ICMPv6 */) {
+					isControl = true;
+				} else if (nexthdr == 17 && len >= llcOff + 8 + 48) {
+					/* UDP: port 53 (DNS) */
+					uint16_t dport = ((uint16_t)wh[llcOff + 8 + 42] << 8) | wh[llcOff + 8 + 43];
+					if (dport == 53) {
+						isControl = true;
+					}
+				}
+			}
+		}
+	}
+
+	/*
 	 * Kripto software: 8188E memakai software CCMP di net80211 (SECCFG=0x0000)
 	 * yang sudah terbukti sukses dua arah pada v0.7.5 (ping) & v0.7.6/v0.7.7 (DHCP),
 	 * ditambah perbaikan alokasi cluster mbuf_get_mhlen() (6e43ea0) untuk frame > 88B.
@@ -1042,36 +1122,6 @@ void ItlRtl8188E::sendFrame(mbuf_t m, struct ieee80211_node *ni, bool isMgmt)
 		m = enc;
 		wh = (uint8_t *)mbuf_data(m);
 		len = mbuf_pkthdr_len(m);
-	}
-
-	bool isEapol = false;
-	bool isControl = isMgmt;
-	if (!isMgmt) {
-		size_t llcOff = (wh[0] & IEEE80211_FC0_SUBTYPE_QOS) ? 26 : 24;
-		if (len >= llcOff + 8) {
-			uint16_t et = ((uint16_t)wh[llcOff + 6] << 8) | wh[llcOff + 7];
-			if (et == 0x888e) {
-				isEapol = true;
-				isControl = true;
-				fTxEapol++;
-				IOLog(LOGP "TX EAPOL handshake frame (len %u)\n", (unsigned)len);
-			} else if (et == 0x0806) {
-				/* ARP: latency-sensitive */
-				isControl = true;
-			} else if (et == 0x0800 && len >= llcOff + 8 + 20) {
-				/* IPv4: periksa protokol di byte 9 dari header IP (1 = ICMP / ping) */
-				uint8_t proto = wh[llcOff + 8 + 9];
-				if (proto == 1 /* ICMP */ || proto == 2 /* IGMP */) {
-					isControl = true;
-				}
-			} else if (et == 0x86dd && len >= llcOff + 8 + 40) {
-				/* IPv6: periksa next header (byte 6) (58 = ICMPv6) */
-				uint8_t nexthdr = wh[llcOff + 8 + 6];
-				if (nexthdr == 58 /* ICMPv6 */) {
-					isControl = true;
-				}
-			}
-		}
 	}
 
 	bcast = IEEE80211_IS_MULTICAST(wh + 4);
@@ -1218,6 +1268,10 @@ void ItlRtl8188E::sendFrame(mbuf_t m, struct ieee80211_node *ni, bool isMgmt)
 			 * jika sinyal turun (MCS 7 -> MCS 6..0 -> 54M..1M).
 			 */
 			uint8_t rate = (!bcast && !isEapol && !isMgmt) ? 0x13 : 0x00;
+			/* Aktifkan SGI (Short Guard Interval 400 ns) jika AP mendukung (72.2 Mbps) */
+			if (rate == 0x13 && fIc.ic_bss && (fIc.ic_bss->ni_htcaps & IEEE80211_HTCAP_SGI20)) {
+				rate |= 0x40;
+			}
 			buf[10] &= ~0x08;	/* pastikan CCX_RPT mati agar tidak membanjiri Bulk-IN */
 			buf[20] = rate;
 			buf[21] = 0xff;
@@ -1261,6 +1315,28 @@ void ItlRtl8188E::sendFrame(mbuf_t m, struct ieee80211_node *ni, bool isMgmt)
 	}
 }
 
+void ItlRtl8188E::txDoneHook(void *ctx)
+{
+	ItlRtl8188E *me = (ItlRtl8188E *)ctx;
+	if (me && me->fTxTimer) {
+		me->fTxTimer->setTimeoutMS(0);
+	}
+}
+
+void ItlRtl8188E::txTimerAction(IOTimerEventSource *timer)
+{
+	(void)timer;
+	if (!fIfAttached)
+		return;
+	struct _ifnet *ifp = &fIc.ic_if;
+	if (ifp->if_snd.queue) {
+		ifq_clr_oactive(&ifp->if_snd);
+		if (!ifq_empty(&ifp->if_snd)) {
+			txStart(ifp);
+		}
+	}
+}
+
 void ItlRtl8188E::txStart(struct _ifnet *ifp)
 {
 	struct ieee80211com *ic = &fIc;
@@ -1293,7 +1369,18 @@ void ItlRtl8188E::txStart(struct _ifnet *ifp)
 	    (ic->ic_xflags & IEEE80211_F_TX_MGMT_ONLY))
 		return;
 
-	while ((m = ifq_dequeue(&ifp->if_snd)) != nullptr) {
+	/*
+	 * Pacing / Flow Control:
+	 * Hanya kirim frame data jika antrean USB belum sibuk (!txBusy).
+	 * Jika antrean USB penuh, tandai ifq_set_oactive dan hentikan
+	 * mengambil paket dari if_snd. Paket tetap aman di antrean.
+	 * Saat completion USB mengurangi fTxInFlight, txDoneHook akan
+	 * membangunkan fTxTimer untuk membersihkan oactive dan memanggil
+	 * txStart kembali.
+	 */
+	while (!fChip.usb.txBusy()) {
+		m = ifq_dequeue(&ifp->if_snd);
+		if (!m) break;
 		ni = nullptr;
 		m = ieee80211_encap(ifp, m, &ni);
 		if (!m) {
@@ -1302,6 +1389,12 @@ void ItlRtl8188E::txStart(struct _ifnet *ifp)
 			continue;
 		}
 		sendFrame(m, ni, false);
+	}
+
+	if (fChip.usb.txBusy()) {
+		ifq_set_oactive(&ifp->if_snd);
+	} else {
+		ifq_clr_oactive(&ifp->if_snd);
 	}
 }
 
