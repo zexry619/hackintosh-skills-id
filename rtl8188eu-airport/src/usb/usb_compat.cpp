@@ -644,7 +644,7 @@ bool RtwnUsb::bulkQueueRx(uint32_t count)
 			return false;
 		}
 		memset(ctx, 0, sizeof(RtwnBulkCtx));
-		const uint32_t cap = 2048;	/* cukup untuk frame + descriptor */
+		const uint32_t cap = 16384;	/* cukup untuk frame besar + agregasi */
 		ctx->md = IOBufferMemoryDescriptor::withCapacity(cap, kIODirectionInOut);
 		if (!ctx->md) {
 			IOFree(ctx, sizeof(RtwnBulkCtx));

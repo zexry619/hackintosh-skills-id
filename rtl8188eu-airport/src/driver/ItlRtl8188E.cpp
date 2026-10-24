@@ -187,6 +187,27 @@ int ItlRtl8188E::initChip(void)
 		IOLog(LOGP "power-on gagal\n");
 		return -1;
 	}
+
+	/*
+	 * Baca EFUSE langsung SEBELUM rtwn_seq_dma_init & rtwn_seq_load_firmware!
+	 * rtwn_seq_read_efuse_offload menulis 0xf4 ke register 0x209 (BCN_HEAD)
+	 * dan mereset MCU 8051 8 kali bila gagal.
+	 */
+	if (rtwn_seq_read_efuse_direct_8188e(&ef, halRead, halWrite,
+	    this) == 0 && ef.efuse_ok) {
+		memcpy(res.mac, ef.mac, 6);
+		res.xtal = ef.xtal;
+	} else if (rtwn_seq_read_efuse_offload(&ef, halRead, halWrite, this) == 0 &&
+	    ef.efuse_ok) {
+		memcpy(res.mac, ef.mac, 6);
+		res.xtal = ef.xtal;
+	} else {
+		IOLog(LOGP "EFUSE gagal, pakai MAC default\n");
+		res.mac[0] = 0x02;
+		res.mac[5] = 0x01;
+		res.xtal = 0x20;
+	}
+
 	if (rtwn_seq_dma_init(&res, halRead, halWrite, this, 2) != 0) {
 		IOLog(LOGP "DMA/LLT gagal\n");
 		return -1;
@@ -197,21 +218,6 @@ int ItlRtl8188E::initChip(void)
 		return -1;
 	}
 	IOLog(LOGP "firmware OK (%u byte)\n", res.fwlen);
-
-	if (rtwn_seq_read_efuse_offload(&ef, halRead, halWrite, this) == 0 &&
-	    ef.efuse_ok) {
-		memcpy(res.mac, ef.mac, 6);
-		res.xtal = ef.xtal;
-	} else if (rtwn_seq_read_efuse_direct_8188e(&ef, halRead, halWrite,
-	    this) == 0 && ef.efuse_ok) {
-		memcpy(res.mac, ef.mac, 6);
-		res.xtal = ef.xtal;
-	} else {
-		IOLog(LOGP "EFUSE gagal, pakai MAC default\n");
-		res.mac[0] = 0x02;
-		res.mac[5] = 0x01;
-		res.xtal = 0x20;
-	}
 
 	memcpy(fMac, res.mac, 6);
 	memcpy(fChip.macaddr, res.mac, 6);
@@ -780,6 +786,12 @@ int ItlRtl8188E::newstateCb(struct ieee80211com *ic,
 		 */
 		ieee80211_set_link_state(ic, LINK_STATE_DOWN);
 
+		uint32_t rcr = R92C_RCR_APM | R92C_RCR_AM | R92C_RCR_AB |
+		    R92C_RCR_ADF | R92C_RCR_AMF |
+		    R92C_RCR_APP_ICV | R92C_RCR_HTC_LOC_CTRL |
+		    R92C_RCR_APP_MIC | R92C_RCR_APP_PHYSTS;
+		halWrite(me, R92C_RCR, &rcr, 4);
+
 		me->fScanning = true;
 		if (ic->ic_bss && ic->ic_bss->ni_chan)
 			me->setChannel(ic->ic_bss->ni_chan);
@@ -847,6 +859,12 @@ int ItlRtl8188E::newstateCb(struct ieee80211com *ic,
 			uint8_t msr = R92C_MSR_NETTYPE_INFRA;
 			me->updateSlot(ic);
 			halWrite(me, R92C_MSR, &msr, 1);
+			uint32_t rcr = R92C_RCR_APM | R92C_RCR_AM | R92C_RCR_AB |
+			    R92C_RCR_CBSSID_DATA |
+			    R92C_RCR_ADF | R92C_RCR_AMF |
+			    R92C_RCR_APP_ICV | R92C_RCR_HTC_LOC_CTRL |
+			    R92C_RCR_APP_MIC | R92C_RCR_APP_PHYSTS;
+			halWrite(me, R92C_RCR, &rcr, 4);
 			uint16_t flt2 = 0xffff;
 			halWrite(me, R92C_RXFLTMAP2, &flt2, 2);
 			uint8_t txpause = 0x00;
@@ -1128,19 +1146,21 @@ void ItlRtl8188E::sendFrame(mbuf_t m, struct ieee80211_node *ni, bool isMgmt)
 			/* QSEL (txdw1 bit 8-12) harus sama dengan queue pipe. */
 			buf[5] = (uint8_t)((buf[5] & 0xe0) | (qsel & 0x1f));
 			/*
-			 * Layout r92c_tx_desc_usb (terbukti sukses pada v0.7.5 ping & v0.7.6 DHCP):
-			 *   12 txdw3 (16 bit)  14 txdseq  16 txdw4  20 txdw5
+			 * Sesuai TxFillDescriptor8188EUsb (@0x14d66d-0x14d694) di RtWlanU.kext:
+			 *   - seq & 0x0fff selalu ditulis ke buf[14..15]
+			 *   - Non-QoS (!qos): txdw3 |= 0x80000000 (buf[15] |= 0x80) dan
+			 *     pada RTL8188E (cardType == 0x0f), txdw4 |= 0x40 (buf[16] = 0x40 = R88E_HWSEQ_EN).
+			 *   - QoS Data (qos): JANGAN set 0x80 di buf[15] dan JANGAN set 0x40 di buf[16].
 			 */
+			buf[14] = (uint8_t)(seq & 0xff);
+			buf[15] = (uint8_t)((seq >> 8) & 0x0f);
 			if (qos) {
-				buf[14] = (uint8_t)(seq & 0xff);
-				buf[15] = (uint8_t)((seq >> 8) & 0xff);
-				buf[16] = 0x40;	/* QOS */
+				buf[16] = 0x00;
 				buf[17] = 0x01;	/* DRVRATE */
 			} else {
-				buf[14] = 0x00;
-				buf[15] = 0x80;	/* txdseq: HWSEQEN */
-				buf[16] = 0x80;	/* HWSEQ */
-				buf[17] = 0x01;	/* DRVRATE */
+				buf[15] |= 0x80;	/* txdseq: HWSEQEN */
+				buf[16] = 0x40;		/* R88E_TXDW4_HWSEQ_EN */
+				buf[17] = 0x01;		/* DRVRATE */
 			}
 			buf[18] = 0x00;
 			buf[19] = 0x00;
@@ -1349,18 +1369,22 @@ rxSlotOk(const uint8_t *buf, uint32_t len, uint32_t off)
 {
 	rtwn_usb_rxinfo_t info;
 	const struct ieee80211_frame *wh;
-	uint32_t foff;
-	uint8_t type;
+	uint32_t foff, dw3;
+	uint8_t type, rpt_sel;
 
-	if (off + RTWN_USB_RX_DESC_SIZE + RTWN_USB_RX_EXTRA_SIZE > len)
+	if (off + RTWN_USB_RX_DESC_SIZE > len)
 		return false;
 	if (!rtwn_usb_parse_rx_desc(buf + off, len - off, &info))
 		return false;
-	if (info.pktlen == 0 || info.pktlen > 2048)
+	dw3 = rxDescDw(buf, off, 3);
+	rpt_sel = (uint8_t)((dw3 >> 14) & 0x03);
+	if (rpt_sel != 0)
+		return info.pktlen > 0 && info.pktlen <= 512;
+	if (info.pktlen == 0 || info.pktlen > 4096)
 		return false;
 	foff = off + RTWN_USB_RX_DESC_SIZE + info.infosz + info.shift;
 	if (foff + info.pktlen > len ||
-	    info.pktlen < sizeof(struct ieee80211_frame))
+	    info.pktlen < sizeof(struct ieee80211_frame_min))
 		return false;
 	wh = (const struct ieee80211_frame *)(buf + foff);
 	if ((wh->i_fc[0] & IEEE80211_FC0_VERSION_MASK) !=
@@ -1377,58 +1401,41 @@ void ItlRtl8188E::handleRx(const uint8_t *buf, uint32_t len)
 	struct _ifnet *ifp = &fIc.ic_if;
 	struct mbuf_list ml = MBUF_LIST_INITIALIZER();
 	uint32_t off = 0;
-	uint32_t npkts = 0;
-	uint32_t slot = 0;
 
-	while (off + RTWN_USB_RX_DESC_SIZE + RTWN_USB_RX_EXTRA_SIZE <= len &&
-	    (npkts == 0 || slot < npkts)) {
+	while (off + RTWN_USB_RX_DESC_SIZE <= len) {
 		rtwn_usb_rxinfo_t info;
-		uint32_t flen, foff, dw2, dw3, s4, s128, next;
+		uint32_t flen, foff, dw3, rawLen, s4, s8, s128, next;
 		struct ieee80211_frame *wh;
 		struct ieee80211_node *ni;
 		struct ieee80211_rxinfo rxi;
 		mbuf_t m;
 		int8_t rssi = -95;
+		uint8_t rpt_sel;
 		bool txReport;
 
 		if (!rtwn_usb_parse_rx_desc(buf + off, len - off, &info))
 			break;
 
 		flen = info.pktlen;
-		if (flen == 0 || flen > 2048)
+		if (flen == 0 || flen > 4096)
 			break;
 
-		dw2 = rxDescDw(buf, off, 2);
 		dw3 = rxDescDw(buf, off, 3);
-
-		if (npkts == 0) {
-			/* Jumlah frame dalam satu transfer USB (RXDW2 bit 16-23). */
-			npkts = (dw2 >> 16) & 0xff;
-			if (npkts == 0)
-				npkts = 1;
-			if (npkts > 64)
-				npkts = 64;
-		}
-		slot++;
-
 		foff = off + RTWN_USB_RX_DESC_SIZE + info.infosz + info.shift;
 		if (foff + flen > len)
 			break;
 
 		/*
-		 * RTL8188E memakai RXDW3 bit 14-15 untuk jenis report.
-		 * TX report bukan frame 802.11. Jangan memakai RXDW2 bit 28:
-		 * itu field C2H milik 92E, tidak dipakai 88E (OpenBSD hanya
-		 * memeriksa RXDW3 untuk chip ini).
+		 * RTL8188E memakai RXDW3 bit 14-15 untuk jenis report:
+		 *   0 = frame 802.11 normal
+		 *   1 = CCX TX report (8 byte)
+		 *   2 = ODM RA TX report 2
+		 *   3 = USB HISR report
 		 */
-		txReport = ((dw3 >> 14) & 0x3) != 0;
+		rpt_sel = (uint8_t)((dw3 >> 14) & 0x3);
+		txReport = (rpt_sel != 0);
 
-		if (info.crcError || info.icvError) {
-			/*
-			 * Frame korup dibuang (sama seperti OpenBSD). Tapi
-			 * kalau yang dibuang justru assoc response, kita
-			 * buta. Catat fc + panjang supaya kelihatan.
-			 */
+		if (!txReport && (info.crcError || info.icvError)) {
 			if (foff + 2 <= len) {
 				IOLog(LOGP "RX crc-err fc=%02x%02x len=%u\n",
 				    buf[foff], buf[foff + 1],
@@ -1437,14 +1444,8 @@ void ItlRtl8188E::handleRx(const uint8_t *buf, uint32_t len)
 			txReport = true;
 		}
 
-		/*
-		 * Laporan TX (r88e_tx_rpt_ccx) menempel langsung setelah
-		 * descriptor 24 byte — tanpa PHY status.
-		 *   rptb1 bit6   = PKT_OK (frame di-ACK AP)
-		 *   rptb2 bit0-5 = jumlah retry, bit7 = retry habis
-		 */
-		if (txReport && off + RTWN_USB_RX_DESC_SIZE + 4 <= len) {
-			const uint8_t *rpt = buf + off + RTWN_USB_RX_DESC_SIZE;
+		if (rpt_sel == 1 && foff + 4 <= len) {
+			const uint8_t *rpt = buf + foff;
 
 			fTxReport++;
 			if (rpt[1] & 0x40) {
@@ -1456,33 +1457,72 @@ void ItlRtl8188E::handleRx(const uint8_t *buf, uint32_t len)
 		}
 
 		/*
-		 * Stride: OpenBSD memakai 128-byte alignment untuk 88E,
-		 * sedangkan pengamatan M2 (npkts=1) tidak membedakan.
-		 * Pilih kandidat yang benar-benar berisi descriptor +
-		 * frame valid supaya tidak salah saat npkts > 1.
+		 * _SegregateDmaAggPackets_8188E (@0x14c7fa) memakai alignment 8-byte,
+		 * sedangkan _SegregateUsbAggPackets_8188E (@0x14c984) memakai 128-byte.
+		 * Jangan batasi loop dengan npkts ((dw2 >> 16) & 0xff) karena pada
+		 * agregasi DMA atau setelah slot TX report nilainya 0!
 		 */
-		s4 = (RTWN_USB_RX_DESC_SIZE + info.infosz + info.shift + flen + 3) & ~3u;
-		s128 = (RTWN_USB_RX_DESC_SIZE + info.infosz + info.shift + flen + 127) &
-		    ~127u;
-		next = off + s4;
-		if (slot < npkts) {
-			if (rxSlotOk(buf, len, off + s128))
-				next = off + s128;
-			else if (!rxSlotOk(buf, len, off + s4))
-				next = 0;
-		}
+		rawLen = RTWN_USB_RX_DESC_SIZE + info.infosz + info.shift + flen;
+		s4 = (rawLen + 3) & ~3u;
+		s8 = (rawLen + 7) & ~7u;
+		s128 = (rawLen + 127) & ~127u;
+		if (rxSlotOk(buf, len, off + s8))
+			next = off + s8;
+		else if (rxSlotOk(buf, len, off + s4))
+			next = off + s4;
+		else if (rxSlotOk(buf, len, off + s128))
+			next = off + s128;
+		else
+			next = 0;
 
 		if (!txReport) {
+			uint8_t type, sub;
+
 			if (flen < sizeof(struct ieee80211_frame))
 				goto advance;
 			wh = (struct ieee80211_frame *)(buf + foff);
+			if ((wh->i_fc[0] & IEEE80211_FC0_VERSION_MASK) !=
+			    IEEE80211_FC0_VERSION_0)
+				goto advance;
+
+			type = wh->i_fc[0] & IEEE80211_FC0_TYPE_MASK;
+			sub = wh->i_fc[0] & IEEE80211_FC0_SUBTYPE_MASK;
+
+			/*
+			 * Dalam STA mode:
+			 * 1. Jangan pernah memproses Probe Request (sub=0x40).
+			 * 2. Jangan pernah memproses frame unicast yang bukan untuk ic_myaddr.
+			 * 3. Saat state RUN (dan tidak sedang scan/bgscan), buang frame
+			 *    data/mgmt dari BSSID asing agar tidak menimpa ni_rxseq / ni_rssi
+			 *    pada fIc.ic_bss atau memicu error dekripsi CCMP.
+			 */
+			if (type == IEEE80211_FC0_TYPE_MGT &&
+			    sub == IEEE80211_FC0_SUBTYPE_PROBE_REQ)
+				goto advance;
+
+			if (!IEEE80211_IS_MULTICAST(wh->i_addr1) &&
+			    !IEEE80211_ADDR_EQ(wh->i_addr1, fIc.ic_myaddr))
+				goto advance;
+
+			if (fIc.ic_state == IEEE80211_S_RUN && fIc.ic_bss) {
+				if (type == IEEE80211_FC0_TYPE_DATA &&
+				    !IEEE80211_ADDR_EQ(wh->i_addr2, fIc.ic_bss->ni_bssid))
+					goto advance;
+				if (type == IEEE80211_FC0_TYPE_MGT &&
+				    !(fIc.ic_flags & IEEE80211_F_BGSCAN) &&
+				    !fIc.ic_wcl_scan_requested &&
+				    !IEEE80211_ADDR_EQ(wh->i_addr2, fIc.ic_bss->ni_bssid) &&
+				    !IEEE80211_ADDR_EQ(wh->i_addr3, fIc.ic_bss->ni_bssid))
+					goto advance;
+			}
+
 			if (!fSawRx) {
 				const char *kind = "data";
 
 				fSawRx = true;
-				switch (wh->i_fc[0] & IEEE80211_FC0_TYPE_MASK) {
+				switch (type) {
 				case IEEE80211_FC0_TYPE_MGT:
-					kind = ((wh->i_fc[0] & IEEE80211_FC0_SUBTYPE_MASK) ==
+					kind = (sub ==
 					    IEEE80211_FC0_SUBTYPE_BEACON) ?
 					    "beacon" : "mgmt";
 					break;
@@ -1494,21 +1534,11 @@ void ItlRtl8188E::handleRx(const uint8_t *buf, uint32_t len)
 				}
 				setDiag("RTL8188E-first-rx", kind);
 			}
-			if ((wh->i_fc[0] & IEEE80211_FC0_VERSION_MASK) !=
-			    IEEE80211_FC0_VERSION_0)
-				goto advance;
 
-			if ((wh->i_fc[0] & IEEE80211_FC0_TYPE_MASK) == IEEE80211_FC0_TYPE_DATA) {
+			if (type == IEEE80211_FC0_TYPE_DATA) {
 				size_t llcOff = (wh->i_fc[0] & IEEE80211_FC0_SUBTYPE_QOS) ? 26 : 24;
 
 				fRxData++;
-				/*
-				 * Sampel 3 frame data pertama: apakah bit
-				 * Protected menyala (frame terenkripsi dari
-				 * udara) dan berapa panjangnya. Kalau bit
-				 * ini tidak menyala padahal RSN aktif,
-				 * net80211 akan membuang frame.
-				 */
 				if (fRxDataLogged < 3) {
 					fRxDataLogged++;
 					IOLog(LOGP "RX data fc=%02x%02x len=%u "
@@ -1528,11 +1558,7 @@ void ItlRtl8188E::handleRx(const uint8_t *buf, uint32_t len)
 						IOLog(LOGP "RX EAPOL handshake frame (len %u)\n", (unsigned)flen);
 					}
 				}
-			} else if ((wh->i_fc[0] & IEEE80211_FC0_TYPE_MASK) ==
-			    IEEE80211_FC0_TYPE_MGT) {
-				uint8_t sub = wh->i_fc[0] &
-				    IEEE80211_FC0_SUBTYPE_MASK;
-
+			} else if (type == IEEE80211_FC0_TYPE_MGT) {
 				fRxMgmt++;
 				if (sub == IEEE80211_FC0_SUBTYPE_AUTH) {
 					fRxAuth++;
@@ -1548,11 +1574,6 @@ void ItlRtl8188E::handleRx(const uint8_t *buf, uint32_t len)
 					    (unsigned)flen);
 				} else if (sub != IEEE80211_FC0_SUBTYPE_BEACON &&
 				    sub != IEEE80211_FC0_SUBTYPE_PROBE_RESP) {
-					/*
-					 * Selain beacon/probe-resp: deauth,
-					 * disassoc, action. Berguna untuk
-					 * melihat AP bereaksi atau tidak.
-					 */
 					IOLog(LOGP "RX mgmt sub=%02x len=%u\n",
 					    sub, (unsigned)flen);
 				}
@@ -1586,18 +1607,10 @@ void ItlRtl8188E::handleRx(const uint8_t *buf, uint32_t len)
 			if (m) {
 				if (mbuf_copyback(m, 0, flen, buf + foff,
 				    MBUF_WAITOK) == 0) {
-					/*
-					 * Dalam STA mode semua frame data
-					 * datang dari/via AP, jadi node-nya
-					 * ic_bss — satu-satunya node yang
-					 * memegang PTK/GTK hasil handshake.
-					 * find_rxnode() bisa mengembalikan
-					 * node lain tanpa key, dan net80211
-					 * lalu membuang frame karena gagal
-					 * dekripsi.
-					 */
 					if (fIc.ic_state ==
-					    IEEE80211_S_RUN && fIc.ic_bss) {
+					    IEEE80211_S_RUN && fIc.ic_bss &&
+					    (type == IEEE80211_FC0_TYPE_DATA ||
+					     IEEE80211_ADDR_EQ(wh->i_addr2, fIc.ic_bss->ni_bssid))) {
 						ni = ieee80211_ref_node(
 						    fIc.ic_bss);
 					} else {

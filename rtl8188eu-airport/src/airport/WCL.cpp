@@ -590,6 +590,31 @@ IOReturn AirportItlwmSkywalkInterface::startWCLJoin(AirportWCL::JoinRequest &joi
     if (target != nullptr && target->ni_chan != nullptr && target->ni_chan != IEEE80211_CHAN_ANYC) {
         XYLog("%s: node %s ditemukan di pohon kanal %u, asosiasi instan\n",
             __FUNCTION__, ether_sprintf(joinBSSID), (unsigned)ieee80211_chan2ieee(ic, target->ni_chan));
+        /*
+         * Pre-populate wclBssInfo dan wclBeaconInfo dari node hasil scan
+         * agar getWCL_BSS_INFO dan getBEACON_INFO tidak pernah mengembalikan
+         * kIOReturnNotReady ketika 4-way handshake selesai sebelum beacon
+         * berikutnya tiba (yang sebelumnya memicu leaveWCLNetwork dari airportd).
+         */
+        if (target->ni_rsnie_tlv && target->ni_rsnie_tlv_len > 0) {
+            publishWCLBeacon(target, target->ni_rsnie_tlv, target->ni_rsnie_tlv_len);
+            if (36 + target->ni_rsnie_tlv_len <= 0x800) {
+                uint32_t length = 36 + target->ni_rsnie_tlv_len;
+                uint8_t *frm = wclBeaconInfo + 4;
+                bzero(wclBeaconInfo, sizeof(wclBeaconInfo));
+                memcpy(wclBeaconInfo, &length, sizeof(length));
+                frm[0] = IEEE80211_FC0_VERSION_0 | IEEE80211_FC0_TYPE_MGT | IEEE80211_FC0_SUBTYPE_BEACON;
+                frm[1] = 0;
+                memset(frm + 4, 0xff, 6);
+                memcpy(frm + 10, target->ni_bssid, 6);
+                memcpy(frm + 16, target->ni_bssid, 6);
+                memcpy(frm + 24, target->ni_tstamp, 8);
+                memcpy(frm + 32, &target->ni_intval, 2);
+                memcpy(frm + 34, &target->ni_capinfo, 2);
+                memcpy(frm + 36, target->ni_rsnie_tlv, target->ni_rsnie_tlv_len);
+                wclAssociatedBeacons = 1;
+            }
+        }
         if (ic->ic_state != IEEE80211_S_SCAN) {
             ic->ic_newstate(ic, IEEE80211_S_SCAN, -1);
         }
@@ -724,6 +749,8 @@ void AirportItlwmSkywalkInterface::handleWCLLink(bool up)
     if (up && joinPending) {
         if (!firstBeaconNotified) {
             firstBeaconNotified = true;
+            AirportWCL::FirstBeaconEvent fbEvent = {};
+            memcpy(fbEvent.peer.bssid, joinBSSID, 6);
             AirportWCL::LinkStatusEvent link = {};
             memcpy(link.bssid, joinBSSID, sizeof(link.bssid));
             link.up = 1;
@@ -732,6 +759,7 @@ void AirportItlwmSkywalkInterface::handleWCLLink(bool up)
             gWclLink++;
             publishWclStats(this);
             instance->postMessage(this, AirportWCL::LinkStatus, &link, sizeof(link), true);
+            instance->postMessage(this, AirportWCL::FirstBeacon, &fbEvent, sizeof(fbEvent), true);
         }
         finishWCLJoin(0, 0, kIOReturnSuccess);
     }
@@ -808,7 +836,7 @@ void AirportItlwmSkywalkInterface::handleWCLEvent(int code, void *data)
                 publishWclStats(this);
             // Retain the actual associated beacon, including its advancing TSF.
             // WCL polls BEACON_INFO to distinguish fresh reception from a stale BSS.
-            if (assocNotified && (joinPending || portAuthorized) &&
+            if ((assocNotified || joinPending || portAuthorized) &&
                 IEEE80211_ADDR_EQ(beacon->node->ni_bssid, joinBSSID) &&
                 beacon->frame && beacon->frame_length >= 36 &&
                 beacon->frame_length <= 0x800 &&

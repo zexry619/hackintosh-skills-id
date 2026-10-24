@@ -243,30 +243,27 @@ rtwn_aggr_init_8188e(rtwn_read_fn rd, rtwn_write_fn wr, void *ctx)
 {
 	uint32_t reg = 0;
 
-	/* 8188E: ndesc=1, dmasize=48 halaman, timing=4. */
-	if (rd32(rd, ctx, R92C_TDECTRL, &reg) == 0) {
-		reg &= ~(uint32_t)R92C_TDECTRL_BLK_DESC_NUM_M;
-		reg |= ((uint32_t)1 << R92C_TDECTRL_BLK_DESC_NUM_S) &
-		    (uint32_t)R92C_TDECTRL_BLK_DESC_NUM_M;
-		wr32(rd, wr, ctx, R92C_TDECTRL, reg);
-	}
-
-	/* Rx aggregation. */
+	/*
+	 * Sesuai RtWlanU.kext (live_regs_dump.txt: 0x010c=0xfaf0, 0x0280=0x00000000):
+	 * Matikan RXDMA_AGG_EN agar frame balasan cepat (Assoc Resp, ARP Reply,
+	 * ICMP Echo Reply) tidak ditahan atau digabung di belakang TX Report.
+	 */
 	{
 		uint8_t v = 0;
 		if (rd(ctx, R92C_TRXDMA_CTRL, &v, 1) == 0) {
 			wr8(rd, wr, ctx, R92C_TRXDMA_CTRL,
-			    (uint8_t)(v | R92C_TRXDMA_CTRL_RXDMA_AGG_EN));
+			    (uint8_t)(v & ~R92C_TRXDMA_CTRL_RXDMA_AGG_EN));
 		}
 	}
 
-	wr8(rd, wr, ctx, R92C_RXDMA_AGG_PG_TH, 48);
-	wr8(rd, wr, ctx, (uint16_t)(R92C_RXDMA_AGG_PG_TH + 1), 4);
+	wr8(rd, wr, ctx, R92C_RXDMA_AGG_PG_TH, 0);
+	wr8(rd, wr, ctx, (uint16_t)(R92C_RXDMA_AGG_PG_TH + 1), 0);
 
-	/* Drop bulk-out yang tidak benar. */
+	/* Drop bulk-out yang tidak benar (0x0290 = 0x00000604 di RtWlanU). */
 	if (rd32(rd, ctx, R92C_TXDMA_OFFSET_CHK, &reg) == 0) {
-		wr32(rd, wr, ctx, R92C_TXDMA_OFFSET_CHK,
-		    reg | R92C_TXDMA_OFFSET_CHK_DROP_DATA_EN);
+		reg &= ~(uint32_t)R92C_TDECTRL_BLK_DESC_NUM_M;
+		reg |= ((uint32_t)6 << 8) | R92C_TXDMA_OFFSET_CHK_DROP_DATA_EN;
+		wr32(rd, wr, ctx, R92C_TXDMA_OFFSET_CHK, reg);
 	}
 }
 
@@ -292,10 +289,14 @@ rtwn_core_config_8188e(rtwn_read_fn rd, rtwn_write_fn wr, void *ctx,
 	/* Mode station (infra). */
 	wr8(rd, wr, ctx, R92C_MSR, R92C_MSR_NETTYPE_INFRA);
 
-	/* Rx filter: terima semua yang relevan (mgmt, data, control). */
+	/*
+	 * Rx filter: jangan nyalakan R92C_RCR_AAP (promiscuous unicast),
+	 * karena frame unicast milik klien lain di kanal yang sama akan
+	 * merusak ni_rxseq dan memicu kegagalan dekripsi CCMP.
+	 */
 	wr32(rd, wr, ctx, R92C_RCR,
-	    R92C_RCR_AAP | R92C_RCR_APM | R92C_RCR_AM | R92C_RCR_AB |
-	    R92C_RCR_ADF | R92C_RCR_ACF | R92C_RCR_AMF |
+	    R92C_RCR_APM | R92C_RCR_AM | R92C_RCR_AB |
+	    R92C_RCR_ADF | R92C_RCR_AMF |
 	    R92C_RCR_APP_ICV | R92C_RCR_HTC_LOC_CTRL |
 	    R92C_RCR_APP_MIC | R92C_RCR_APP_PHYSTS);
 	wr32(rd, wr, ctx, R92C_MAR + 0, 0xffffffffu);

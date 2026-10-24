@@ -136,7 +136,11 @@ rtwn_usb_build_mgmt_tx_desc(uint8_t *desc, uint16_t desclen, uint16_t pktlen,
 	dw1 = (uint32_t)(0x12u << 8);		/* QSEL = MGNT */
 	dw1 |= (uint32_t)(0x06u << 16);		/* RAID = 11B */
 
-	dw4 = 0x00000100u | 0x00000080u;	/* DRVRATE | HWSEQ */
+	/*
+	 * Pada RTL8188E (cardType == 0x0f di TxFillDescriptor8188EUsb @0x14d68a),
+	 * bit 6 dari txdw4 (0x40) adalah HWSEQ_EN (bukan 0x80 milik 8192C).
+	 */
+	dw4 = 0x00000100u | 0x00000040u;	/* DRVRATE | R88E_HWSEQ_EN */
 
 	desc[0] = (uint8_t)(dw0 & 0xff);
 	desc[1] = (uint8_t)((dw0 >> 8) & 0xff);
@@ -193,9 +197,10 @@ bool rtwn_usb_parse_rx_desc(const uint8_t *buf, uint32_t bufLen,
     rtwn_usb_rxinfo_t *info)
 {
 	uint32_t dw0, dw3;
-	uint32_t pktlen, infosz;
+	uint32_t pktlen, infosz, totalHdr;
+	uint8_t rpt_sel;
 
-	if (bufLen < RTWN_RX_DESC_SIZE + RTWN_RX_EXTRA_SIZE) {
+	if (bufLen < RTWN_RX_DESC_SIZE) {
 		return false;
 	}
 
@@ -204,33 +209,43 @@ bool rtwn_usb_parse_rx_desc(const uint8_t *buf, uint32_t bufLen,
 	dw3 = (uint32_t)buf[12] | ((uint32_t)buf[13] << 8) |
 	    ((uint32_t)buf[14] << 16) | ((uint32_t)buf[15] << 24);
 
-	pktlen = dw0 & 0x3fff;
-	infosz = ((dw0 >> 16) & 0x0f) * 8;
+	rpt_sel = (uint8_t)((dw3 >> 14) & 0x03);
 
 	memset(info, 0, sizeof(*info));
-	info->pktlen = pktlen;
-	info->infosz = infosz;
-	info->rate = (uint8_t)(dw3 & 0x1f);
-	info->crcError = (dw0 & 0x4000) != 0;
-	info->icvError = (dw0 & 0x8000) != 0;
-	/* R92C_RXDW0_SHIFT = bit 24-25 (0x03000000). */
-	info->shift = (uint8_t)((dw0 >> 24) & 0x03);
-	/* R92C_RXDW0_PHYST = bit 26 (0x04000000), bukan bit 20. */
-	info->hasPhyStatus = (dw0 & 0x04000000) != 0;
-	info->headerLen = RTWN_RX_DESC_SIZE + RTWN_RX_EXTRA_SIZE;
+	info->rate = (uint8_t)(dw3 & 0x3f);
 
 	/*
-	 * VALIDASI WAJIB (fix keamanan, 22 Okt 2026).
-	 *
-	 * PKTLEN = 14 bit → maksimum 16383 byte. Tapi buffer RX hanya 2048
-	 * byte! Tanpa validasi ini, pembacaan frame di lapisan driver
-	 * (mis. ekstraksi SSID) bisa membaca sampai ~14 KB DI LUAR buffer
-	 * → kernel panic "Kernel data abort" (halaman tidak ter-map).
-	 *
-	 * Deskripsi USB bisa berisi data nakal/bocor → JANGAN pernah
-	 * percaya nilainya tanpa dibandingkan dengan ukuran buffer nyata.
+	 * Sesuai QueryRxDescStatus8188EUsb (@0x14bd80) dan _QueryPacket_8188E
+	 * (@0x14c6a0) di RtWlanU.kext:
+	 *   rpt_sel == 0: frame 802.11 normal
+	 *   rpt_sel == 1: CCX TX Report (selalu 8 byte, tanpa drvinfo/shift)
+	 *   rpt_sel == 2: ODM RA TX Report 2 (panjang di dw0 & 0x1ff, tanpa drvinfo/shift)
+	 *   rpt_sel == 3: USB HISR / C2H interrupt report (tanpa drvinfo/shift)
 	 */
-	if (pktlen > bufLen - info->headerLen) {
+	if (rpt_sel == 1) {
+		pktlen = 8;
+		infosz = 0;
+	} else if (rpt_sel == 2) {
+		pktlen = dw0 & 0x01ff;
+		infosz = 0;
+	} else if (rpt_sel == 3) {
+		pktlen = dw0 & 0x3fff;
+		infosz = 0;
+	} else {
+		pktlen = dw0 & 0x3fff;
+		infosz = ((dw0 >> 16) & 0x0f) * 8;
+		info->crcError = (dw0 & 0x4000) != 0;
+		info->icvError = (dw0 & 0x8000) != 0;
+		info->shift = (uint8_t)((dw0 >> 24) & 0x03);
+		info->hasPhyStatus = (dw0 & 0x04000000) != 0;
+	}
+
+	info->pktlen = pktlen;
+	info->infosz = infosz;
+	totalHdr = RTWN_RX_DESC_SIZE + infosz + info->shift;
+	info->headerLen = totalHdr;
+
+	if (totalHdr > bufLen || pktlen > bufLen - totalHdr) {
 		return false;
 	}
 	return true;
