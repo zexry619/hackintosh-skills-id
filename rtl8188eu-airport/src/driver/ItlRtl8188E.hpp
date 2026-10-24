@@ -145,7 +145,7 @@ public:
 	 * Callback USB hanya menyalin buffer (tidak boleh memblokir
 	 * workloop USB — bisa deadlock dengan control transfer).
 	 */
-	static const uint32_t kRxQueueDepth = 64;
+	static const uint32_t kRxQueueDepth = 256;
 	IOTimerEventSource *fRxTimer;
 	IOLock             *fRxLock;
 	uint8_t            *fRxBuf[kRxQueueDepth];

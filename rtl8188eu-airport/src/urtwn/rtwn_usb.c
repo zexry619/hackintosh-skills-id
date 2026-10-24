@@ -74,7 +74,7 @@ bool rtwn_usb_build_tx_desc(uint8_t *desc, uint16_t desclen, uint16_t pktlen,
 		dw1 |= (uint32_t)(0x00 & 0x1f) << 8;		/* QSEL = BE */
 		dw1 |= (uint32_t)(raid & 0x0f) << 16;		/* RAID */
 		dw2 |= 0x00010000;	/* AGGBK */
-		dw2 |= 0x00080000;	/* CCX_RPT → TX report untuk AMRR */
+		/* CCX_RPT (0x00080000) dinonaktifkan agar chip tidak membanjiri Bulk-IN */
 	}
 	(void)useCts;
 	(void)useRts;

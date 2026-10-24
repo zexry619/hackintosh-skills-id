@@ -380,7 +380,7 @@ bool ItlRtl8188E::attach(IOPCIDevice *device)
 	fRxTimer->enable();
 	fRxRunning = true;
 	fChip.usb.setRxCallback(rxCb, this);
-	if (!fChip.usb.bulkQueueRx(8)) {
+	if (!fChip.usb.bulkQueueRx(16)) {
 		IOLog(LOGP "gagal antre RX\n");
 		fRxRunning = false;
 		fChip.usb.setRxCallback(nullptr, nullptr);
@@ -1031,11 +1031,13 @@ void ItlRtl8188E::sendFrame(mbuf_t m, struct ieee80211_node *ni, bool isMgmt)
 		len = mbuf_pkthdr_len(m);
 	}
 
+	bool isEapol = false;
 	if (!isMgmt) {
 		size_t llcOff = (wh[0] & IEEE80211_FC0_SUBTYPE_QOS) ? 26 : 24;
 		if (len >= llcOff + 8) {
 			uint16_t et = ((uint16_t)wh[llcOff + 6] << 8) | wh[llcOff + 7];
 			if (et == 0x888e) {
+				isEapol = true;
 				fTxEapol++;
 				IOLog(LOGP "TX EAPOL handshake frame (len %u)\n", (unsigned)len);
 			}
@@ -1165,13 +1167,18 @@ void ItlRtl8188E::sendFrame(mbuf_t m, struct ieee80211_node *ni, bool isMgmt)
 			buf[18] = 0x00;
 			buf[19] = 0x00;
 			/*
-			 * txdw5: DATARATE=0 (CCK 1 Mb/s) + batas retry 0x0001ff00.
+			 * txdw5: DATARATE (buf[20]):
+			 *   - Unicast data: 0x0b (54 Mb/s OFDM) agar latensi transmisi minimal
+			 *     (0.2 ms vs 13 ms di CCK 1M).
+			 *   - Mgmt / Bcast / EAPOL: 0x00 (CCK 1 Mb/s) untuk jangkauan maksimal.
+			 * Batas fallback 0xff (buf[21]) mengizinkan step down otomatis oleh MAC jika sinyal turun.
 			 */
-			buf[20] = 0x00;
+			uint8_t rate = (!bcast && !isEapol && !isMgmt) ? 0x0b : 0x00;
+			buf[10] &= ~0x08;	/* pastikan CCX_RPT mati agar tidak membanjiri Bulk-IN */
+			buf[20] = rate;
 			buf[21] = 0xff;
 			buf[22] = 0x01;
 			buf[23] = 0x00;
-			/* (bit CCX_RPT dibiarkan menyala dari builder) */
 			rtwn_usb_tx_checksum(buf, RTWN_USB_TX_DESC_SIZE);
 		}
 
@@ -1263,6 +1270,7 @@ void ItlRtl8188E::rxCb(void *ctx, const uint8_t *data, uint32_t len)
 	ItlRtl8188E *me = (ItlRtl8188E *)ctx;
 	uint8_t *copy;
 	uint32_t idx;
+	bool wasEmpty = false;
 
 	if (!me || !me->fRxRunning || !me->fRxTimer || !me->fRxLock ||
 	    !data || len == 0)
@@ -1285,19 +1293,21 @@ void ItlRtl8188E::rxCb(void *ctx, const uint8_t *data, uint32_t len)
 		IOFree(copy, len);
 		return;
 	}
+	wasEmpty = (me->fRxCount == 0);
 	idx = (me->fRxHead + me->fRxCount) % kRxQueueDepth;
 	me->fRxBuf[idx] = copy;
 	me->fRxLen[idx] = len;
 	me->fRxCount++;
 	IOLockUnlock(me->fRxLock);
 
-	me->fRxTimer->setTimeoutMS(0);
+	if (wasEmpty)
+		me->fRxTimer->setTimeoutMS(0);
 }
 
 void ItlRtl8188E::rxTimerAction(IOTimerEventSource *timer)
 {
-	uint8_t *bufs[8];
-	uint32_t lens[8];
+	uint8_t *bufs[32];
+	uint32_t lens[32];
 
 	(void)timer;
 
@@ -1305,7 +1315,7 @@ void ItlRtl8188E::rxTimerAction(IOTimerEventSource *timer)
 		uint32_t n = 0, i;
 
 		IOLockLock(fRxLock);
-		while (fRxCount > 0 && n < 8) {
+		while (fRxCount > 0 && n < 32) {
 			bufs[n] = fRxBuf[fRxHead];
 			lens[n] = fRxLen[fRxHead];
 			fRxBuf[fRxHead] = nullptr;
@@ -1606,7 +1616,7 @@ void ItlRtl8188E::handleRx(const uint8_t *buf, uint32_t len)
 			    getController()->allocatePacket(flen) : nullptr;
 			if (m) {
 				if (mbuf_copyback(m, 0, flen, buf + foff,
-				    MBUF_WAITOK) == 0) {
+				    MBUF_DONTWAIT) == 0) {
 					if (fIc.ic_state ==
 					    IEEE80211_S_RUN && fIc.ic_bss &&
 					    (type == IEEE80211_FC0_TYPE_DATA ||
