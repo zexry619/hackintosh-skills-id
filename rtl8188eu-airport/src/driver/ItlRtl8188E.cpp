@@ -299,23 +299,24 @@ bool ItlRtl8188E::attach(IOPCIDevice *device)
 	fIc.ic_phytype = IEEE80211_T_OFDM;
 	fIc.ic_opmode = IEEE80211_M_STA;
 	fIc.ic_state = IEEE80211_S_INIT;
-	fIc.ic_curmode = IEEE80211_MODE_11G;
+	fIc.ic_curmode = IEEE80211_MODE_11N;
 	fIc.ic_caps = IEEE80211_C_WEP | IEEE80211_C_RSN |
 	    IEEE80211_C_SHSLOT | IEEE80211_C_SHPREAMBLE;
 	/*
-	 * Uji hardware pertama: 802.11g saja. HT/AMPDU dimatikan karena
-	 * jalur TX kita masih laju tetap 1 Mb/s dan belum menangani
-	 * agregasi; menyalakannya hanya menambah jalur yang belum diuji.
-	 * Aktifkan kembali setelah asosiasi/WPA2 terbukti.
+	 * 802.11n (HT): aktifkan kapabilitas HT, MCS 0..7, dan A-MPDU aggregation.
 	 */
-	fIc.ic_htcaps = 0;
+	fIc.ic_htcaps = IEEE80211_HTCAP_CBW20_40 |
+	    IEEE80211_HTCAP_SGI20 | IEEE80211_HTCAP_SGI40 |
+	    IEEE80211_HTCAP_DSSSCCK40;
+	fIc.ic_htcaps |= (IEEE80211_HTCAP_SMPS_DIS << IEEE80211_HTCAP_SMPS_SHIFT);
 	fIc.ic_sup_rates[IEEE80211_MODE_11B] = ieee80211_std_rateset_11b;
 	fIc.ic_sup_rates[IEEE80211_MODE_11G] = ieee80211_std_rateset_11g;
-	fIc.ic_sup_mcs[0] = 0;
+	memset(fIc.ic_sup_mcs, 0, sizeof(fIc.ic_sup_mcs));
+	fIc.ic_sup_mcs[0] = 0xff;	/* MCS 0..7 (hingga 72.2M di 20MHz / 150M di 40MHz) */
 	fIc.ic_htxcaps = 0;
 	fIc.ic_txbfcaps = 0;
 	fIc.ic_aselcaps = 0;
-	fIc.ic_ampdu_params = 0;
+	fIc.ic_ampdu_params = (IEEE80211_AMPDU_PARAM_SS_4 | 0x3 /* 64k */);
 	fIc.ic_max_rssi = 100;
 
 	/*
@@ -328,7 +329,12 @@ bool ItlRtl8188E::attach(IOPCIDevice *device)
 		struct ieee80211_channel *c = &fIc.ic_channels[ch];
 		c->ic_freq = ieee80211_ieee2mhz(ch, IEEE80211_CHAN_2GHZ);
 		c->ic_flags = IEEE80211_CHAN_2GHZ |
-		    IEEE80211_CHAN_CCK | IEEE80211_CHAN_OFDM;
+		    IEEE80211_CHAN_CCK | IEEE80211_CHAN_OFDM |
+		    IEEE80211_CHAN_DYN | IEEE80211_CHAN_HT20;
+		if (ch <= 7)
+			c->ic_flags |= IEEE80211_CHAN_HT40U;
+		if (ch >= 5)
+			c->ic_flags |= IEEE80211_CHAN_HT40D;
 	}
 	fIc.ic_ibss_chan = &fIc.ic_channels[1];
 
@@ -1045,7 +1051,12 @@ void ItlRtl8188E::sendFrame(mbuf_t m, struct ieee80211_node *ni, bool isMgmt)
 	}
 
 	bcast = IEEE80211_IS_MULTICAST(wh + 4);
-	raid = 6;	/* RAID 11B — terbukti di M2, v0.7.5 (ping), v0.7.6/v0.7.7 (DHCP) */
+	/*
+	 * RAID (Rate Adaptive ID):
+	 *   - Data unicast: 0 = RATR_INX_WIRELESS_NGB (tabel 11n MCS 0..7 + 11g + 11b)
+	 *   - Bcast / Mgmt / EAPOL: 6 = RAID 11B (keandalan maksimal pada basic rates)
+	 */
+	raid = (bcast || isMgmt || isEapol) ? 6 : 0;
 
 	/*
 	 * Hitung per-subtype. Tanpa ini "auth tidak dikirim" dan
@@ -1168,12 +1179,13 @@ void ItlRtl8188E::sendFrame(mbuf_t m, struct ieee80211_node *ni, bool isMgmt)
 			buf[19] = 0x00;
 			/*
 			 * txdw5: DATARATE (buf[20]):
-			 *   - Unicast data: 0x0b (54 Mb/s OFDM) agar latensi transmisi minimal
-			 *     (0.2 ms vs 13 ms di CCK 1M).
-			 *   - Mgmt / Bcast / EAPOL: 0x00 (CCK 1 Mb/s) untuk jangkauan maksimal.
-			 * Batas fallback 0xff (buf[21]) mengizinkan step down otomatis oleh MAC jika sinyal turun.
+			 *   - Unicast data: 0x13 (MCS 7 = 65/72.2 Mb/s) untuk throughput maksimal 802.11n
+			 *     (0.16 ms vs 13 ms di CCK 1M).
+			 *   - Mgmt / Bcast / EAPOL: 0x00 (CCK 1 Mb/s) untuk keandalan maksimal.
+			 * Batas fallback 0xff (buf[21]) mengizinkan MAC melakukan step down otomatis
+			 * jika sinyal turun (MCS 7 -> MCS 6..0 -> 54M..1M).
 			 */
-			uint8_t rate = (!bcast && !isEapol && !isMgmt) ? 0x0b : 0x00;
+			uint8_t rate = (!bcast && !isEapol && !isMgmt) ? 0x13 : 0x00;
 			buf[10] &= ~0x08;	/* pastikan CCX_RPT mati agar tidak membanjiri Bulk-IN */
 			buf[20] = rate;
 			buf[21] = 0xff;
@@ -1308,10 +1320,11 @@ void ItlRtl8188E::rxTimerAction(IOTimerEventSource *timer)
 {
 	uint8_t *bufs[32];
 	uint32_t lens[32];
+	int maxLoops = 4;
 
 	(void)timer;
 
-	for (;;) {
+	while (maxLoops-- > 0) {
 		uint32_t n = 0, i;
 
 		IOLockLock(fRxLock);
@@ -1334,6 +1347,18 @@ void ItlRtl8188E::rxTimerAction(IOTimerEventSource *timer)
 				handleRx(bufs[i], lens[i]);
 			IOFree(bufs[i], lens[i]);
 		}
+	}
+
+	/*
+	 * Jika masih ada paket tersisa dalam antrean saat burst besar, jadwal ulang
+	 * segera. Ini menyerahkan thread workloop sejenak agar txStart (ping dan TCP ACK)
+	 * dapat berjalan tanpa tertahan antrean RX (mencegah latency spike saat download).
+	 */
+	IOLockLock(fRxLock);
+	bool hasMore = (fRxCount > 0);
+	IOLockUnlock(fRxLock);
+	if (hasMore && fRxRunning) {
+		fRxTimer->setTimeoutMS(0);
 	}
 }
 
