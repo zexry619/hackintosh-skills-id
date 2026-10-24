@@ -347,6 +347,12 @@ bool ItlRtl8188E::attach(IOPCIDevice *device)
 
 	if_attach(ifp);
 	ieee80211_ifattach(ifp, getController());
+	/*
+	 * Batasi antrean TX (if_snd) ke 128 paket (bukan default 2048).
+	 * Antrean 2048 paket memicu bufferbloat parah hingga ~700 ms saat upload.
+	 * 128 paket memberikan throughput maksimal sekaligus menjaga latensi < 20 ms.
+	 */
+	ifq_set_maxlen(&ifp->if_snd, 128);
 	ieee80211_media_init(ifp);
 
 	fOrigNewstate = fIc.ic_newstate;
@@ -878,6 +884,7 @@ int ItlRtl8188E::newstateCb(struct ieee80211com *ic,
 			if (ic->ic_bss) {
 				uint16_t bcn_int = ic->ic_bss->ni_intval ? ic->ic_bss->ni_intval : 100;
 				halWrite(me, R92C_BCN_INTERVAL, &bcn_int, 2);
+				ic->ic_bss->ni_txmcs = 7;
 			}
 		}
 		break;
@@ -1038,14 +1045,31 @@ void ItlRtl8188E::sendFrame(mbuf_t m, struct ieee80211_node *ni, bool isMgmt)
 	}
 
 	bool isEapol = false;
+	bool isControl = isMgmt;
 	if (!isMgmt) {
 		size_t llcOff = (wh[0] & IEEE80211_FC0_SUBTYPE_QOS) ? 26 : 24;
 		if (len >= llcOff + 8) {
 			uint16_t et = ((uint16_t)wh[llcOff + 6] << 8) | wh[llcOff + 7];
 			if (et == 0x888e) {
 				isEapol = true;
+				isControl = true;
 				fTxEapol++;
 				IOLog(LOGP "TX EAPOL handshake frame (len %u)\n", (unsigned)len);
+			} else if (et == 0x0806) {
+				/* ARP: latency-sensitive */
+				isControl = true;
+			} else if (et == 0x0800 && len >= llcOff + 8 + 20) {
+				/* IPv4: periksa protokol di byte 9 dari header IP (1 = ICMP / ping) */
+				uint8_t proto = wh[llcOff + 8 + 9];
+				if (proto == 1 /* ICMP */ || proto == 2 /* IGMP */) {
+					isControl = true;
+				}
+			} else if (et == 0x86dd && len >= llcOff + 8 + 40) {
+				/* IPv6: periksa next header (byte 6) (58 = ICMPv6) */
+				uint8_t nexthdr = wh[llcOff + 8 + 6];
+				if (nexthdr == 58 /* ICMPv6 */) {
+					isControl = true;
+				}
 			}
 		}
 	}
@@ -1117,6 +1141,14 @@ void ItlRtl8188E::sendFrame(mbuf_t m, struct ieee80211_node *ni, bool isMgmt)
 
 		if (isMgmt) {
 			qsel = 0x12;	/* MGNT */
+			pipe = 0;
+		} else if (isControl) {
+			/*
+			 * ICMP Ping, ARP, EAPOL diprioritaskan ke High Queue FIFO (pipe 0, EP 0x02)
+			 * dengan Access Category VO (0x07) agar hardware Realtek langsung mengirimkannya
+			 * mendahului antrean buffer TCP speedtest pada Normal Queue (pipe 1).
+			 */
+			qsel = 0x07;	/* VO / High Priority */
 			pipe = 0;
 		} else if (wh[0] & IEEE80211_FC0_SUBTYPE_QOS) {
 			uint8_t tid = wh[24] & 0x0f;
