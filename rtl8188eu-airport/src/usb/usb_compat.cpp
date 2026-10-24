@@ -495,12 +495,6 @@ void rtwnBulkComplete(void *owner, void *param, IOReturn status, uint32_t bytes)
 			self->fTxOk++;
 		} else {
 			self->fTxFail++;
-			for (int i = 0; i < self->fNumOut && i < 3; i++) {
-				if (self->fPipeOutAll[i] == ctx->pipe) {
-					self->fPipeStalled[i] = true;
-					break;
-				}
-			}
 		}
 		if (ctx->txCb) {
 			ctx->txCb(ctx->txCtx, status == kIOReturnSuccess ? 0 : -1);
@@ -696,11 +690,6 @@ bool RtwnUsb::bulkSend(const uint8_t *data, uint32_t len, rtwn_tx_cb cb,
 		return false;
 	}
 
-	if (pipeIdx < 3 && fPipeStalled[pipeIdx]) {
-		pipe->clearStall(true);
-		fPipeStalled[pipeIdx] = false;
-	}
-
 	/*
 	 * Buang context TX yang sudah selesai dari transfer sebelumnya.
 	 *
@@ -750,17 +739,12 @@ bool RtwnUsb::bulkSend(const uint8_t *data, uint32_t len, rtwn_tx_cb cb,
 	completion.action = rtwnBulkComplete;
 	completion.parameter = c;
 
-	IOReturn kr = pipe->io(c->md, len, &completion, 0);
-	if (kr != kIOReturnSuccess) {
+	if (pipe->io(c->md, len, &completion, 0) != kIOReturnSuccess) {
 		/* Gagal antre → tidak ada completion yang akan datang,
 		 * jadi aman dibebaskan di sini. */
 		c->md->release();
 		IOFree(c, sizeof(RtwnBulkCtx));
 		fTxFail++;
-		pipe->clearStall(true);
-		if (pipeIdx < 3) {
-			fPipeStalled[pipeIdx] = false;
-		}
 		return false;
 	}
 	return true;

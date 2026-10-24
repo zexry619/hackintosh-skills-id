@@ -340,11 +340,12 @@ rtwn_core_config_8188e(rtwn_read_fn rd, rtwn_write_fn wr, void *ctx,
 	wr32(rd, wr, ctx, R92C_EDCA_BE_PARAM, 0x005ea42bu);
 	wr32(rd, wr, ctx, R92C_EDCA_BK_PARAM, 0x0000a44fu);
 
-	/* AMPDU retry baru + ACK timeout. */
+	/* AMPDU retry baru + TXQ report/life enable (0x421=0x0f sesuai RtWlanU @0xb456e) + ACK timeout. */
 	if (rd(ctx, R92C_FWHW_TXQ_CTRL, &m, 1) == 0) {
 		wr8(rd, wr, ctx, R92C_FWHW_TXQ_CTRL,
 		    (uint8_t)(m | R92C_FWHW_TXQ_CTRL_AMPDU_RTY_NEW));
 	}
+	wr8(rd, wr, ctx, (uint16_t)(R92C_FWHW_TXQ_CTRL + 1), 0x0f);
 	wr8(rd, wr, ctx, R92C_ACKTO, 0x40);
 
 	/* Beacon parameters (wajib walau mode STA). */
@@ -381,27 +382,11 @@ rtwn_core_config_8188e(rtwn_read_fn rd, rtwn_write_fn wr, void *ctx,
 	 * tabel CAM (registers 0x670/0x674).
 	 */
 	/*
-	 * R92C_SECCFG:
-	 * TXENC_ENA (0x0004) + RXENC_ENA (0x0008) + TXBCKEY_DEF (0x0040) + RXBCKEY_DEF (0x0080) = 0x00cc.
-	 * JANGAN set TXUCKEY_DEF (0x0001) atau RXUCKEY_DEF (0x0002)!
-	 * Bit 0 dan 1 memaksa chip mencari kunci unicast di Default Key (entri 0-3).
-	 * Karena kunci WPA2 Pairwise dipasang di CAM Entri 4, bit 0 dan 1 HARUS 0
-	 * agar silikon hardware membaca kunci dari CAM Entri 4 (BSSID AP).
-	 * Persis seperti disassembly driver vendor RtWlanU (andb $-0x2, 0x680).
+	 * Enkripsi: gunakan software crypto (net80211 CCMP) yang sudah terbukti
+	 * sukses dua arah dengan router ZEKRI.NET pada v0.7.5 (ping) & v0.7.6/v0.7.7 (DHCP).
+	 * Matikan engine HW (SECCFG=0x0000) agar chip tidak memodifikasi IV/payload/MIC.
 	 */
-	wr16(rd, wr, ctx, R92C_SECCFG,
-	    R92C_SECCFG_TXENC_ENA   | R92C_SECCFG_RXENC_ENA   |
-	    R92C_SECCFG_TXBCKEY_DEF | R92C_SECCFG_RXBCKEY_DEF);
-
-	/* Bersihkan seluruh 32 entri CAM saat init agar tidak ada sisa key usang. */
-	for (int entry = 0; entry < 32; entry++) {
-		wr32(rd, wr, ctx, R92C_CAMWRITE, 0);
-		wr32(rd, wr, ctx, R92C_CAMCMD,
-		    R92C_CAMCMD_POLLING | R92C_CAMCMD_WRITE | (uint32_t)(entry * 8 + 0));
-		wr32(rd, wr, ctx, R92C_CAMWRITE, 0);
-		wr32(rd, wr, ctx, R92C_CAMCMD,
-		    R92C_CAMCMD_POLLING | R92C_CAMCMD_WRITE | (uint32_t)(entry * 8 + 1));
-	}
+	wr16(rd, wr, ctx, R92C_SECCFG, 0x0000);
 
 	/* Hardware sequence numbering. */
 	wr8(rd, wr, ctx, R92C_HWSEQ_CTRL, 0xff);

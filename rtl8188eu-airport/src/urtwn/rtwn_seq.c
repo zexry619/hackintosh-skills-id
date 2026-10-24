@@ -77,11 +77,11 @@
 #define R92C_RSV_CTRL_WLOCK_00       0x0001
 #define R88E_RSV_CTRL_MCU_RST        0x0800
 
-/* Konstanta halaman/queue 88E (if_urtwn.c). */
-#define R88E_HQ_NPAGES               0
-#define R88E_LQ_NPAGES               9
-#define R88E_NQ_NPAGES               0
-#define R88E_TX_PAGE_COUNT           168
+/* Konstanta halaman/queue 88E (RtWlanU GetInitialRQPValue88EU: HPQ=12, NPQ=13, PUBQ=144, boundary=170). */
+#define R88E_HQ_NPAGES               12
+#define R88E_LQ_NPAGES               0
+#define R88E_NQ_NPAGES               13
+#define R88E_TX_PAGE_COUNT           169
 
 /* Callback delay (ms). Default: tidak.acak. */
 
@@ -631,8 +631,8 @@ int rtwn_seq_dma_init(rtwn_seq_result_t *r, rtwn_read_fn rd, rtwn_write_fn wr,
 	dmasize = 0x2400;	/* R88E_MAX_RX_DMA_SIZE */
 	boundary = pagecnt + 1;
 
-	/* LLT: pakai versi vendor (InitLLTTable8188E) — lebih akurat untuk 88E. */
-	if ((error = rtwn_llt_init_8188e(rd, wr, ctx, (uint32_t)pagecnt)) != 0) {
+	/* LLT: pakai versi vendor (InitLLTTable8188E @0xae125, argumen boundary = 0xaa). */
+	if ((error = rtwn_llt_init_8188e(rd, wr, ctx, (uint32_t)boundary)) != 0) {
 		return error;
 	}
 

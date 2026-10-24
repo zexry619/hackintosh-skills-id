@@ -267,9 +267,9 @@ int rtwn_llt_init_8188e(rtwn_read_fn rd, rtwn_write_fn wr, void *ctx,
 		(void)rtwn_seq_raw_read4(rd, wr, ctx, 0x1e0, &v);
 	}
 
-	/* Sisa halaman (page_count..total-1) → arahkan ke page_count. */
+	/* Sisa halaman (page_count..total-1) → rantai melingkar i -> i+1 (InitLLTTable8188E @0xae1ee). */
 	for (i = page_count, j = page_count << 8; i < total; i++, j += 0x100) {
-		uint32_t v = (i & 0xff) | (j & 0xff00) | 0x40000000;
+		uint32_t v = ((i + 1) & 0xff) | (j & 0xff00) | 0x40000000;
 		rtwn_seq_raw_write4(rd, wr, ctx, 0x1e0, v);
 		(void)rtwn_seq_raw_read4(rd, wr, ctx, 0x1e0, &v);
 	}
