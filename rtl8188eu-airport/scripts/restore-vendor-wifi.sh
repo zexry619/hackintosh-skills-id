@@ -36,6 +36,11 @@ for k in RtWlanU RtWlanU1827; do
 done
 rmdir "$DISABLED_DIR" 2>/dev/null || true
 
+if [[ -f /Library/LaunchDaemons/com.zekri.realtek-autoload.plist.disabled ]]; then
+	mv /Library/LaunchDaemons/com.zekri.realtek-autoload.plist.disabled /Library/LaunchDaemons/com.zekri.realtek-autoload.plist
+	echo "  launchdaemon autoload dipulihkan"
+fi
+
 # Stage ulang ke vendor agar ikut ter-build AuxKC pada boot berikutnya.
 kmutil load -z -p /Library/Extensions/RtWlanU.kext 2>&1 | head -3 || true
 

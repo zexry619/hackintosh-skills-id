@@ -56,9 +56,10 @@ for d in "$AUXKC"/StashedExtensions/*/; do
 	fi
 done
 if [ -z "$STASH_DIR" ]; then
-	echo "  ! tidak ada RTL8188EAirport.kext di StashedExtensions" >&2
-	echo "    (kext mungkin belum pernah masuk AuxKC — reboot sekali dulu)" >&2
-	exit 4
+	NEW_UUID=$(uuidgen)
+	STASH_DIR="$AUXKC/StashedExtensions/$NEW_UUID"
+	mkdir -p "$STASH_DIR"
+	echo "      buat stash baru: $STASH_DIR"
 fi
 rm -rf "$STASH_DIR/RTL8188EAirport.kext"
 cp -R "$KEXT_DST" "$STASH_DIR/"
@@ -66,26 +67,30 @@ chown -R root:wheel "$STASH_DIR/RTL8188EAirport.kext"
 echo "      $STASH_DIR"
 
 echo "[3/4] perbarui cdHash di instructions + uakl"
-/Users/zekri/.workbuddy-ai/binaries/python/versions/3.13.12/bin/python3 - "$AUXKC" "$BUNDLE_ID" "$NEW_CDHASH" <<'PY'
+python3 - "$AUXKC" "$BUNDLE_ID" "$NEW_CDHASH" <<'PY'
 import plistlib, sys
 
 auxkc, bundle_id, new_hash = sys.argv[1], sys.argv[2], sys.argv[3]
 
 p = f"{auxkc}/com.apple.kcgen.instructions.plist"
 d = plistlib.load(open(p, 'rb'))
-entry = d.get('kextsToBuild', {}).get(bundle_id)
-if entry is not None:
-    entry['cdHash'] = new_hash
-    plistlib.dump(d, open(p, 'wb'))
-    print("      instructions: ok")
+ktb = d.setdefault('kextsToBuild', {})
+if bundle_id in ktb:
+    ktb[bundle_id]['cdHash'] = new_hash
+    print("      instructions: ok (updated)")
 else:
-    print("      instructions: bundle tidak ada (lewati)")
+    ktb[bundle_id] = {
+        'bundlePathMainOS': '/Library/Extensions/RTL8188EAirport.kext',
+        'cdHash': new_hash,
+        'teamID': ''
+    }
+    print("      instructions: ok (added)")
+plistlib.dump(d, open(p, 'wb'))
 
 p2 = f"{auxkc}/com.apple.kcgen.uakl.plist"
 d2 = plistlib.load(open(p2, 'rb'))
 u = d2.get('UnsignedKernelExtensions', [])
 if new_hash not in u:
-    # ganti entri lama yang bukan milik kext lain; cukup tambahkan yang baru
     u.append(new_hash)
     d2['UnsignedKernelExtensions'] = u
     plistlib.dump(d2, open(p2, 'wb'))

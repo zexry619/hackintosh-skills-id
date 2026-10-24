@@ -30,6 +30,12 @@ if [[ $EUID -ne 0 ]]; then
 	exit 1
 fi
 
+if [[ -f /Library/LaunchDaemons/com.zekri.realtek-autoload.plist ]]; then
+	launchctl unload /Library/LaunchDaemons/com.zekri.realtek-autoload.plist 2>/dev/null || true
+	mv /Library/LaunchDaemons/com.zekri.realtek-autoload.plist /Library/LaunchDaemons/com.zekri.realtek-autoload.plist.disabled
+	echo "[vendor-off] launchdaemon autoload dinonaktifkan"
+fi
+
 mkdir -p "$DISABLED_DIR"
 for k in RtWlanU RtWlanU1827; do
 	src="/Library/Extensions/$k.kext"
