@@ -37,12 +37,12 @@ extern kern_return_t _start(kmod_info_t *ki, void *data);
 extern kern_return_t _stop(kmod_info_t *ki, void *data);
 
 kmod_info_t kmod_info = {
-	0,				/* next */
-	KMOD_INFO_VERSION,		/* info_version */
-	0xFFFFFFFF,			/* id */
-	"io.github.zekri.RTL8188EUM1",	/* name */
-	"0.2.0",			/* version */
-	-1,				/* reference_count */
+	0,					/* next */
+	KMOD_INFO_VERSION,			/* info_version */
+	0xFFFFFFFF,				/* id */
+	"io.github.zekri.RTL8188EAirport",	/* name */
+	"0.9.1",				/* version */
+	-1,					/* reference_count */
 	0,				/* reference_list */
 	0,				/* address */
 	0,				/* size */

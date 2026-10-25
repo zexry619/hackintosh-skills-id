@@ -10,7 +10,6 @@
 #define AirportItlwmV2_hpp
 
 #include "Apple80211.h"
-#include <IOKit/80211/IO80211VirtualInterface.h>
 #ifdef AIRPORT_WCL
 #if __IO80211_TARGET == __MAC_15_2
 #include <Airport/macOS15/FaultReporter.h>
@@ -253,6 +252,7 @@ public:
     //pm
     thread_call_t powerOnThreadCall;
     thread_call_t powerOffThreadCall;
+    thread_call_t linkStateThreadCall;
     UInt32 pmPowerState;
     IOService *pmPolicyMaker;
     UInt8 pmPCICapPtr;

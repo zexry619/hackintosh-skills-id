@@ -292,18 +292,15 @@ IOReturn AirportItlwmSkywalkInterface::beginWCLScan(apple80211ScanRequest *reque
     memcpy(ic->ic_wcl_scan_channels, scan.channels, sizeof(scan.channels));
     scanSource->setTimeoutMS(20000);
     if (ic->ic_state == IEEE80211_S_RUN) {
-        ieee80211_begin_cache_bgscan(&ic->ic_if);
-        if (!(ic->ic_flags & IEEE80211_F_BGSCAN)) {
-            struct ieee80211_node *ni;
-            RB_FOREACH(ni, ieee80211_tree, &ic->ic_tree) {
-                if (ni->ni_rsnie_tlv && ni->ni_rsnie_tlv_len > 0) {
-                    publishWCLBeacon(ni, ni->ni_rsnie_tlv, ni->ni_rsnie_tlv_len);
-                }
+        struct ieee80211_node *ni;
+        RB_FOREACH(ni, ieee80211_tree, &ic->ic_tree) {
+            if (ni->ni_rsnie_tlv && ni->ni_rsnie_tlv_len > 0) {
+                publishWCLBeacon(ni, ni->ni_rsnie_tlv, ni->ni_rsnie_tlv_len);
             }
-            scanCompleted = true;
-            scanSource->setTimeoutMS(50);
-            return kIOReturnSuccess;
         }
+        scanCompleted = true;
+        scanSource->setTimeoutMS(50);
+        return kIOReturnSuccess;
     } else if (ic->ic_state != IEEE80211_S_SCAN) {
         int error = ic->ic_newstate(ic, IEEE80211_S_SCAN, -1);
         if (error) {
@@ -507,7 +504,8 @@ IOReturn AirportItlwmSkywalkInterface::startWCLJoin(AirportWCL::JoinRequest &joi
             wpa.i_akms |= IEEE80211_WPA_AKM_PSK;
         if (join.upperAuth & (APPLE80211_AUTHTYPE_WPA | APPLE80211_AUTHTYPE_WPA2))
             wpa.i_akms |= IEEE80211_WPA_AKM_8021X;
-        if (join.upperAuth & APPLE80211_AUTHTYPE_SHA256_PSK)
+        if ((join.upperAuth & APPLE80211_AUTHTYPE_SHA256_PSK) &&
+            !(wpa.i_akms & IEEE80211_WPA_AKM_PSK))
             wpa.i_akms |= IEEE80211_WPA_AKM_SHA256_PSK;
         if (join.upperAuth & APPLE80211_AUTHTYPE_SHA256_8021X)
             wpa.i_akms |= IEEE80211_WPA_AKM_SHA256_8021X;
@@ -516,10 +514,8 @@ IOReturn AirportItlwmSkywalkInterface::startWCLJoin(AirportWCL::JoinRequest &joi
         if (!wpa.i_akms)
             wpa.i_akms = personal ? IEEE80211_WPA_AKM_PSK : IEEE80211_WPA_AKM_8021X;
         /*
-         * AP ZEKRI.NET mengiklankan ucast={aes_ccm} saja. Menyertakan
-         * TKIP di pairwise list membuat sebagian AP WPA3-transition
-         * membuang assoc request tanpa balasan (bukan menolak dengan
-         * status). Pakai CCMP saja supaya RSN IE cocok dengan AP.
+         * Default CCMP; izinkan TKIP bila RSN IE override secara eksplisit
+         * memilih pairwise TKIP (router/hotspot legacy).
          */
         wpa.i_ciphers = IEEE80211_WPA_CIPHER_CCMP;
         wpa.i_groupcipher = IEEE80211_WPA_CIPHER_CCMP;
@@ -527,6 +523,11 @@ IOReturn AirportItlwmSkywalkInterface::startWCLJoin(AirportWCL::JoinRequest &joi
             join.rsn[4] == 0 && join.rsn[5] == 0x0f && join.rsn[6] == 0xac) {
             if (join.rsn[7] == 2) wpa.i_groupcipher = IEEE80211_WPA_CIPHER_TKIP;
             if (join.rsn[7] == 4) wpa.i_groupcipher = IEEE80211_WPA_CIPHER_CCMP;
+            if (join.rsnLength >= 14 && join.rsn[8] == 1 && join.rsn[9] == 0 &&
+                join.rsn[10] == 0 && join.rsn[11] == 0x0f && join.rsn[12] == 0xac &&
+                join.rsn[13] == 2) {
+                wpa.i_ciphers = IEEE80211_WPA_CIPHER_TKIP;
+            }
         }
         int error = ieee80211_ioctl_setwpaparms(ic, &wpa);
         if (error && error != ENETRESET) {
@@ -629,11 +630,6 @@ IOReturn AirportItlwmSkywalkInterface::startWCLJoin(AirportWCL::JoinRequest &joi
 
     XYLog("%s: node %s belum ada di pohon, scan terarah kanal %u\n",
         __FUNCTION__, ether_sprintf(joinBSSID), (unsigned)joinChannel);
-    if (joinChannel >= 1 && joinChannel <= 14) {
-        memset(ic->ic_chan_scan, 0, sizeof(ic->ic_chan_scan));
-        setbit(ic->ic_chan_scan, joinChannel);
-        ic->ic_bss->ni_chan = &ic->ic_channels[joinChannel];
-    }
     if (ic->ic_state != IEEE80211_S_SCAN) {
         if (ic->ic_newstate(ic, IEEE80211_S_SCAN, -1)) {
             joinPending = false;
@@ -645,7 +641,22 @@ IOReturn AirportItlwmSkywalkInterface::startWCLJoin(AirportWCL::JoinRequest &joi
             return kIOReturnError;
         }
     }
-    ieee80211_begin_scan(&ic->ic_if);
+    if (joinChannel >= 1 && joinChannel <= 14) {
+        /*
+         * Set kanal target SETELAH transisi ke SCAN (sebelumnya diset
+         * sebelum ieee80211_begin_scan sehingga langsung tertimpa reset_scan!).
+         * ni_chan diset ke joinChannel - 1 karena ieee80211_next_scan melakukan
+         * pre-increment (++chan) sebelum mengecek ic_chan_scan.
+         */
+        ic->ic_flags |= IEEE80211_F_ASCAN;
+        ic->ic_scan_count = 0;
+        memset(ic->ic_chan_scan, 0, sizeof(ic->ic_chan_scan));
+        setbit(ic->ic_chan_scan, joinChannel);
+        ic->ic_bss->ni_chan = &ic->ic_channels[joinChannel - 1];
+        ieee80211_next_scan(&ic->ic_if);
+    } else {
+        ieee80211_begin_scan(&ic->ic_if);
+    }
     return kIOReturnSuccess;
 }
 
@@ -729,6 +740,11 @@ IOReturn AirportItlwmSkywalkInterface::leaveWCLNetwork()
     bzero(joinBSSID, sizeof(joinBSSID));
     disassocIsVoluntary = true;
     ic->ic_deauth_reason = IEEE80211_REASON_AUTH_LEAVE;
+    if ((ic->ic_state == IEEE80211_S_RUN || ic->ic_state == IEEE80211_S_ASSOC) &&
+        ic->ic_bss && ic->ic_bss->ni_bssid[0] != 0) {
+        IEEE80211_SEND_MGMT(ic, ic->ic_bss,
+            IEEE80211_FC0_SUBTYPE_DEAUTH, IEEE80211_REASON_AUTH_LEAVE);
+    }
     if (ic->ic_state > IEEE80211_S_SCAN)
         ieee80211_new_state(ic, IEEE80211_S_SCAN, -1);
     ieee80211_disable_rsn(ic);

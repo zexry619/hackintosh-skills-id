@@ -29,7 +29,11 @@ rm -rf "$BUILD"
 mkdir -p "$KEXT/Contents/MacOS"
 cp "$SRC/airport/Info.plist" "$KEXT/Contents/Info.plist"
 
+GIT_REV="${GITHUB_SHA:-$(git rev-parse --short HEAD 2>/dev/null || echo local)}"
+GIT_REV="${GIT_REV:0:7}"
+
 COMMON=(
+	-arch x86_64
 	-mkernel
 	-fno-common
 	-O2
@@ -48,8 +52,8 @@ COMMON=(
 	-D__PRIVATE_SPI__
 	-DAIRPORT
 	-DIEEE80211_STA_ONLY
-	-DITLWM_VERSION='"2.4.0-m4"'
-	-DGIT_COMMIT='"local"'
+	-DITLWM_VERSION='"0.9.1"'
+	-DGIT_COMMIT="\"$GIT_REV\""
 	-I"$MKS/Headers"
 	-I"$SRC/urtwn"
 	-I"$SRC/usb"

@@ -6,7 +6,7 @@
 //  Copyright © 2023 钟先耀. All rights reserved.
 //
 
-#include "AirportItlwmV2.hpp"
+#include "AirportItlwm.hpp"
 #include <sys/_netstat.h>
 #include <crypto/sha1.h>
 #include <net80211/ieee80211_priv.h>
@@ -14,6 +14,7 @@
 
 #include "AirportItlwmSkywalkInterface.hpp"
 #include "IOPCIEDeviceWrapper.hpp"
+#include <kern/thread_call.h>
 
 #define super IO80211Controller
 OSDefineMetaClassAndStructors(AirportItlwm, IO80211Controller);
@@ -21,6 +22,26 @@ OSDefineMetaClassAndStructors(CTimeout, OSObject)
 
 IO80211WorkQueue *_fWorkloop;
 IOCommandGate *_fCommandGate;
+
+static void handleLinkStateThread(thread_call_param_t param0, thread_call_param_t param1)
+{
+    AirportItlwm *self = (AirportItlwm *)param0;
+    if (!self || !self->fNetIf)
+        return;
+
+    IO80211LinkState state = (IO80211LinkState)(uintptr_t)param1;
+    uint32_t reason = 0;
+    if (state == kIO80211NetworkLinkDown && self->fHalService) {
+        auto ic = self->fHalService->get80211Controller();
+        if (ic)
+            reason = (uint32_t)ic->ic_deauth_reason;
+    }
+
+    self->getCommandGate()->runAction(
+        AirportItlwm::setLinkStateGated,
+        (void *)(uintptr_t)state,
+        (void *)(uintptr_t)reason);
+}
 
 void AirportItlwm::releaseAll()
 {
@@ -85,6 +106,11 @@ void AirportItlwm::releaseAll()
         }
         _fWorkloop->release();
         _fWorkloop = NULL;
+    }
+    if (linkStateThreadCall) {
+        thread_call_cancel(linkStateThreadCall);
+        thread_call_free(linkStateThreadCall);
+        linkStateThreadCall = NULL;
     }
     unregistPM();
 }
@@ -159,6 +185,7 @@ bool AirportItlwm::init(OSDictionary *properties)
      * tetap "inactive" (DHCP tidak jalan).
      */
     currentStatus = 0;
+    linkStateThreadCall = NULL;
     memset(geo_location_cc, 0, sizeof(geo_location_cc));
     return ret;
 }
@@ -346,6 +373,12 @@ bool AirportItlwm::start(IOService *provider)
         XYLog("setup medium fail\n");
         releaseAll();
         return false;
+    }
+    linkStateThreadCall = thread_call_allocate(
+        (thread_call_func_t)handleLinkStateThread,
+        (thread_call_param_t)this);
+    if (!linkStateThreadCall) {
+        XYLog("allocate linkStateThreadCall fail\n");
     }
     fHalService->initWithController(this, _fWorkloop, _fCommandGate);
     fHalService->get80211Controller()->ic_event_handler = eventHandler;
@@ -705,7 +738,12 @@ setLinkStatus(UInt32 status, const IONetworkMedium * activeMedium, UInt64 speed,
 #ifdef __PRIVATE_SPI__
             bsdInterface->startOutputThread();
 #endif
-            getCommandGate()->runAction(setLinkStateGated, (void *)kIO80211NetworkLinkUp, (void *)0);
+            auto queue = getWorkQueue();
+            if (linkStateThreadCall && (!queue || queue->onThread())) {
+                thread_call_enter1(linkStateThreadCall, (thread_call_param_t)(uintptr_t)kIO80211NetworkLinkUp);
+            } else {
+                getCommandGate()->runAction(setLinkStateGated, (void *)kIO80211NetworkLinkUp, (void *)0);
+            }
             /*
              * Kualitas link dilaporkan lewat updateWCLLinkQuality()
              * (WCL), bukan setLinkQualityMetric() — method itu tidak
@@ -718,7 +756,12 @@ setLinkStatus(UInt32 status, const IONetworkMedium * activeMedium, UInt64 speed,
 #endif
             ifq_flush(&ifq->if_snd);
             mq_purge(&fHalService->get80211Controller()->ic_mgtq);
-            getCommandGate()->runAction(setLinkStateGated, (void *)kIO80211NetworkLinkDown, (void *)fHalService->get80211Controller()->ic_deauth_reason);
+            auto queue = getWorkQueue();
+            if (linkStateThreadCall && (!queue || queue->onThread())) {
+                thread_call_enter1(linkStateThreadCall, (thread_call_param_t)(uintptr_t)kIO80211NetworkLinkDown);
+            } else {
+                getCommandGate()->runAction(setLinkStateGated, (void *)kIO80211NetworkLinkDown, (void *)(uintptr_t)fHalService->get80211Controller()->ic_deauth_reason);
+            }
         }
     }
     return ret;
@@ -728,6 +771,23 @@ IOReturn AirportItlwm::
 setLinkStateGated(OSObject *target, void *arg0, void *arg1, void *arg2, void *arg3)
 {
     AirportItlwm *that = OSDynamicCast(AirportItlwm, target);
+    if (!that || !that->fNetIf)
+        return kIOReturnNotReady;
+
+    auto queue = that->getWorkQueue();
+    if (queue && queue->onThread()) {
+        /*
+         * IO80211Glue::sendIOUCToWcl() explicitly panics ("trying to send on
+         * thread panic \n") if called while executing on the WorkQueue thread!
+         * If reached here on workloop thread, defer execution to Mach worker
+         * thread via thread_call to guarantee queue->onThread() is false.
+         */
+        XYLog("%s: executing on workloop thread! Deferring to thread_call to prevent panic\n", __FUNCTION__);
+        if (that->linkStateThreadCall) {
+            thread_call_enter1(that->linkStateThreadCall, (thread_call_param_t)arg0);
+            return kIOReturnSuccess;
+        }
+    }
 #ifdef AIRPORT_WCL
     /*
      * bsdInterface->setLinkState() hanya men-set IFF_UP|IFF_RUNNING di
@@ -1542,5 +1602,7 @@ void AirportItlwm::setPowerStateOn()
 {
     XYLog("%s\n", __FUNCTION__);
     pmPowerState = kPowerStateOn;
+    if (power_state)
+        enableAdapter(bsdInterface);
     pmPolicyMaker->acknowledgeSetPowerState();
 }

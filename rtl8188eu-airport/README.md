@@ -1,7 +1,8 @@
 # RTL8188EAirport
 
+[![Build Kext](https://github.com/zexry619/RTL8188EAirport/actions/workflows/build.yml/badge.svg)](https://github.com/zexry619/RTL8188EAirport/actions/workflows/build.yml)
 [![macOS Sequoia](https://img.shields.io/badge/macOS-15.x%20Sequoia-blue.svg)](https://apple.com)
-[![Kext Version](https://img.shields.io/badge/version-0.9.0-success.svg)](https://github.com/zexry619/RTL8188EAirport)
+[![Kext Version](https://img.shields.io/badge/version-0.9.1-success.svg)](https://github.com/zexry619/RTL8188EAirport)
 [![Architecture](https://img.shields.io/badge/arch-x86__64-orange.svg)](#)
 [![License](https://img.shields.io/badge/license-GPL--2.0%20%2F%20ISC-green.svg)](#license)
 

@@ -362,8 +362,8 @@ inline size_t selectWPA2TransitionMode(uint8_t *ies, size_t length) {
             continue;
         }
         size_t tailOffset = suitesOffset + 4 * count;
-        // PSK/SAE transition mode advertises PMF capable, but not required.
-        if (size - tailOffset < 2 || (read16(ie + tailOffset) & 0xc0) != 0x80) {
+        // PSK/SAE transition mode must not require mandatory PMF (MFPR = 0x40).
+        if (size - tailOffset < 2 || (read16(ie + tailOffset) & 0x40) != 0) {
             offset += size;
             continue;
         }
@@ -374,8 +374,10 @@ inline size_t selectWPA2TransitionMode(uint8_t *ies, size_t length) {
                 other = true;
             else if (suite[3] == 2)
                 psk = true;
-            else if (suite[3] == 8)
+            else if (suite[3] == 8 || suite[3] == 9)
                 sae = true;
+            else if (suite[3] == 4 || suite[3] == 6)
+                ; // Allow FT-PSK (4) & SHA256-PSK (6) on Android/iOS hotspots
             else
                 other = true;
         }

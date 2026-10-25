@@ -4,6 +4,7 @@
 *~
 
 # Build artifacts & compiled output
+dist/
 build/
 build-*/
 *.o
