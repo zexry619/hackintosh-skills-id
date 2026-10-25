@@ -160,7 +160,7 @@ public:
 	void setRxCallback(rtwn_rx_cb cb, void *ctx) { fRxCb = cb; fRxCtx = ctx; }
 	void setTxDoneCb(rtwn_tx_done_cb cb, void *ctx) { fTxDoneCb = cb; fTxDoneCtx = ctx; }
 	int32_t txInFlight() const { return fTxInFlight; }
-	bool txBusy() const { return fTxInFlight >= 16; }
+	bool txBusy() const { return fTxInFlight >= 32; }
 
 private:
 	/* Satu control transfer dengan batas waktu sendiri (buffers di heap). */

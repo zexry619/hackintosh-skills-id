@@ -77,7 +77,7 @@ bool ItlRtl8188E::init()
 	fBulkReady = false;
 	fIfAttached = false;
 	fSawRx = false;
-	fTxQueueSize = 64;
+	fTxQueueSize = 256;
 	fRxTimer = nullptr;
 	fTxTimer = nullptr;
 	fRxLock = nullptr;
@@ -94,9 +94,15 @@ bool ItlRtl8188E::init()
 	fTxReport = fTxOk = fTxRetry = 0;
 	fTxAuthReq = fTxAssocReq = fRxAuth = fRxAssocResp = 0;
 	fJoinTry = 0;
+	memset(fLastJoinBssid, 0, sizeof(fLastJoinBssid));
 	fRsnVariant = 0;
 	fRxDelivered = 0;
 	fRxDataLogged = 0;
+	fRxBar = 0;
+	fTxAgg = 0;
+	fBw40 = false;
+	fPriChLo = false;
+	memset(fTxScratch, 0, sizeof(fTxScratch));
 	return true;
 }
 
@@ -239,7 +245,7 @@ int ItlRtl8188E::initChip(void)
 	rc += rtwn_init_rf_8188e(halRead, halWrite, this);
 	rc += rtwn_core_config_8188e(halRead, halWrite, this, fMac);
 
-	IOSleep(20);
+	IOSleep(2);
 	fChipReady = true;
 	IOLog(LOGP "init selesai (%d register)\n", rc);
 	return 0;
@@ -310,7 +316,9 @@ bool ItlRtl8188E::attach(IOPCIDevice *device)
 	fIc.ic_state = IEEE80211_S_INIT;
 	fIc.ic_curmode = IEEE80211_MODE_11N;
 	fIc.ic_caps = IEEE80211_C_WEP | IEEE80211_C_RSN |
-	    IEEE80211_C_SHSLOT | IEEE80211_C_SHPREAMBLE;
+	    IEEE80211_C_SHSLOT | IEEE80211_C_SHPREAMBLE |
+	    IEEE80211_C_QOS | IEEE80211_C_TX_AMPDU |
+	    IEEE80211_C_AMSDU_IN_AMPDU;
 	/*
 	 * 802.11n (HT): aktifkan kapabilitas HT, MCS 0..7, dan A-MPDU aggregation.
 	 */
@@ -357,15 +365,16 @@ bool ItlRtl8188E::attach(IOPCIDevice *device)
 	if_attach(ifp);
 	ieee80211_ifattach(ifp, getController());
 	/*
-	 * Batasi antrean TX (if_snd) ke 64 paket (bukan default 2048).
-	 * Antrean 2048 paket memicu bufferbloat parah hingga ~700 ms saat upload.
-	 * 64 paket (~25 ms) memberikan throughput maksimal sekaligus menjaga latensi sub-20 ms.
+	 * Antrean TX (if_snd) 256 paket (~384 KB): mencegah tail-drop pada
+	 * 16 paralel TCP flow (networkQuality) saat A-MPDU burst dibentuk,
+	 * jauh di bawah default 2048 yang memicu bufferbloat.
 	 */
-	ifq_set_maxlen(&ifp->if_snd, 64);
+	ifq_set_maxlen(&ifp->if_snd, 256);
 	ieee80211_media_init(ifp);
 
 	fOrigNewstate = fIc.ic_newstate;
 	fIc.ic_newstate = newstateCb;
+	fIc.ic_updateslot = updateSlotCb;
 	fIc.ic_softc = this;
 	fIc.ic_set_key = setKeyCb;
 	fIc.ic_delete_key = deleteKeyCb;
@@ -413,7 +422,7 @@ bool ItlRtl8188E::attach(IOPCIDevice *device)
 	fRxRunning = true;
 	fChip.usb.setTxDoneCb(txDoneHook, this);
 	fChip.usb.setRxCallback(rxCb, this);
-	if (!fChip.usb.bulkQueueRx(16)) {
+	if (!fChip.usb.bulkQueueRx(32)) {
 		IOLog(LOGP "gagal antre RX\n");
 		fRxRunning = false;
 		fChip.usb.setTxDoneCb(nullptr, nullptr);
@@ -601,22 +610,24 @@ void ItlRtl8188E::setDiag(const char *key, const char *value)
 
 void ItlRtl8188E::publishStats(void)
 {
-	char s[192];
+	char s[224];
 
 	snprintf(s, sizeof(s),
-	    "txm=%u txd=%u txe=%u txf=%u rpt=%u txok=%u rty=%u "
-	    "rxm=%u rxd=%u rxe=%u encf=%u pipe=%d inf=%d "
+	    "txm=%u txd=%u txe=%u txf=%u agg=%u rpt=%u txok=%u rty=%u "
+	    "rxm=%u rxd=%u rxe=%u bar=%u encf=%u pipe=%d inf=%d "
 	    "auth=%u/%u assoc=%u/%u try=%u rsnv=%u dlv=%u "
-	    "st=%d xf=%08x sndq=%d",
+	    "bw=%u st=%d xf=%08x sndq=%d",
 	    (unsigned)fTxMgmt, (unsigned)fTxData, (unsigned)fTxEapol,
-	    (unsigned)fTxFail, (unsigned)fTxReport, (unsigned)fTxOk,
-	    (unsigned)fTxRetry, (unsigned)fRxMgmt, (unsigned)fRxData,
-	    (unsigned)fRxEapol, (unsigned)fEncryptFail,
+	    (unsigned)fTxFail, (unsigned)fTxAgg, (unsigned)fTxReport,
+	    (unsigned)fTxOk, (unsigned)fTxRetry, (unsigned)fRxMgmt,
+	    (unsigned)fRxData, (unsigned)fRxEapol, (unsigned)fRxBar,
+	    (unsigned)fEncryptFail,
 	    fChip.usb.txPipeCount(), fChip.usb.txInFlight(),
 	    (unsigned)fTxAuthReq, (unsigned)fRxAuth,
 	    (unsigned)fTxAssocReq, (unsigned)fRxAssocResp,
 	    (unsigned)fJoinTry, (unsigned)fRsnVariant,
 	    (unsigned)fRxDelivered,
+	    fBw40 ? 40u : 20u,
 	    (int)fIc.ic_state, (unsigned)fIc.ic_xflags,
 	    fIc.ic_if.if_snd.queue ? 1 : 0);
 	setDiag("RTL8188E-stat", s);
@@ -629,11 +640,29 @@ void ItlRtl8188E::setChannel(struct ieee80211_channel *chan)
 	uint8_t ch = (uint8_t)ieee80211_chan2ieee(&fIc, chan);
 	if (ch >= 1 && ch <= 14) {
 		char stage[24];
+		int bw40 = 0;
+		int prichlo = 0;
 
-		snprintf(stage, sizeof(stage), "ch-%u", ch);
+		if (fIc.ic_state == IEEE80211_S_RUN && fIc.ic_bss &&
+		    fIc.ic_bss->ni_chan == chan &&
+		    fIc.ic_bss->ni_chw == IEEE80211_CHAN_WIDTH_40) {
+			uint8_t sco = fIc.ic_bss->ni_htop0 &
+			    IEEE80211_HTOP0_SCO_MASK;
+			if (sco == IEEE80211_HTOP0_SCO_SCA ||
+			    sco == IEEE80211_HTOP0_SCO_SCB) {
+				bw40 = 1;
+				prichlo = (sco == IEEE80211_HTOP0_SCO_SCA) ? 1 : 0;
+			}
+		}
+
+		fBw40 = (bw40 != 0);
+		fPriChLo = (prichlo != 0);
+		snprintf(stage, sizeof(stage), "ch-%u%s", ch,
+		    bw40 ? (prichlo ? "+40" : "-40") : "");
 		setDiag("RTL8188E-scan", stage);
-		if (rtwn_set_chan_8188e(halRead, halWrite, this, ch) != 0)
-			IOLog(LOGP "set kanal %u gagal\n", ch);
+		if (rtwn_set_chan_bw_8188e(halRead, halWrite, this, ch,
+		    bw40, prichlo) != 0)
+			IOLog(LOGP "set kanal %u (bw40=%d) gagal\n", ch, bw40);
 	}
 }
 
@@ -684,11 +713,27 @@ void ItlRtl8188E::updateSlot(struct ieee80211com *ic)
 	uint8_t slot = (ic->ic_flags & IEEE80211_F_SHSLOT) ?
 	    IEEE80211_DUR_DS_SHSLOT : IEEE80211_DUR_DS_SLOT;
 	uint8_t irts = (ic->ic_curmode == IEEE80211_MODE_11B) ? 0 : 3;
+	uint32_t trx = 0;
 
 	halWrite(this, R92C_SLOT, &slot, 1);
 	halWrite(this, R92C_INIRTS_RATE_SEL, &irts, 1);
-	IOLog(LOGP "slot=%u us shslot=%d irts=%u\n", slot,
-	    (ic->ic_flags & IEEE80211_F_SHSLOT) ? 1 : 0, irts);
+	if (halRead(this, R92C_WMAC_TRXPTCL_CTL, &trx, 4) == 0) {
+		if (ic->ic_flags & IEEE80211_F_SHPREAMBLE)
+			trx |= R92C_WMAC_TRXPTCL_CTL_SHORT;
+		else
+			trx &= ~(uint32_t)R92C_WMAC_TRXPTCL_CTL_SHORT;
+		halWrite(this, R92C_WMAC_TRXPTCL_CTL, &trx, 4);
+	}
+	IOLog(LOGP "slot=%u us shslot=%d shpre=%d irts=%u\n", slot,
+	    (ic->ic_flags & IEEE80211_F_SHSLOT) ? 1 : 0,
+	    (ic->ic_flags & IEEE80211_F_SHPREAMBLE) ? 1 : 0, irts);
+}
+
+void ItlRtl8188E::updateSlotCb(struct ieee80211com *ic)
+{
+	ItlRtl8188E *me = ic ? (ItlRtl8188E *)ic->ic_softc : nullptr;
+	if (me)
+		me->updateSlot(ic);
 }
 
 void ItlRtl8188E::camWrite(uint32_t addr, uint32_t data)
@@ -835,6 +880,8 @@ int ItlRtl8188E::newstateCb(struct ieee80211com *ic,
 		    R92C_RCR_APP_ICV | R92C_RCR_HTC_LOC_CTRL |
 		    R92C_RCR_APP_MIC | R92C_RCR_APP_PHYSTS;
 		halWrite(me, R92C_RCR, &rcr, 4);
+		if (!me->fScanning)
+			rtwn_set_rx_gain_8188e(halRead, halWrite, me, 0x20);
 
 		me->fScanning = true;
 		if (ic->ic_bss && ic->ic_bss->ni_chan)
@@ -861,15 +908,23 @@ int ItlRtl8188E::newstateCb(struct ieee80211com *ic,
 		 * mencoba beberapa kombinasi tanpa reboot.
 		 */
 		if (nstate == IEEE80211_S_AUTH) {
+			bool isSameBssid = (ic->ic_bss &&
+			    ic->ic_bss->ni_bssid[0] != 0 &&
+			    IEEE80211_ADDR_EQ(ic->ic_bss->ni_bssid, me->fLastJoinBssid));
+			if (!isSameBssid) {
+				me->fJoinTry = 0;
+				if (ic->ic_bss)
+					memcpy(me->fLastJoinBssid, ic->ic_bss->ni_bssid, 6);
+			}
 			/*
-			 * Percobaan ulang: beritahu AP dulu bahwa sesi
+			 * Percobaan ulang BSSID yang sama: beritahu AP dulu bahwa sesi
 			 * lama berakhir. Tanpa deauth, AP menyimpan
 			 * state "authenticated" untuk MAC kita dan
 			 * mengabaikan assoc request berikutnya (AP hanya
 			 * membalas deauth reason 2, assoc response tidak
 			 * pernah datang).
 			 */
-			if (me->fJoinTry > 0 && ic->ic_bss &&
+			if (me->fJoinTry > 0 && isSameBssid && ic->ic_bss &&
 			    ic->ic_bss->ni_bssid[0] != 0) {
 				IEEE80211_SEND_MGMT(ic, ic->ic_bss,
 				    IEEE80211_FC0_SUBTYPE_DEAUTH,
@@ -878,6 +933,7 @@ int ItlRtl8188E::newstateCb(struct ieee80211com *ic,
 				    (unsigned)me->fJoinTry);
 			}
 			me->fJoinTry++;
+			rtwn_set_rx_gain_8188e(halRead, halWrite, me, 0x32);
 			me->updateSlot(ic);
 			me->applyRsnVariant(me->fJoinTry);
 			me->publishStats();
@@ -900,17 +956,27 @@ int ItlRtl8188E::newstateCb(struct ieee80211com *ic,
 			halWrite(me, R92C_MACID + i, &b, 1);
 		}
 		if (nstate == IEEE80211_S_RUN) {
+			me->fJoinTry = 0;
+			rtwn_set_rx_gain_8188e(halRead, halWrite, me, 0x32);
 			uint8_t msr = R92C_MSR_NETTYPE_INFRA;
 			me->updateSlot(ic);
 			halWrite(me, R92C_MSR, &msr, 1);
+			/*
+			 * Aktifkan R92C_RCR_ACF bersama RXFLTMAP1 = 0x0100 (BAR saja)
+			 * agar BlockAckReq (0x84) dari AP masuk ke ieee80211_recv_bar()
+			 * dan melepaskan reorder buffer A-MPDU seketika tanpa menunggu
+			 * gap timeout 300 ms!
+			 */
+			uint16_t flt1 = 0x0100;
+			halWrite(me, R92C_RXFLTMAP1, &flt1, 2);
+			uint16_t flt2 = 0xffff;
+			halWrite(me, R92C_RXFLTMAP2, &flt2, 2);
 			uint32_t rcr = R92C_RCR_APM | R92C_RCR_AM | R92C_RCR_AB |
 			    R92C_RCR_CBSSID_DATA |
-			    R92C_RCR_ADF | R92C_RCR_AMF |
+			    R92C_RCR_ADF | R92C_RCR_ACF | R92C_RCR_AMF |
 			    R92C_RCR_APP_ICV | R92C_RCR_HTC_LOC_CTRL |
 			    R92C_RCR_APP_MIC | R92C_RCR_APP_PHYSTS;
 			halWrite(me, R92C_RCR, &rcr, 4);
-			uint16_t flt2 = 0xffff;
-			halWrite(me, R92C_RXFLTMAP2, &flt2, 2);
 			uint8_t txpause = 0x00;
 			halWrite(me, R92C_TXPAUSE, &txpause, 1);
 			if (ic->ic_bss) {
@@ -924,6 +990,8 @@ int ItlRtl8188E::newstateCb(struct ieee80211com *ic,
 	case IEEE80211_S_INIT:
 		me->fScanning = false;
 		me->fScanSeen = false;
+		me->fJoinTry = 0;
+		memset(me->fLastJoinBssid, 0, sizeof(me->fLastJoinBssid));
 		if (me->fScanTo)
 			timeout_del(&me->fScanTo);
 		/*
@@ -1188,21 +1256,19 @@ void ItlRtl8188E::sendFrame(mbuf_t m, struct ieee80211_node *ni, bool isMgmt)
 		int ntx = fChip.usb.txPipeCount();
 		uint8_t qsel = 0x00;	/* BE */
 		int pipe = (ntx >= 3) ? 2 : ((ntx == 2) ? 1 : 0);
+		bool qos = !isMgmt && ((wh[0] & IEEE80211_FC0_SUBTYPE_QOS) != 0);
+		uint8_t tid = qos ? (wh[24] & 0x0f) : 0;
 
 		if (isMgmt) {
 			qsel = 0x12;	/* MGNT */
 			pipe = 0;
-		} else if (isControl) {
+		} else if (qos) {
 			/*
-			 * ICMP Ping, ARP, EAPOL diprioritaskan ke High Queue FIFO (pipe 0, EP 0x02)
-			 * dengan Access Category VO (0x07) agar hardware Realtek langsung mengirimkannya
-			 * mendahului antrean buffer TCP speedtest pada Normal Queue (pipe 1).
+			 * KRUSIAL untuk BlockAck (A-MPDU):
+			 * Semua frame QoS dengan TID yang sama WAJIB melewati queue
+			 * hardware (qsel & pipe) yang sama agar nomor urut ni_qos_txseqs[tid]
+			 * diterima berurutan oleh reorder buffer AP (tidak memicu gap stall!).
 			 */
-			qsel = 0x07;	/* VO / High Priority */
-			pipe = 0;
-		} else if (wh[0] & IEEE80211_FC0_SUBTYPE_QOS) {
-			uint8_t tid = wh[24] & 0x0f;
-
 			if (tid >= 6) {
 				qsel = 0x07;	/* VO */
 				pipe = 0;
@@ -1216,10 +1282,18 @@ void ItlRtl8188E::sendFrame(mbuf_t m, struct ieee80211_node *ni, bool isMgmt)
 				qsel = 0x00;	/* BE */
 				pipe = (ntx >= 3) ? 2 : ((ntx == 2) ? 1 : 0);
 			}
+		} else if (isControl) {
+			/*
+			 * Frame non-QoS sensitif latensi (EAPOL handshake, ARP/ICMP/DNS
+			 * sebelum BlockAck aktif) dikirim lewat High Queue FIFO (pipe 0).
+			 */
+			qsel = 0x07;	/* VO / High Priority */
+			pipe = 0;
 		}
 
 		total = RTWN_USB_TX_DESC_SIZE + len;
-		buf = (uint8_t *)IOMalloc(total);
+		bool useScratch = (total <= sizeof(fTxScratch));
+		buf = useScratch ? fTxScratch : (uint8_t *)IOMalloc(total);
 		if (!buf) {
 			mbuf_freem(m);
 			if (ni)
@@ -1230,16 +1304,41 @@ void ItlRtl8188E::sendFrame(mbuf_t m, struct ieee80211_node *ni, bool isMgmt)
 		if (isMgmt) {
 			rtwn_usb_build_mgmt_tx_desc(buf, RTWN_USB_TX_DESC_SIZE,
 			    (uint16_t)len, bcast);
+			if (fBw40) {
+				buf[18] |= (uint8_t)((fPriChLo ? 1 : 2) << 4);
+				rtwn_usb_tx_checksum(buf, RTWN_USB_TX_DESC_SIZE);
+			}
 		} else {
-			bool qos = (wh[0] & IEEE80211_FC0_SUBTYPE_QOS) != 0;
 			uint16_t seq = ((uint16_t)wh[22] |
 			    ((uint16_t)wh[23] << 8)) >> IEEE80211_SEQ_SEQ_SHIFT;
+			bool canAgg = qos && !bcast && !isEapol && ni &&
+			    (ni->ni_tx_ba[tid].ba_state == IEEE80211_BA_AGREED);
 
 			rtwn_usb_build_tx_desc(buf, RTWN_USB_TX_DESC_SIZE,
 			    (uint16_t)len, RTWN_USB_TX_DESC_SIZE, bcast, true,
 			    raid, false, false, 0);
 			/* QSEL (txdw1 bit 8-12) harus sama dengan queue pipe. */
 			buf[5] = (uint8_t)((buf[5] & 0xe0) | (qsel & 0x1f));
+
+			/*
+			 * A-MPDU TX Aggregation (sesuai TxFillDescriptor8188EUsb
+			 * @0x14d5c4..0x14d5d7 di RtWlanU.kext):
+			 *   - Bila BA_AGREED aktif pada TID ini: aktifkan R88E_TXDW2_AGG_EN
+			 *     (buf[9] |= 0x10), matikan AGGBK (buf[10] &= ~0x01), dan set
+			 *     txdw6 = 0x6666f800 (batas agregasi & densitas MPDU).
+			 *   - Bila belum BA_AGREED / EAPOL / bcast: pasang AGGBK (buf[10] |= 0x01).
+			 */
+			if (canAgg) {
+				buf[9] |= 0x10;		/* R88E_TXDW2_AGG_EN */
+				buf[10] &= ~0x01;	/* clear R88E_TXDW2_AGGBK */
+				buf[25] = 0xf8;
+				buf[26] = 0x66;
+				buf[27] = 0x66;
+				fTxAgg++;
+			} else {
+				buf[10] |= 0x01;	/* R88E_TXDW2_AGGBK */
+			}
+
 			/*
 			 * Sesuai TxFillDescriptor8188EUsb (@0x14d66d-0x14d694) di RtWlanU.kext:
 			 *   - seq & 0x0fff selalu ditulis ke buf[14..15]
@@ -1260,21 +1359,34 @@ void ItlRtl8188E::sendFrame(mbuf_t m, struct ieee80211_node *ni, bool isMgmt)
 			buf[18] = 0x00;
 			buf[19] = 0x00;
 			/*
-			 * txdw5: DATARATE (buf[20]):
-			 *   - Unicast data: 0x13 (MCS 7 = 65/72.2 Mb/s) untuk throughput maksimal 802.11n
-			 *     (0.16 ms vs 13 ms di CCK 1M).
-			 *   - Mgmt / Bcast / EAPOL: 0x00 (CCK 1 Mb/s) untuk keandalan maksimal.
-			 * Batas fallback 0xff (buf[21]) mengizinkan MAC melakukan step down otomatis
-			 * jika sinyal turun (MCS 7 -> MCS 6..0 -> 54M..1M).
+			 * txdw4 & txdw5:
+			 *   - Unicast data: 0x13 (MCS 7 = 65/72.2 Mb/s di 20 MHz, 135/150 Mb/s di 40 MHz).
+			 *   - Mgmt / Bcast / EAPOL: 0x00 (CCK 1 Mb/s).
+			 *   - 40 MHz (HT40): pasang R92C_TXDW4_40MHZ (buf[19] |= 0x02) + SGI40.
+			 *   - Frame 20 MHz pada BSS 40 MHz: pasang DATA_SC di buf[18] bit 4..5.
 			 */
 			uint8_t rate = (!bcast && !isEapol && !isMgmt) ? 0x13 : 0x00;
-			/* Aktifkan SGI (Short Guard Interval 400 ns) jika AP mendukung (72.2 Mbps) */
-			if (rate == 0x13 && fIc.ic_bss && (fIc.ic_bss->ni_htcaps & IEEE80211_HTCAP_SGI20)) {
-				rate |= 0x40;
+			bool use40 = (rate == 0x13) && fBw40 && ni &&
+			    (ni->ni_chw == IEEE80211_CHAN_WIDTH_40);
+			if (use40) {
+				buf[19] |= 0x02;	/* R92C_TXDW4_40MHZ */
+				if ((ni->ni_flags & IEEE80211_NODE_HT_SGI40) ||
+				    (ni->ni_htcaps & IEEE80211_HTCAP_SGI40)) {
+					rate |= 0x40;
+				}
+			} else {
+				if (fBw40) {
+					buf[18] |= (uint8_t)((fPriChLo ? 1 : 2) << 4);
+				}
+				if (rate == 0x13 && fIc.ic_bss &&
+				    ((fIc.ic_bss->ni_flags & IEEE80211_NODE_HT_SGI20) ||
+				     (fIc.ic_bss->ni_htcaps & IEEE80211_HTCAP_SGI20))) {
+					rate |= 0x40;
+				}
 			}
 			buf[10] &= ~0x08;	/* pastikan CCX_RPT mati agar tidak membanjiri Bulk-IN */
 			buf[20] = rate;
-			buf[21] = 0xff;
+			buf[21] = 0x1f;		/* batas fallback rate (RtWlanU @0x14d22f) */
 			buf[22] = 0x01;
 			buf[23] = 0x00;
 			rtwn_usb_tx_checksum(buf, RTWN_USB_TX_DESC_SIZE);
@@ -1282,7 +1394,8 @@ void ItlRtl8188E::sendFrame(mbuf_t m, struct ieee80211_node *ni, bool isMgmt)
 
 		pktlen = len;
 		if (mbuf_copydata(m, 0, pktlen, buf + RTWN_USB_TX_DESC_SIZE) != 0) {
-			IOFree(buf, total);
+			if (!useScratch)
+				IOFree(buf, total);
 			mbuf_freem(m);
 			if (ni)
 				ieee80211_release_node(&fIc, ni);
@@ -1305,7 +1418,8 @@ void ItlRtl8188E::sendFrame(mbuf_t m, struct ieee80211_node *ni, bool isMgmt)
 				fIc.ic_if.netStat->outputPackets++;
 		}
 
-		IOFree(buf, total);
+		if (!useScratch)
+			IOFree(buf, total);
 		mbuf_freem(m);
 
 		/* net80211 menyerahkan referensi node ke driver. */
@@ -1445,7 +1559,7 @@ void ItlRtl8188E::rxTimerAction(IOTimerEventSource *timer)
 {
 	uint8_t *bufs[32];
 	uint32_t lens[32];
-	int maxLoops = 4;
+	int maxLoops = 8;
 
 	(void)timer;
 
@@ -1489,27 +1603,32 @@ void ItlRtl8188E::rxTimerAction(IOTimerEventSource *timer)
 
 void ItlRtl8188E::rxQueueFree(void)
 {
-	uint8_t *bufs[kRxQueueDepth];
-	uint32_t lens[kRxQueueDepth];
-	uint32_t n = 0, i;
+	uint8_t *bufs[32];
+	uint32_t lens[32];
 
 	if (!fRxLock)
 		return;
 
-	IOLockLock(fRxLock);
-	while (fRxCount > 0) {
-		bufs[n] = fRxBuf[fRxHead];
-		lens[n] = fRxLen[fRxHead];
-		fRxBuf[fRxHead] = nullptr;
-		fRxLen[fRxHead] = 0;
-		fRxHead = (fRxHead + 1) % kRxQueueDepth;
-		fRxCount--;
-		n++;
-	}
-	IOLockUnlock(fRxLock);
+	for (;;) {
+		uint32_t n = 0, i;
 
-	for (i = 0; i < n; i++)
-		IOFree(bufs[i], lens[i]);
+		IOLockLock(fRxLock);
+		while (fRxCount > 0 && n < 32) {
+			bufs[n] = fRxBuf[fRxHead];
+			lens[n] = fRxLen[fRxHead];
+			fRxBuf[fRxHead] = nullptr;
+			fRxLen[fRxHead] = 0;
+			fRxHead = (fRxHead + 1) % kRxQueueDepth;
+			fRxCount--;
+			n++;
+		}
+		IOLockUnlock(fRxLock);
+
+		if (n == 0)
+			break;
+		for (i = 0; i < n; i++)
+			IOFree(bufs[i], lens[i]);
+	}
 }
 
 static inline uint32_t
@@ -1638,7 +1757,12 @@ void ItlRtl8188E::handleRx(const uint8_t *buf, uint32_t len)
 		if (!txReport) {
 			uint8_t type, sub;
 
-			if (flen < sizeof(struct ieee80211_frame))
+			/*
+			 * BlockAckReq (BAR, fc=0x84) adalah frame CTL 20 byte
+			 * (sizeof(ieee80211_frame_min) = 16B + 4B BAR control/SSN).
+			 * Jangan buang frame CTL 20 byte dengan batas 24 byte!
+			 */
+			if (flen < sizeof(struct ieee80211_frame_min))
 				goto advance;
 			wh = (struct ieee80211_frame *)(buf + foff);
 			if ((wh->i_fc[0] & IEEE80211_FC0_VERSION_MASK) !=
@@ -1647,12 +1771,17 @@ void ItlRtl8188E::handleRx(const uint8_t *buf, uint32_t len)
 
 			type = wh->i_fc[0] & IEEE80211_FC0_TYPE_MASK;
 			sub = wh->i_fc[0] & IEEE80211_FC0_SUBTYPE_MASK;
+			if (type != IEEE80211_FC0_TYPE_CTL &&
+			    flen < sizeof(struct ieee80211_frame))
+				goto advance;
 
 			/*
 			 * Dalam STA mode:
 			 * 1. Jangan pernah memproses Probe Request (sub=0x40).
 			 * 2. Jangan pernah memproses frame unicast yang bukan untuk ic_myaddr.
-			 * 3. Saat state RUN (dan tidak sedang scan/bgscan), buang frame
+			 * 3. Frame CTL hanya boleh diproses saat RUN dan hanya berupa
+			 *    BlockAckReq (BAR >= 20B) dari BSSID kita (tanpa menyentuh i_addr3!).
+			 * 4. Saat state RUN (dan tidak sedang scan/bgscan), buang frame
 			 *    data/mgmt dari BSSID asing agar tidak menimpa ni_rxseq / ni_rssi
 			 *    pada fIc.ic_bss atau memicu error dekripsi CCMP.
 			 */
@@ -1664,11 +1793,19 @@ void ItlRtl8188E::handleRx(const uint8_t *buf, uint32_t len)
 			    !IEEE80211_ADDR_EQ(wh->i_addr1, fIc.ic_myaddr))
 				goto advance;
 
-			if (fIc.ic_state == IEEE80211_S_RUN && fIc.ic_bss) {
+			if (type == IEEE80211_FC0_TYPE_CTL) {
+				if (fIc.ic_state != IEEE80211_S_RUN || !fIc.ic_bss ||
+				    sub != IEEE80211_FC0_SUBTYPE_BAR || flen < 20 ||
+				    !IEEE80211_ADDR_EQ(wh->i_addr2, fIc.ic_bss->ni_bssid))
+					goto advance;
+				fRxBar++;
+			} else if (fIc.ic_state == IEEE80211_S_RUN && fIc.ic_bss) {
 				if (type == IEEE80211_FC0_TYPE_DATA &&
 				    !IEEE80211_ADDR_EQ(wh->i_addr2, fIc.ic_bss->ni_bssid))
 					goto advance;
 				if (type == IEEE80211_FC0_TYPE_MGT &&
+				    sub != IEEE80211_FC0_SUBTYPE_BEACON &&
+				    sub != IEEE80211_FC0_SUBTYPE_PROBE_RESP &&
 				    !(fIc.ic_flags & IEEE80211_F_BGSCAN) &&
 				    !fIc.ic_wcl_scan_requested &&
 				    !IEEE80211_ADDR_EQ(wh->i_addr2, fIc.ic_bss->ni_bssid) &&

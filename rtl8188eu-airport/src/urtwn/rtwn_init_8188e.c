@@ -80,8 +80,12 @@ rtwn_init_mac_8188e(rtwn_read_fn rd, rtwn_write_fn wr, void *ctx)
 		}
 	}
 
-	/* 8188E: batas agregasi (OpenBSD urtwn_mac_init). */
-	wr8(rd, wr, ctx, R92C_MAX_AGGR_NUM, 0x07);
+	/*
+	 * 8188E: batas agregasi A-MPDU (0x0a = 10 subframe ~15 KB, sesuai
+	 * EnableSingleAmpduorNot di RtWlanU.kext @0x40da0 dan kapasitas
+	 * TXPKTBUF 20 KB pada RQPN 0x8090000c).
+	 */
+	wr8(rd, wr, ctx, R92C_MAX_AGGR_NUM, 0x0a);
 
 	return n;
 }
@@ -117,7 +121,7 @@ rtwn_init_bb_8188e(rtwn_read_fn rd, rtwn_write_fn wr, void *ctx, uint8_t xtal)
 		if (wr32(rd, wr, ctx, prog->regs[i], prog->vals[i]) == 0) {
 			n++;
 		}
-		RTWN_DELAY_MS(1);
+		RTWN_DELAY_US(1);
 	}
 
 	/* Tabel AGC (ditulis berulang ke R92C_OFDM0_AGCRSSITABLE). */
@@ -126,14 +130,14 @@ rtwn_init_bb_8188e(rtwn_read_fn rd, rtwn_write_fn wr, void *ctx, uint8_t xtal)
 		    prog->agcvals[i]) == 0) {
 			n++;
 		}
-		RTWN_DELAY_MS(1);
+		RTWN_DELAY_US(1);
 	}
 
 	/* AGC core 1: 0x69553422 lalu 0x69553420 (OpenBSD). */
 	wr32(rd, wr, ctx, R92C_OFDM0_AGCCORE1(0), 0x69553422u);
-	RTWN_DELAY_MS(1);
+	RTWN_DELAY_US(1);
 	wr32(rd, wr, ctx, R92C_OFDM0_AGCCORE1(0), 0x69553420u);
-	RTWN_DELAY_MS(1);
+	RTWN_DELAY_US(1);
 
 	/* Crystal cap: 6 bit, digandakan ke dua field. */
 	xtal &= 0x3f;
@@ -170,22 +174,22 @@ rtwn_init_rf_8188e(rtwn_read_fn rd, rtwn_write_fn wr, void *ctx)
 		return -1;
 	}
 	wr32(rd, wr, ctx, R92C_FPGA0_RFIFACEOE(0), reg | 0x100000u);
-	RTWN_DELAY_MS(1);
+	RTWN_DELAY_US(10);
 
 	/* RF_ENV output high. */
 	rd32(rd, ctx, R92C_FPGA0_RFIFACEOE(0), &reg);
 	wr32(rd, wr, ctx, R92C_FPGA0_RFIFACEOE(0), reg | 0x10u);
-	RTWN_DELAY_MS(1);
+	RTWN_DELAY_US(10);
 
 	/* Panjang alamat & data RF. */
 	rd32(rd, ctx, R92C_HSSI_PARAM2(0), &reg);
 	wr32(rd, wr, ctx, R92C_HSSI_PARAM2(0),
 	    reg & ~(uint32_t)R92C_HSSI_PARAM2_ADDR_LENGTH);
-	RTWN_DELAY_MS(1);
+	RTWN_DELAY_US(10);
 	rd32(rd, ctx, R92C_HSSI_PARAM2(0), &reg);
 	wr32(rd, wr, ctx, R92C_HSSI_PARAM2(0),
 	    reg & ~(uint32_t)R92C_HSSI_PARAM2_DATA_LENGTH);
-	RTWN_DELAY_MS(1);
+	RTWN_DELAY_US(10);
 
 	/* Tabel RF chain 0. */
 	for (j = 0; j < (size_t)prog->count; j++) {
@@ -302,7 +306,12 @@ rtwn_core_config_8188e(rtwn_read_fn rd, rtwn_write_fn wr, void *ctx,
 	wr32(rd, wr, ctx, R92C_MAR + 0, 0xffffffffu);
 	wr32(rd, wr, ctx, R92C_MAR + 4, 0xffffffffu);
 	wr16(rd, wr, ctx, R92C_RXFLTMAP0, 0xffff);
-	wr16(rd, wr, ctx, R92C_RXFLTMAP1, 0xffff);
+	/*
+	 * RXFLTMAP1 (Control frames): hanya izinkan subtype BlockAckReq
+	 * (BAR = 0x80 -> bit 8 = 0x0100) saat RCR_ACF aktif di state RUN,
+	 * agar ACK/RTS/CTS/BA tidak membanjiri Bulk-IN USB.
+	 */
+	wr16(rd, wr, ctx, R92C_RXFLTMAP1, 0x0100);
 	wr16(rd, wr, ctx, R92C_RXFLTMAP2, 0xffff);
 
 	/* Semua rate untuk respons/ACK. */

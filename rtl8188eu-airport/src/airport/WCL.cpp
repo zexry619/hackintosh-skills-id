@@ -294,10 +294,15 @@ IOReturn AirportItlwmSkywalkInterface::beginWCLScan(apple80211ScanRequest *reque
     if (ic->ic_state == IEEE80211_S_RUN) {
         ieee80211_begin_cache_bgscan(&ic->ic_if);
         if (!(ic->ic_flags & IEEE80211_F_BGSCAN)) {
-            scanPending = false;
-            ic->ic_wcl_scan_requested = false;
-            scanSource->cancelTimeout();
-            return kIOReturnBusy;
+            struct ieee80211_node *ni;
+            RB_FOREACH(ni, ieee80211_tree, &ic->ic_tree) {
+                if (ni->ni_rsnie_tlv && ni->ni_rsnie_tlv_len > 0) {
+                    publishWCLBeacon(ni, ni->ni_rsnie_tlv, ni->ni_rsnie_tlv_len);
+                }
+            }
+            scanCompleted = true;
+            scanSource->setTimeoutMS(50);
+            return kIOReturnSuccess;
         }
     } else if (ic->ic_state != IEEE80211_S_SCAN) {
         int error = ic->ic_newstate(ic, IEEE80211_S_SCAN, -1);
@@ -711,6 +716,17 @@ IOReturn AirportItlwmSkywalkInterface::leaveWCLNetwork()
     ic->ic_wcl_join_requested = false;
     wclAssociatedBeacons = 0;
     wclBssValid = false;
+    if (wclLinkIndicated) {
+        AirportWCL::LinkStatusEvent event = {};
+        memcpy(event.bssid, joinBSSID, sizeof(event.bssid));
+        event.up = 0;
+        event.reason = 255;
+        wclLinkIndicated = false;
+        instance->postMessage(this, AirportWCL::LinkStatus, &event, sizeof(event), true);
+    }
+    assocNotified = false;
+    firstBeaconNotified = false;
+    bzero(joinBSSID, sizeof(joinBSSID));
     disassocIsVoluntary = true;
     ic->ic_deauth_reason = IEEE80211_REASON_AUTH_LEAVE;
     if (ic->ic_state > IEEE80211_S_SCAN)

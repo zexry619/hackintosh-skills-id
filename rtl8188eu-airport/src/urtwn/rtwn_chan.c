@@ -49,7 +49,13 @@
 #define R92C_LSSI_READBACK_DATA_S	0
 
 #define R92C_RF_CHNLBW			0x18
+#define R88E_RF_CHNLBW_BW40		0x00400
 #define R88E_RF_CHNLBW_BW20		0x00c00
+
+#define R92C_RRSR_HI			0x442
+#define R92C_CCK0_SYSTEM		0xa00
+#define R92C_OFDM0_AGCCORE1_0		0xc50
+#define R92C_OFDM1_LSTF			0xd00
 
 /* BSD-style SM(field, val) = ((val << S) & M) */
 #define RTWN_SM(mask, shift, val)	(((uint32_t)(val) << (shift)) & (mask))
@@ -148,43 +154,118 @@ rtwn_rf_write_8188e(rtwn_read_fn rd, rtwn_write_fn wr, void *ctx, int chain,
 }
 
 /*
- * Set kanal (mode 20 MHz — 8188E 1x1 2,4 GHz).
+ * Set gain awal AGC RX pada chain 0:
+ *   - 0x20 saat scanning (sensitivitas maksimum)
+ *   - 0x32 saat terhubung (mencegah saturasi LNA / interferensi dekat)
+ * Sesuai OpenBSD rtwn_newstate() (rtwn.c:1118, 1144).
+ */
+void
+rtwn_set_rx_gain_8188e(rtwn_read_fn rd, rtwn_write_fn wr, void *ctx,
+    uint8_t gain)
+{
+	uint32_t v = rtwn_bb_read(rd, wr, ctx, R92C_OFDM0_AGCCORE1_0);
+	if (v == 0xffffffffu) {
+		return;
+	}
+	v = (v & ~0x0000007fu) | ((uint32_t)gain & 0x7fu);
+	rtwn_bb_write(rd, wr, ctx, R92C_OFDM0_AGCCORE1_0, v);
+}
+
+/*
+ * Set kanal & bandwidth (20 MHz / 40 MHz HT40+ / HT40-) untuk 8188E 1x1 2,4 GHz.
  *
- * Port dari rtwn_set_chan() OpenBSD, cabang "else" (bukan 40 MHz)
- * dengan penyesuaian chip 88E:
- *   - lewati blok ANAPARAM2 (khusus non-88E/88F/92E)
- *   - lewati blok 88F/92E (OFDM0/PSDO noise weight, RXAFE, DFIR)
- *   - pakai R88E_RF_CHNLBW_BW20 (0xc00), bukan R92C_RF_CHNLBW_BW20
+ * Diverifikasi silang antara:
+ *   - RtWlanU.kext: phy_SetBWMode8188E (@0x146469),
+ *     PHY_RF6052SetBandwidth8188E (@0x1475b0), dan
+ *     CHNL_GetCenterFrequency (@0xbd050)
+ *   - OpenBSD rtwn_set_chan() (rtwn.c:2408)
  *
- * @chan : nomor kanal 1..14
+ * @chan    : nomor kanal primer 1..14
+ * @bw40    : 1 untuk 40 MHz (HT40), 0 untuk 20 MHz
+ * @prichlo : 1 bila kanal primer di bawah sekunder (HT40+ / SCA -> center = chan + 2),
+ *            0 bila kanal primer di atas sekunder (HT40- / SCB -> center = chan - 2)
  */
 int
-rtwn_set_chan_8188e(rtwn_read_fn rd, rtwn_write_fn wr, void *ctx, uint8_t chan)
+rtwn_set_chan_bw_8188e(rtwn_read_fn rd, rtwn_write_fn wr, void *ctx,
+    uint8_t chan, int bw40, int prichlo)
 {
 	uint32_t v;
+	uint8_t v8;
 
 	if (chan < 1 || chan > 14) {
 		return -1;
 	}
 
-	/* 1. mode bandwidth 20 MHz */
-	v = rtwn_seq_raw_read1(rd, wr, ctx, R92C_BWOPMODE);
-	rtwn_seq_raw_write1(rd, wr, ctx, R92C_BWOPMODE,
-	    (uint8_t)(v | R92C_BWOPMODE_20MHZ));
+	if (bw40) {
+		uint8_t center = prichlo ? (uint8_t)(chan + 2) :
+		    (chan > 2 ? (uint8_t)(chan - 2) : 1);
+		if (center < 1)
+			center = 1;
+		if (center > 14)
+			center = 14;
 
-	/* 2. matikan flag 40 MHz di FPGA RFMOD */
-	v = rtwn_bb_read(rd, wr, ctx, R92C_FPGA0_RFMOD);
-	rtwn_bb_write(rd, wr, ctx, R92C_FPGA0_RFMOD,
-	    v & ~((uint32_t)R92C_RFMOD_40MHZ));
+		/* 1. Mode bandwidth 40 MHz di MAC (BWOPMODE &= ~20MHZ, RRSR+2 subchannel) */
+		v8 = rtwn_seq_raw_read1(rd, wr, ctx, R92C_BWOPMODE);
+		rtwn_seq_raw_write1(rd, wr, ctx, R92C_BWOPMODE,
+		    (uint8_t)(v8 & ~R92C_BWOPMODE_20MHZ));
 
-	v = rtwn_bb_read(rd, wr, ctx, R92C_FPGA1_RFMOD);
-	rtwn_bb_write(rd, wr, ctx, R92C_FPGA1_RFMOD,
-	    v & ~((uint32_t)R92C_RFMOD_40MHZ));
+		v8 = rtwn_seq_raw_read1(rd, wr, ctx, R92C_RRSR_HI);
+		v8 = (uint8_t)((v8 & ~0x6f) | ((prichlo ? 1 : 2) << 5));
+		rtwn_seq_raw_write1(rd, wr, ctx, R92C_RRSR_HI, v8);
 
-	/* 3. RF CHNLBW — chain 0 saja (8188E 1x1) */
-	v = rtwn_rf_read_8188e(rd, wr, ctx, 0, R92C_RF_CHNLBW);
-	v = (v & ~0xfffu) | (uint32_t)chan | (uint32_t)R88E_RF_CHNLBW_BW20;
-	rtwn_rf_write_8188e(rd, wr, ctx, 0, R92C_RF_CHNLBW, v);
+		/* 2. Aktifkan 40 MHz & pilih sideband CCK/OFDM di BB */
+		v = rtwn_bb_read(rd, wr, ctx, R92C_FPGA0_RFMOD);
+		rtwn_bb_write(rd, wr, ctx, R92C_FPGA0_RFMOD,
+		    v | (uint32_t)R92C_RFMOD_40MHZ);
+
+		v = rtwn_bb_read(rd, wr, ctx, R92C_FPGA1_RFMOD);
+		rtwn_bb_write(rd, wr, ctx, R92C_FPGA1_RFMOD,
+		    v | (uint32_t)R92C_RFMOD_40MHZ);
+
+		v = rtwn_bb_read(rd, wr, ctx, R92C_CCK0_SYSTEM);
+		v = (v & ~0x00000010u) | ((uint32_t)(prichlo ? 0 : 1) << 4);
+		rtwn_bb_write(rd, wr, ctx, R92C_CCK0_SYSTEM, v);
+
+		v = rtwn_bb_read(rd, wr, ctx, R92C_OFDM1_LSTF);
+		v = (v & ~0x00000c00u) | ((uint32_t)(prichlo ? 1 : 2) << 10);
+		rtwn_bb_write(rd, wr, ctx, R92C_OFDM1_LSTF, v);
+
+		v = rtwn_bb_read(rd, wr, ctx, 0x818);
+		v = (v & ~0x0c000000u) | ((uint32_t)(prichlo ? 2 : 1) << 26);
+		rtwn_bb_write(rd, wr, ctx, 0x818, v);
+
+		/* 3. RF CHNLBW (chain 0): center channel + BW40 (0x400 pada 8188E!) */
+		v = rtwn_rf_read_8188e(rd, wr, ctx, 0, R92C_RF_CHNLBW);
+		v = (v & ~0xfffu) | (uint32_t)center |
+		    (uint32_t)R88E_RF_CHNLBW_BW40;
+		rtwn_rf_write_8188e(rd, wr, ctx, 0, R92C_RF_CHNLBW, v);
+	} else {
+		/* 1. mode bandwidth 20 MHz */
+		v8 = rtwn_seq_raw_read1(rd, wr, ctx, R92C_BWOPMODE);
+		rtwn_seq_raw_write1(rd, wr, ctx, R92C_BWOPMODE,
+		    (uint8_t)(v8 | R92C_BWOPMODE_20MHZ));
+
+		/* 2. matikan flag 40 MHz di FPGA RFMOD */
+		v = rtwn_bb_read(rd, wr, ctx, R92C_FPGA0_RFMOD);
+		rtwn_bb_write(rd, wr, ctx, R92C_FPGA0_RFMOD,
+		    v & ~((uint32_t)R92C_RFMOD_40MHZ));
+
+		v = rtwn_bb_read(rd, wr, ctx, R92C_FPGA1_RFMOD);
+		rtwn_bb_write(rd, wr, ctx, R92C_FPGA1_RFMOD,
+		    v & ~((uint32_t)R92C_RFMOD_40MHZ));
+
+		/* 3. RF CHNLBW — chain 0 saja (8188E 1x1) */
+		v = rtwn_rf_read_8188e(rd, wr, ctx, 0, R92C_RF_CHNLBW);
+		v = (v & ~0xfffu) | (uint32_t)chan |
+		    (uint32_t)R88E_RF_CHNLBW_BW20;
+		rtwn_rf_write_8188e(rd, wr, ctx, 0, R92C_RF_CHNLBW, v);
+	}
 
 	return 0;
+}
+
+int
+rtwn_set_chan_8188e(rtwn_read_fn rd, rtwn_write_fn wr, void *ctx, uint8_t chan)
+{
+	return rtwn_set_chan_bw_8188e(rd, wr, ctx, chan, 0, 0);
 }

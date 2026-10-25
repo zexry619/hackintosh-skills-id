@@ -654,7 +654,7 @@ bool AirportItlwm::createMediumTables(const IONetworkMedium **primary)
         return false;
     }
 
-    medium = IONetworkMedium::medium(kIOMediumIEEE80211, 54000000);
+    medium = IONetworkMedium::medium(kIOMediumIEEE80211, 150000000);
     IONetworkMedium::addMedium(mediumDict, medium);
     medium->release();
     if (primary) {
@@ -681,9 +681,22 @@ IOReturn AirportItlwm::selectMedium(const IONetworkMedium *medium) {
 bool AirportItlwm::
 setLinkStatus(UInt32 status, const IONetworkMedium * activeMedium, UInt64 speed, OSData * data)
 {
-    struct _ifnet *ifq = &fHalService->get80211Controller()->ic_ac.ac_if;
+    struct ieee80211com *ic = fHalService->get80211Controller();
+    struct _ifnet *ifq = &ic->ic_ac.ac_if;
     if (status == currentStatus) {
         return true;
+    }
+    if ((status & kIONetworkLinkActive) && speed == 0 && ic && ic->ic_bss) {
+        struct ieee80211_node *ni = ic->ic_bss;
+        if (ni->ni_flags & IEEE80211_NODE_HT) {
+            if (ni->ni_chw == IEEE80211_CHAN_WIDTH_40) {
+                speed = (ni->ni_flags & IEEE80211_NODE_HT_SGI40) ? 150000000ULL : 135000000ULL;
+            } else {
+                speed = (ni->ni_flags & IEEE80211_NODE_HT_SGI20) ? 72200000ULL : 65000000ULL;
+            }
+        } else {
+            speed = 54000000ULL;
+        }
     }
     bool ret = super::setLinkStatus(status, activeMedium, speed, data);
     currentStatus = status;

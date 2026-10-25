@@ -340,11 +340,22 @@ int RtwnUsb::rtwnCtlTransfer(bool isInput, uint8_t requestType,
 		return -1;
 	}
 
-	/* Tunggu completion (stack USB menjamin completion dipanggil saat timeout). */
-	uint32_t waited = 0;
+	/*
+	 * Tunggu completion (stack USB menjamin completion dipanggil saat timeout).
+	 * Transfer kontrol USB 2.0 High-Speed selesai dalam ~125–250 µs.
+	 * Polling singkat (IODelay 20 µs s/d 1 ms) memangkas waktu per register
+	 * dari ~12 ms (IOSleep(10)) menjadi ~0.2 ms (2800 register saat boot:
+	 * dari 33.9 detik turun menjadi ~0.6 detik sehingga tidak menahan
+	 * IOKitWaitQuiet / WindowServer saat boot).
+	 * Bila lewat 1 ms belum selesai, fallback ke IOSleep(1).
+	 */
+	for (uint32_t us = 0; !ctx->done && us < 1000; us += 20) {
+		IODelay(20);
+	}
+	uint32_t waited = 1;
 	while (!ctx->done && waited < timeoutMs + 1500) {
-		IOSleep(10);
-		waited += 10;
+		IOSleep(1);
+		waited += 1;
 	}
 	if (!ctx->done) {
 		/* Jangan bebaskan: completion bisa masih datang. Sengaja bocor. */
@@ -500,7 +511,7 @@ void rtwnBulkComplete(void *owner, void *param, IOReturn status, uint32_t bytes)
 		if (ctx->txCb) {
 			ctx->txCb(ctx->txCtx, status == kIOReturnSuccess ? 0 : -1);
 		}
-		if (self->fTxInFlight <= 8 && self->fTxDoneCb) {
+		if (self->fTxInFlight <= 24 && self->fTxDoneCb) {
 			self->fTxDoneCb(self->fTxDoneCtx);
 		}
 		/*
@@ -508,7 +519,7 @@ void rtwnBulkComplete(void *owner, void *param, IOReturn status, uint32_t bytes)
 		 * Completion masih berada di dalam stack USB; membebaskan
 		 * buffer saat ini = use-after-free = kernel panic.
 		 *
-		 * Yang dilakukan hanya: taruh di antrean. Pembebasan
+		 * Yang dilakukan hanya: taruh di antrean. Daur ulang/pembebasan
 		 * dilakukan bulkSend() (context driver, di luar callback).
 		 */
 		if (self->fBulkLock) {
@@ -636,6 +647,21 @@ void RtwnUsb::bulkClose()
 	}
 	fNumOut = 0;
 	fPipeOut = nullptr;
+
+	if (fBulkLock) {
+		IOLockLock(fBulkLock);
+		RtwnBulkCtx *done = fTxDone;
+		fTxDone = nullptr;
+		IOLockUnlock(fBulkLock);
+		while (done) {
+			RtwnBulkCtx *nx = done->next;
+			if (done->md) {
+				done->md->release();
+			}
+			IOFree(done, sizeof(RtwnBulkCtx));
+			done = nx;
+		}
+	}
 }
 
 bool RtwnUsb::bulkQueueRx(uint32_t count)
@@ -685,7 +711,7 @@ bool RtwnUsb::bulkSend(const uint8_t *data, uint32_t len, rtwn_tx_cb cb,
 	if (!data || len == 0 || fBulkClosing || !fAttached || fNumOut <= 0) {
 		return false;
 	}
-	if (fTxInFlight >= 24) {
+	if (fTxInFlight >= 48) {
 		return false;
 	}
 	if (pipeIdx < 0) {
@@ -700,42 +726,48 @@ bool RtwnUsb::bulkSend(const uint8_t *data, uint32_t len, rtwn_tx_cb cb,
 	}
 
 	/*
-	 * Buang context TX yang sudah selesai dari transfer sebelumnya.
+	 * Daur ulang context TX + 4KB IOBufferMemoryDescriptor dari fTxDone
+	 * (menghilangkan alokasi halaman VM kernel per paket).
 	 *
 	 * Aman dilakukan di sini: kita berada di context driver (bukan
-	 * completion callback), dan transfer yang selesai itu sudah lewat
-	 * minimal satu siklus penuh.
+	 * completion callback), sepenuhnya mematuhi Aturan A1.
 	 */
+	RtwnBulkCtx *c = nullptr;
 	if (fBulkLock) {
 		IOLockLock(fBulkLock);
-		RtwnBulkCtx *done = fTxDone;
-		fTxDone = nullptr;
-		IOLockUnlock(fBulkLock);
-		while (done) {
-			RtwnBulkCtx *nx = done->next;
-			if (done->md) {
-				done->md->release();
-			}
-			IOFree(done, sizeof(RtwnBulkCtx));
-			done = nx;
+		if (fTxDone) {
+			c = fTxDone;
+			fTxDone = c->next;
+			c->next = nullptr;
 		}
+		IOLockUnlock(fBulkLock);
 	}
-
-	RtwnBulkCtx *c = (RtwnBulkCtx *)IOMalloc(sizeof(RtwnBulkCtx));
-	if (!c) {
-		return false;
-	}
-	memset(c, 0, sizeof(RtwnBulkCtx));
-	c->md = IOBufferMemoryDescriptor::withCapacity(len, kIODirectionInOut);
-	if (!c->md) {
+	if (c && (!c->md || !c->buf || c->cap < len)) {
+		if (c->md) {
+			c->md->release();
+		}
 		IOFree(c, sizeof(RtwnBulkCtx));
-		return false;
+		c = nullptr;
 	}
-	c->buf = (uint8_t *)c->md->getBytesNoCopy();
+	if (!c) {
+		uint32_t allocCap = (len > 4096) ? len : 4096;
+		c = (RtwnBulkCtx *)IOMalloc(sizeof(RtwnBulkCtx));
+		if (!c) {
+			return false;
+		}
+		memset(c, 0, sizeof(RtwnBulkCtx));
+		c->md = IOBufferMemoryDescriptor::withCapacity(allocCap,
+		    kIODirectionInOut);
+		if (!c->md) {
+			IOFree(c, sizeof(RtwnBulkCtx));
+			return false;
+		}
+		c->buf = (uint8_t *)c->md->getBytesNoCopy();
+		c->cap = allocCap;
+	}
 	memcpy(c->buf, data, len);
 	c->self = this;
 	c->pipe = pipe;
-	c->cap = len;
 	c->isRx = false;
 	c->alive = fAlive;
 	c->txCb = cb;
@@ -750,9 +782,16 @@ bool RtwnUsb::bulkSend(const uint8_t *data, uint32_t len, rtwn_tx_cb cb,
 
 	if (pipe->io(c->md, len, &completion, 0) != kIOReturnSuccess) {
 		/* Gagal antre → tidak ada completion yang akan datang,
-		 * jadi aman dibebaskan di sini. */
-		c->md->release();
-		IOFree(c, sizeof(RtwnBulkCtx));
+		 * kembalikan ke pool fTxDone atau bebaskan bila lock tiada. */
+		if (fBulkLock) {
+			IOLockLock(fBulkLock);
+			c->next = fTxDone;
+			fTxDone = c;
+			IOLockUnlock(fBulkLock);
+		} else {
+			c->md->release();
+			IOFree(c, sizeof(RtwnBulkCtx));
+		}
 		fTxFail++;
 		return false;
 	}

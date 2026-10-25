@@ -118,6 +118,7 @@ public:
 	 * menemukan kombinasi yang diterima AP tanpa reboot berulang.
 	 */
 	uint32_t     fJoinTry;
+	uint8_t      fLastJoinBssid[6];
 	uint8_t      fRsnVariant;
 	/*
 	 * RX: berapa frame yang benar-benar lolos ke network stack
@@ -126,6 +127,11 @@ public:
 	 */
 	uint32_t     fRxDelivered;
 	uint32_t     fRxDataLogged;
+	uint32_t     fRxBar;		/* BlockAckReq diterima */
+	uint32_t     fTxAgg;		/* frame QoS dikirim dengan AGG_EN */
+	bool         fBw40;		/* radio aktif di 40 MHz (HT40) */
+	bool         fPriChLo;		/* primary channel di bawah secondary */
+	uint8_t      fTxScratch[4096];	/* scratch TX descriptor + MPDU (workloop-serialized) */
 	void         applyRsnVariant(uint32_t attempt);
 	/*
 	 * Setara rtwn_updateslot() + INIRTS_RATE_SEL di OpenBSD.
@@ -133,6 +139,7 @@ public:
 	 * frame bisa dikirim pada jendela yang salah dan bertabrakan.
 	 */
 	void         updateSlot(struct ieee80211com *ic);
+	static void  updateSlotCb(struct ieee80211com *ic);
 	void publishStats(void);
 
 	/* net80211 */
@@ -145,7 +152,7 @@ public:
 	 * Callback USB hanya menyalin buffer (tidak boleh memblokir
 	 * workloop USB — bisa deadlock dengan control transfer).
 	 */
-	static const uint32_t kRxQueueDepth = 256;
+	static const uint32_t kRxQueueDepth = 512;
 	IOTimerEventSource *fRxTimer;
 	IOTimerEventSource *fTxTimer;
 	IOLock             *fRxLock;
