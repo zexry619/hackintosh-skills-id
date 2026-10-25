@@ -1,6 +1,0 @@
-[submodule "vendor/MacKernelSDK"]
-	path = vendor/MacKernelSDK
-	url = https://github.com/acidanthera/MacKernelSDK.git
-[submodule "upstream/itlwm"]
-	path = upstream/itlwm
-	url = https://github.com/laobamac/itlwm.git

@@ -38,6 +38,7 @@ backup/
 *.tar.gz
 *.bak
 
-# Unused upstream clones
+# Unused upstream clones & external SDKs
 upstream/Airport_RTW88/
 upstream/AirPort-RTW/
+vendor/MacKernelSDK/

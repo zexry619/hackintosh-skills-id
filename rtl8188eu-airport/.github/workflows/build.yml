@@ -19,10 +19,8 @@ jobs:
     name: Build & Verify Kext (macOS 15 x86_64)
     runs-on: macos-15
     steps:
-      - name: Checkout repository & submodules
+      - name: Checkout repository
         uses: actions/checkout@v4
-        with:
-          submodules: recursive
 
       - name: Fetch upstream sources & verify firmware SHA-256
         run: ./scripts/fetch-upstream.sh

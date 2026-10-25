@@ -21,7 +21,7 @@ mkdir -p "$UPSTREAM/openbsd/sys/dev/usb" \
 
 clone() { # clone <url> <dir> <branch>
 	local url="$1" dir="$2" branch="$3"
-	if [[ -d "$dir/.git" ]]; then
+	if [[ -d "$dir/.git" || -d "$dir/itl80211" || -d "$dir/Headers" ]]; then
 		echo "[fetch] sudah ada: $(basename "$dir")"
 		return 0
 	fi
