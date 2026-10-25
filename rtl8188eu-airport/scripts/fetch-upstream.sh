@@ -9,7 +9,6 @@ VENDOR="$ROOT/vendor"
 FIRMWARE="$ROOT/firmware"
 
 ITLWM_REPO="https://github.com/laobamac/itlwm.git"
-RTW_REPO="https://github.com/JoMei9019-real/AirPort-RTW.git"
 MKS_REPO="https://github.com/acidanthera/MacKernelSDK.git"
 OPENBSD_RAW="https://raw.githubusercontent.com/openbsd/src/master"
 
@@ -40,23 +39,20 @@ fetch_file() { # fetch_file <remote-path> <local-path>
 	curl -fsSL -o "$local" "$OPENBSD_RAW/$remote"
 }
 
-echo "=== 1/5  laobamac/itlwm (GPL-2.0) — net80211 + frontend AirportItlwm"
+echo "=== 1/4  laobamac/itlwm (GPL-2.0) — net80211 + frontend AirportItlwm"
 clone "$ITLWM_REPO" "$UPSTREAM/itlwm" main
 
-echo "=== 2/5  AirPort-RTW (GPL-2.0) — pola shim USB + frontend Realtek"
-clone "$RTW_REPO" "$UPSTREAM/AirPort-RTW" main
-
-echo "=== 3/5  MacKernelSDK — header kernel"
+echo "=== 2/4  MacKernelSDK — header kernel"
 clone "$MKS_REPO" "$VENDOR/MacKernelSDK" master
 
-echo "=== 4/5  OpenBSD urtwn + rtwn (ISC)"
+echo "=== 3/4  OpenBSD urtwn + rtwn (ISC)"
 fetch_file "sys/dev/usb/if_urtwn.c"   "$UPSTREAM/openbsd/sys/dev/usb/if_urtwn.c"
 fetch_file "sys/dev/ic/rtwn.c"         "$UPSTREAM/openbsd/sys/dev/ic/rtwn.c"
 fetch_file "sys/dev/ic/rtwnvar.h"      "$UPSTREAM/openbsd/sys/dev/ic/rtwnvar.h"
 fetch_file "sys/dev/ic/r92creg.h"      "$UPSTREAM/openbsd/sys/dev/ic/r92creg.h"
 fetch_file "sys/dev/usb/usbdevs"       "$UPSTREAM/openbsd/sys/dev/usb/usbdevs"
 
-echo "=== 5/5  firmware rtl8188eufw.bin"
+echo "=== 4/4  firmware rtl8188eufw.bin"
 if [[ ! -s "$FIRMWARE/rtl8188eufw.bin" ]]; then
 	curl -fsSL -o "$FIRMWARE/rtl8188eufw.bin" "$FW_URL"
 fi
@@ -73,10 +69,9 @@ cat <<'EOF'
 
 Selesai. Ringkasan isi:
   upstream/itlwm/            → itl80211 (net80211 port) + AirportItlwm (frontend)
-  upstream/AirPort-RTW/      → contoh shim USB (src/kext/RTW88USBDevice.cpp)
   upstream/openbsd/          → if_urtwn.c, rtwn.c, rtwnvar.h, r92creg.h
   vendor/MacKernelSDK/       → header kernel untuk build kext
   firmware/rtl8188eufw.bin   → firmware upload (15.262 byte)
 
-Langkah berikutnya:  ./scripts/build-m0.sh
+Langkah berikutnya:  ./scripts/build-m4.sh
 EOF

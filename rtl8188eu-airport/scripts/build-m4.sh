@@ -17,9 +17,9 @@ KEXT_NAME="RTL8188EAirport"
 KEXT="$BUILD/$KEXT_NAME.kext"
 MKS="$ROOT/vendor/MacKernelSDK"
 
-if [[ ! -d "$MKS/Headers" ]]; then
-	echo "[m4] MacKernelSDK belum ada" >&2
-	exit 1
+if [[ ! -d "$MKS/Headers" || ! -d "$UP/itl80211" ]]; then
+	echo "[m4] Dependencies not found. Fetching upstream dependencies..."
+	"$ROOT/scripts/fetch-upstream.sh"
 fi
 
 echo "[m4] generate firmware array"
