@@ -56,10 +56,12 @@ jobs:
             dist/RTL8188EAirport.kext.zip.sha256
           if-no-files-found: error
 
-      - name: Create GitHub Release on version tag
-        if: startsWith(github.ref, 'refs/tags/v')
+      - name: Create or update GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/main'
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || 'v0.9.1' }}
+          name: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || 'RTL8188EAirport v0.9.1 (macOS Sequoia)' }}
           generate_release_notes: true
           files: |
             dist/RTL8188EAirport.kext.zip
