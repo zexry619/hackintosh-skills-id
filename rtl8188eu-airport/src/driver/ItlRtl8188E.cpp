@@ -458,6 +458,7 @@ void ItlRtl8188E::detach(IOPCIDevice *device)
 
 	/* 1. Hentikan sumber RX — jangan ada frame baru saat ifdetach. */
 	fRxRunning = false;
+	fIfAttached = false;
 	if (fAttached)
 		fChip.usb.setRxCallback(nullptr, nullptr);
 	/*
@@ -1582,7 +1583,7 @@ void ItlRtl8188E::rxTimerAction(IOTimerEventSource *timer)
 			break;
 
 		for (i = 0; i < n; i++) {
-			if (fRxRunning)
+			if (fRxRunning && fIfAttached)
 				handleRx(bufs[i], lens[i]);
 			IOFree(bufs[i], lens[i]);
 		}
@@ -1945,9 +1946,13 @@ advance:
 		off = next;
 	}
 
-	if (ml.ml_len > 0)
+	if (ml.ml_len > 0) {
 		fRxDelivered += ml.ml_len;
-	if_input(ifp, &ml);
+		if (fIfAttached && fRxRunning)
+			if_input(ifp, &ml);
+		else
+			ml_purge(&ml);
+	}
 }
 
 /* ------------------------------------------------------------------ */

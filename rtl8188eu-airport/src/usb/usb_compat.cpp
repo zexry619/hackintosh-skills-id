@@ -492,6 +492,11 @@ void rtwnBulkComplete(void *owner, void *param, IOReturn status, uint32_t bytes)
 			if (self->fRxCb) {
 				self->fRxCb(self->fRxCtx, ctx->buf, bytes);
 			}
+		} else if (status != kIOReturnSuccess && status != kIOReturnAborted) {
+			/* Jika endpoint bulk IN mengalami stall/error, bersihkan halt condition */
+			if (self->fPipeIn && !self->fBulkClosing) {
+				self->fPipeIn->clearStall(true);
+			}
 		}
 		/* Queue ulang transfer RX (memory descriptor tetap dipakai). */
 		if (self->fPipeIn && !self->fBulkClosing) {
@@ -499,13 +504,20 @@ void rtwnBulkComplete(void *owner, void *param, IOReturn status, uint32_t bytes)
 			completion.owner = self;
 			completion.action = rtwnBulkComplete;
 			completion.parameter = ctx;
-			self->fPipeIn->io(ctx->md, ctx->cap, &completion, 0);
+			IOReturn r = self->fPipeIn->io(ctx->md, ctx->cap, &completion, 0);
+			if (r != kIOReturnSuccess && r != kIOReturnAborted && !self->fBulkClosing) {
+				self->fPipeIn->clearStall(true);
+				self->fPipeIn->io(ctx->md, ctx->cap, &completion, 0);
+			}
 		}
 	} else {
 		if (status == kIOReturnSuccess) {
 			self->fTxOk++;
 		} else {
 			self->fTxFail++;
+			if (status != kIOReturnAborted && ctx->pipe && !self->fBulkClosing) {
+				ctx->pipe->clearStall(true);
+			}
 		}
 		OSDecrementAtomic(&self->fTxInFlight);
 		if (ctx->txCb) {
@@ -780,7 +792,12 @@ bool RtwnUsb::bulkSend(const uint8_t *data, uint32_t len, rtwn_tx_cb cb,
 	completion.action = rtwnBulkComplete;
 	completion.parameter = c;
 
-	if (pipe->io(c->md, len, &completion, 0) != kIOReturnSuccess) {
+	IOReturn r = pipe->io(c->md, len, &completion, 0);
+	if (r != kIOReturnSuccess && r != kIOReturnAborted && !fBulkClosing) {
+		pipe->clearStall(true);
+		r = pipe->io(c->md, len, &completion, 0);
+	}
+	if (r != kIOReturnSuccess) {
 		/* Gagal antre → tidak ada completion yang akan datang,
 		 * kembalikan ke pool fTxDone atau bebaskan bila lock tiada. */
 		if (fBulkLock) {
