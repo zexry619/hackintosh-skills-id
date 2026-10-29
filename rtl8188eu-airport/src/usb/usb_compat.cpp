@@ -444,6 +444,25 @@ namespace {
  * dilakukan hanya adalah menaruh ctx TX ke antrean fTxDone; pembebasan
  * dilakukan oleh pemilik (context driver) — lihat bulkSend().
  */
+/*
+ * Parkir transfer RX yang gagal diantre ulang. Hanya menyentuh list +
+ * counter (aman di thread completion), lalu membangunkan driver.
+ */
+void rtwnParkRx(RtwnUsb *self, RtwnBulkCtx *ctx)
+{
+	if (!self->fBulkLock) {
+		return;
+	}
+	IOLockLock(self->fBulkLock);
+	ctx->next = self->fRxParked;
+	self->fRxParked = ctx;
+	IOLockUnlock(self->fBulkLock);
+	OSDecrementAtomic(&self->fRxActive);
+	if (self->fKickCb) {
+		self->fKickCb(self->fKickCtx);
+	}
+}
+
 void rtwnBulkComplete(void *owner, void *param, IOReturn status, uint32_t bytes)
 {
 	RtwnBulkCtx *ctx = (RtwnBulkCtx *)param;
@@ -493,10 +512,16 @@ void rtwnBulkComplete(void *owner, void *param, IOReturn status, uint32_t bytes)
 				self->fRxCb(self->fRxCtx, ctx->buf, bytes);
 			}
 		} else if (status != kIOReturnSuccess && status != kIOReturnAborted) {
-			/* Jika endpoint bulk IN mengalami stall/error, bersihkan halt condition */
-			if (self->fPipeIn && !self->fBulkClosing) {
-				self->fPipeIn->clearStall(true);
-			}
+			/*
+			 * Error/stall pada bulk IN. JANGAN clearStall(true) di sini:
+			 * itu control transfer sinkron di thread completion USB →
+			 * risiko deadlock. Parkir transfer ini; driver akan memulihkan
+			 * pipe dari context workloop (rxRecover).
+			 */
+			self->fRxErr++;
+			self->fLastRxStatus = (uint32_t)status;
+			rtwnParkRx(self, ctx);
+			return;
 		}
 		/* Queue ulang transfer RX (memory descriptor tetap dipakai). */
 		if (self->fPipeIn && !self->fBulkClosing) {
@@ -505,9 +530,11 @@ void rtwnBulkComplete(void *owner, void *param, IOReturn status, uint32_t bytes)
 			completion.action = rtwnBulkComplete;
 			completion.parameter = ctx;
 			IOReturn r = self->fPipeIn->io(ctx->md, ctx->cap, &completion, 0);
-			if (r != kIOReturnSuccess && r != kIOReturnAborted && !self->fBulkClosing) {
-				self->fPipeIn->clearStall(true);
-				self->fPipeIn->io(ctx->md, ctx->cap, &completion, 0);
+			if (r != kIOReturnSuccess && !self->fBulkClosing) {
+				/* Jangan hilangkan transfer: parkir untuk dipulihkan. */
+				self->fRxErr++;
+				self->fLastRxStatus = (uint32_t)r;
+				rtwnParkRx(self, ctx);
 			}
 		}
 	} else {
@@ -515,8 +542,16 @@ void rtwnBulkComplete(void *owner, void *param, IOReturn status, uint32_t bytes)
 			self->fTxOk++;
 		} else {
 			self->fTxFail++;
-			if (status != kIOReturnAborted && ctx->pipe && !self->fBulkClosing) {
-				ctx->pipe->clearStall(true);
+			if (status != kIOReturnAborted) {
+				/* Tandai pipe untuk dipulihkan di context driver. */
+				for (int i = 0; i < self->fNumOut; i++) {
+					if (self->fPipeOutAll[i] == ctx->pipe) {
+						self->fPipeStalled[i] = true;
+					}
+				}
+				if (self->fKickCb) {
+					self->fKickCb(self->fKickCtx);
+				}
 			}
 		}
 		OSDecrementAtomic(&self->fTxInFlight);
@@ -664,7 +699,18 @@ void RtwnUsb::bulkClose()
 		IOLockLock(fBulkLock);
 		RtwnBulkCtx *done = fTxDone;
 		fTxDone = nullptr;
+		RtwnBulkCtx *parked = fRxParked;
+		fRxParked = nullptr;
 		IOLockUnlock(fBulkLock);
+		/* Transfer RX yang diparkir tidak punya URB aktif → aman dibebaskan. */
+		while (parked) {
+			RtwnBulkCtx *nx = parked->next;
+			if (parked->md) {
+				parked->md->release();
+			}
+			IOFree(parked, sizeof(RtwnBulkCtx));
+			parked = nx;
+		}
 		while (done) {
 			RtwnBulkCtx *nx = done->next;
 			if (done->md) {
@@ -711,8 +757,67 @@ bool RtwnUsb::bulkQueueRx(uint32_t count)
 			IOFree(ctx, sizeof(RtwnBulkCtx));
 			return false;
 		}
+		OSIncrementAtomic(&fRxActive);
 	}
 	return true;
+}
+
+bool RtwnUsb::rxRecover()
+{
+	RtwnBulkCtx *parked, *c, *nx;
+	bool allOk = true;
+
+	if (fBulkClosing || !fAttached || !fBulkLock) {
+		return true;
+	}
+
+	/* TX pipe yang ditandai gagal/stall. */
+	for (int i = 0; i < fNumOut; i++) {
+		if (fPipeStalled[i]) {
+			fPipeStalled[i] = false;
+			if (fPipeOutAll[i]) {
+				fPipeOutAll[i]->clearStall(true);
+				fRxRecover++;
+			}
+		}
+	}
+
+	IOLockLock(fBulkLock);
+	parked = fRxParked;
+	fRxParked = nullptr;
+	IOLockUnlock(fBulkLock);
+	if (!parked) {
+		return true;
+	}
+
+	if (fPipeIn && !fBulkClosing) {
+		fPipeIn->clearStall(true);
+		fRxRecover++;
+	}
+
+	for (c = parked; c; c = nx) {
+		nx = c->next;
+		c->next = nullptr;
+		IOReturn r = kIOReturnNotReady;
+		if (fPipeIn && !fBulkClosing) {
+			IOUSBHostCompletion completion;
+			completion.owner = this;
+			completion.action = rtwnBulkComplete;
+			completion.parameter = c;
+			r = fPipeIn->io(c->md, c->cap, &completion, 0);
+		}
+		if (r == kIOReturnSuccess) {
+			OSIncrementAtomic(&fRxActive);
+		} else {
+			/* Masih gagal: parkir lagi, coba lagi di putaran berikut. */
+			allOk = false;
+			IOLockLock(fBulkLock);
+			c->next = fRxParked;
+			fRxParked = c;
+			IOLockUnlock(fBulkLock);
+		}
+	}
+	return allOk;
 }
 
 bool RtwnUsb::bulkSend(const uint8_t *data, uint32_t len, rtwn_tx_cb cb,
@@ -793,11 +898,14 @@ bool RtwnUsb::bulkSend(const uint8_t *data, uint32_t len, rtwn_tx_cb cb,
 	completion.parameter = c;
 
 	IOReturn r = pipe->io(c->md, len, &completion, 0);
-	if (r != kIOReturnSuccess && r != kIOReturnAborted && !fBulkClosing) {
-		pipe->clearStall(true);
-		r = pipe->io(c->md, len, &completion, 0);
-	}
 	if (r != kIOReturnSuccess) {
+		if (r != kIOReturnAborted && !fBulkClosing) {
+			/* Pipe kemungkinan stall: pulihkan lewat rxRecover() di workloop. */
+			fPipeStalled[pipeIdx] = true;
+			if (fKickCb) {
+				fKickCb(fKickCtx);
+			}
+		}
 		/* Gagal antre → tidak ada completion yang akan datang,
 		 * kembalikan ke pool fTxDone atau bebaskan bila lock tiada. */
 		if (fBulkLock) {

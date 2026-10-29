@@ -422,6 +422,7 @@ bool ItlRtl8188E::attach(IOPCIDevice *device)
 	fRxRunning = true;
 	fChip.usb.setTxDoneCb(txDoneHook, this);
 	fChip.usb.setRxCallback(rxCb, this);
+	fChip.usb.setKickCb(kickCb, this);
 	if (!fChip.usb.bulkQueueRx(32)) {
 		IOLog(LOGP "gagal antre RX\n");
 		fRxRunning = false;
@@ -456,11 +457,20 @@ void ItlRtl8188E::detach(IOPCIDevice *device)
 {
 	(void)device;
 
+	/*
+	 * Simpan status attach net80211 SEBELUM flag dimatikan: ieee80211_ifdetach()
+	 * di bawah hanya boleh jalan bila interface memang ter-attach. fIfAttached
+	 * langsung dimatikan agar handleRx/rxTimerAction berhenti memanggil if_input.
+	 */
+	const bool wasIfAttached = fIfAttached;
+
 	/* 1. Hentikan sumber RX — jangan ada frame baru saat ifdetach. */
 	fRxRunning = false;
 	fIfAttached = false;
-	if (fAttached)
+	if (fAttached) {
 		fChip.usb.setRxCallback(nullptr, nullptr);
+		fChip.usb.setKickCb(nullptr, nullptr);
+	}
 	/*
 	 * Tutup pipe RX lebih dulu: bulkClose() melakukan abort sinkron,
 	 * jadi setelah ini tidak ada completion yang boleh menyentuh
@@ -500,7 +510,7 @@ void ItlRtl8188E::detach(IOPCIDevice *device)
 		fIc.ic_newstate = fOrigNewstate;
 		fOrigNewstate = nullptr;
 	}
-	if (fIfAttached && fIc.ic_if.if_snd.queue) {
+	if (wasIfAttached && fIc.ic_if.if_snd.queue) {
 		ieee80211_ifdetach(&fIc.ic_if);
 		fIfAttached = false;
 	}
@@ -611,13 +621,13 @@ void ItlRtl8188E::setDiag(const char *key, const char *value)
 
 void ItlRtl8188E::publishStats(void)
 {
-	char s[224];
+	char s[288];
 
 	snprintf(s, sizeof(s),
 	    "txm=%u txd=%u txe=%u txf=%u agg=%u rpt=%u txok=%u rty=%u "
 	    "rxm=%u rxd=%u rxe=%u bar=%u encf=%u pipe=%d inf=%d "
 	    "auth=%u/%u assoc=%u/%u try=%u rsnv=%u dlv=%u "
-	    "bw=%u st=%d xf=%08x sndq=%d",
+	    "bw=%u st=%d xf=%08x sndq=%d rxu=%d rxer=%u rec=%u lst=%08x",
 	    (unsigned)fTxMgmt, (unsigned)fTxData, (unsigned)fTxEapol,
 	    (unsigned)fTxFail, (unsigned)fTxAgg, (unsigned)fTxReport,
 	    (unsigned)fTxOk, (unsigned)fTxRetry, (unsigned)fRxMgmt,
@@ -630,7 +640,10 @@ void ItlRtl8188E::publishStats(void)
 	    (unsigned)fRxDelivered,
 	    fBw40 ? 40u : 20u,
 	    (int)fIc.ic_state, (unsigned)fIc.ic_xflags,
-	    fIc.ic_if.if_snd.queue ? 1 : 0);
+	    fIc.ic_if.if_snd.queue ? 1 : 0,
+	    (int)fChip.usb.rxActive(), (unsigned)fChip.usb.rxErr(),
+	    (unsigned)fChip.usb.recoverCount(),
+	    (unsigned)fChip.usb.lastRxStatus());
 	setDiag("RTL8188E-stat", s);
 }
 
@@ -1556,13 +1569,28 @@ void ItlRtl8188E::rxCb(void *ctx, const uint8_t *data, uint32_t len)
 		me->fRxTimer->setTimeoutMS(0);
 }
 
+void ItlRtl8188E::kickCb(void *ctx)
+{
+	ItlRtl8188E *me = (ItlRtl8188E *)ctx;
+
+	/* Hanya membangunkan timer — pekerjaan pemulihan jalan di workloop. */
+	if (!me || !me->fRxRunning || !me->fRxTimer)
+		return;
+	me->fRxTimer->setTimeoutMS(0);
+}
+
 void ItlRtl8188E::rxTimerAction(IOTimerEventSource *timer)
 {
 	uint8_t *bufs[32];
 	uint32_t lens[32];
 	int maxLoops = 8;
+	bool recoverRetry = false;
 
 	(void)timer;
+
+	/* Pulihkan pipe USB yang stall / transfer RX yang hilang (di luar thread USB). */
+	if (fRxRunning && fChip.usb.needsRecovery())
+		recoverRetry = !fChip.usb.rxRecover();
 
 	while (maxLoops-- > 0) {
 		uint32_t n = 0, i;
@@ -1599,6 +1627,9 @@ void ItlRtl8188E::rxTimerAction(IOTimerEventSource *timer)
 	IOLockUnlock(fRxLock);
 	if (hasMore && fRxRunning) {
 		fRxTimer->setTimeoutMS(0);
+	} else if (recoverRetry && fRxRunning) {
+		/* Pemulihan belum tuntas: coba lagi tanpa busy-loop. */
+		fRxTimer->setTimeoutMS(50);
 	}
 }
 

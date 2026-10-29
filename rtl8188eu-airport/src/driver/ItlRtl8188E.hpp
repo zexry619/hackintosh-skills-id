@@ -168,6 +168,7 @@ public:
 	static int  halRead(void *ctx, uint16_t addr, void *buf, uint16_t len);
 	static int  halWrite(void *ctx, uint16_t addr, const void *buf, uint16_t len);
 	static void rxCb(void *ctx, const uint8_t *data, uint32_t len);
+	static void kickCb(void *ctx);
 	static void txStartCb(struct _ifnet *ifp);
 	static int  newstateCb(struct ieee80211com *ic,
 	    enum ieee80211_state nstate, int arg);
