@@ -260,7 +260,7 @@ int ItlRtl8188E::initChip(void)
 	rc += rtwn_init_bb_8188e(halRead, halWrite, this, fChip.xtal);
 	rc += rtwn_init_rf_8188e(halRead, halWrite, this);
 	rc += rtwn_core_config_8188e(halRead, halWrite, this, fMac);
-	rtwn_iq_calib_8188e(halRead, halWrite, this);
+	/* Jangan panggil rtwn_iq_calib_8188e (port 92C merusak TX IQK 8188E). */
 	rtwn_lc_calib_8188e(halRead, halWrite, this);
 
 	IOSleep(2);
