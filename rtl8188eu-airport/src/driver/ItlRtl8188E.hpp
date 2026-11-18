@@ -132,6 +132,18 @@ public:
 	bool         fBw40;		/* radio aktif di 40 MHz (HT40) */
 	bool         fPriChLo;		/* primary channel di bawah secondary */
 	uint8_t      fTxScratch[4096];	/* scratch TX descriptor + MPDU (workloop-serialized) */
+	/*
+	 * USB TX batch buffer: mengumpulkan multiple frame (desc+MPDU) ke
+	 * satu buffer besar lalu mengirimnya dengan satu pipe->io().
+	 * RTL8188E firmware memproses multiple TX descriptor per bulk URB.
+	 * Ukuran 32KB = ~20 frame MTU 1500 atau ~160 frame kecil.
+	 */
+	static const uint32_t kTxBatchSize = 32768;
+	uint8_t      *fTxBatchBuf;
+	uint32_t     fTxBatchLen;
+	uint32_t     fTxBatchCount;
+	int          fTxBatchPipe;
+	void         flushTxBatch();
 	void         applyRsnVariant(uint32_t attempt);
 	/*
 	 * Setara rtwn_updateslot() + INIRTS_RATE_SEL di OpenBSD.

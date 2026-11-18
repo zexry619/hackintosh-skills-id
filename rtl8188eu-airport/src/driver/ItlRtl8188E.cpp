@@ -103,6 +103,10 @@ bool ItlRtl8188E::init()
 	fBw40 = false;
 	fPriChLo = false;
 	memset(fTxScratch, 0, sizeof(fTxScratch));
+	fTxBatchBuf = nullptr;
+	fTxBatchLen = 0;
+	fTxBatchCount = 0;
+	fTxBatchPipe = -1;
 	return true;
 }
 
@@ -139,6 +143,10 @@ void ItlRtl8188E::free()
 			getMainWorkLoop()->removeEventSource(fTxTimer);
 		fTxTimer->release();
 		fTxTimer = nullptr;
+	}
+	if (fTxBatchBuf) {
+		IOFree(fTxBatchBuf, kTxBatchSize);
+		fTxBatchBuf = nullptr;
 	}
 	rxQueueFree();
 	if (fRxLock) {
@@ -394,6 +402,11 @@ bool ItlRtl8188E::attach(IOPCIDevice *device)
 	fTxTimer = IOTimerEventSource::timerEventSource(this,
 	    OSMemberFunctionCast(IOTimerEventSource::Action, this,
 	    &ItlRtl8188E::txTimerAction));
+	/* Batch TX buffer: satu IOMalloc untuk semua frame dalam satu flush. */
+	fTxBatchBuf = (uint8_t *)IOMalloc(kTxBatchSize);
+	if (!fTxBatchBuf) {
+		IOLog(LOGP "gagal alokasi TX batch buffer\n");
+	}
 	if (!fRxLock || !fRxTimer || !fTxTimer || !getMainWorkLoop() ||
 	    getMainWorkLoop()->addEventSource(fRxTimer) != kIOReturnSuccess ||
 	    getMainWorkLoop()->addEventSource(fTxTimer) != kIOReturnSuccess) {
@@ -493,6 +506,10 @@ void ItlRtl8188E::detach(IOPCIDevice *device)
 			getMainWorkLoop()->removeEventSource(fTxTimer);
 		fTxTimer->release();
 		fTxTimer = nullptr;
+	}
+	if (fTxBatchBuf) {
+		IOFree(fTxBatchBuf, kTxBatchSize);
+		fTxBatchBuf = nullptr;
 	}
 	rxQueueFree();
 	if (fRxLock) {
@@ -1306,13 +1323,38 @@ void ItlRtl8188E::sendFrame(mbuf_t m, struct ieee80211_node *ni, bool isMgmt)
 		}
 
 		total = RTWN_USB_TX_DESC_SIZE + len;
-		bool useScratch = (total <= sizeof(fTxScratch));
-		buf = useScratch ? fTxScratch : (uint8_t *)IOMalloc(total);
-		if (!buf) {
-			mbuf_freem(m);
-			if (ni)
-				ieee80211_release_node(&fIc, ni);
-			return;
+
+		/*
+		 * USB TX Batch: kumpulkan multiple frame ke satu buffer besar.
+		 * Setiap frame = 32-byte TX descriptor + MPDU, diletakkan
+		 * berurutan di fTxBatchBuf. Firmware RTL8188E memproses semua
+		 * TX descriptor dalam satu bulk transfer.
+		 *
+		 * Flush kondisi:
+		 *   - pipe berbeda dari frame sebelumnya di batch
+		 *   - buffer tidak cukup untuk frame berikutnya
+		 *   - ini frame mgmt (harus dikirim sendiri, tidak di-batch)
+		 */
+		if (isMgmt || !fTxBatchBuf ||
+		    fTxBatchPipe != pipe ||
+		    fTxBatchLen + total > kTxBatchSize) {
+			if (fTxBatchBuf && fTxBatchLen > 0)
+				flushTxBatch();
+		}
+
+		if (isMgmt) {
+			/* Mgmt: pakai fTxScratch, kirim langsung (tidak di-batch). */
+			buf = fTxScratch;
+			if (total > (size_t)sizeof(fTxScratch)) {
+				mbuf_freem(m);
+				if (ni)
+					ieee80211_release_node(&fIc, ni);
+				return;
+			}
+		} else {
+			/* Data: append ke batch buffer. */
+			fTxBatchPipe = pipe;
+			buf = fTxBatchBuf + fTxBatchLen;
 		}
 
 		if (isMgmt) {
@@ -1408,32 +1450,37 @@ void ItlRtl8188E::sendFrame(mbuf_t m, struct ieee80211_node *ni, bool isMgmt)
 
 		pktlen = len;
 		if (mbuf_copydata(m, 0, pktlen, buf + RTWN_USB_TX_DESC_SIZE) != 0) {
-			if (!useScratch)
-				IOFree(buf, total);
+			if (isMgmt) {
+				/* scratch, tidak perlu IOFree */
+			}
 			mbuf_freem(m);
 			if (ni)
 				ieee80211_release_node(&fIc, ni);
 			return;
 		}
 
-		if (!fChip.usb.bulkSend(buf, (uint32_t)total, nullptr, nullptr,
-		    pipe)) {
-			static int failLog = 0;
-			if (failLog++ < 10 || (failLog % 100) == 0) {
-				IOLog(LOGP "bulkSend gagal (%u byte, pipe %d, count %d)\n",
-				    (unsigned)total, pipe, failLog);
+		if (isMgmt) {
+			/* Mgmt: kirim langsung. */
+			if (!fChip.usb.bulkSend(buf, (uint32_t)total, nullptr, nullptr,
+			    pipe)) {
+				static int failLog = 0;
+				if (failLog++ < 10 || (failLog % 100) == 0) {
+					IOLog(LOGP "bulkSend mgmt gagal (%u byte, pipe %d, count %d)\n",
+					    (unsigned)total, pipe, failLog);
+				}
+				fTxFail++;
+			} else {
+				fTxMgmt++;
 			}
-			fTxFail++;
-		} else if (isMgmt) {
-			fTxMgmt++;
 		} else {
+			/* Data: frame sudah di batch buffer, update counter. */
+			fTxBatchLen += (uint32_t)total;
+			fTxBatchCount++;
 			fTxData++;
 			if (fIc.ic_if.netStat)
 				fIc.ic_if.netStat->outputPackets++;
 		}
 
-		if (!useScratch)
-			IOFree(buf, total);
 		mbuf_freem(m);
 
 		/* net80211 menyerahkan referensi node ke driver. */
@@ -1441,6 +1488,25 @@ void ItlRtl8188E::sendFrame(mbuf_t m, struct ieee80211_node *ni, bool isMgmt)
 			ieee80211_release_node(&fIc, ni);
 		return;
 	}
+}
+
+void ItlRtl8188E::flushTxBatch()
+{
+	if (!fTxBatchBuf || fTxBatchLen == 0)
+		return;
+
+	if (!fChip.usb.bulkSend(fTxBatchBuf, fTxBatchLen, nullptr, nullptr,
+	    fTxBatchPipe)) {
+		static int failLog = 0;
+		if (failLog++ < 10 || (failLog % 100) == 0) {
+			IOLog(LOGP "flushTxBatch gagal (%u byte, pipe %d, count %d)\n",
+			    (unsigned)fTxBatchLen, fTxBatchPipe, failLog);
+		}
+		fTxFail++;
+	}
+	fTxBatchLen = 0;
+	fTxBatchCount = 0;
+	fTxBatchPipe = -1;
 }
 
 void ItlRtl8188E::txDoneHook(void *ctx)
@@ -1518,6 +1584,9 @@ void ItlRtl8188E::txStart(struct _ifnet *ifp)
 		}
 		sendFrame(m, ni, false);
 	}
+
+	/* Flush sisa frame yang terkumpul di batch buffer. */
+	flushTxBatch();
 
 	if (fChip.usb.txBusy()) {
 		ifq_set_oactive(&ifp->if_snd);
