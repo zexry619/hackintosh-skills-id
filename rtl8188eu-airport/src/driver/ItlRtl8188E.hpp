@@ -132,19 +132,19 @@ public:
 	bool         fBw40;		/* radio aktif di 40 MHz (HT40) */
 	bool         fPriChLo;		/* primary channel di bawah secondary */
 	uint8_t      fTxScratch[4096];	/* scratch TX descriptor + MPDU (workloop-serialized) */
-	/*
-	 * USB TX batch buffer: mengumpulkan multiple frame (desc+MPDU) ke
-	 * satu buffer besar lalu mengirimnya dengan satu pipe->io().
-	 * RTL8188E firmware memproses multiple TX descriptor per bulk URB.
-	 * Ukuran 32KB = ~20 frame MTU 1500 atau ~160 frame kecil.
-	 */
-	static const uint32_t kTxBatchSize = 32768;
-	uint8_t      *fTxBatchBuf;
-	uint32_t     fTxBatchLen;
-	uint32_t     fTxBatchCount;
-	int          fTxBatchPipe;
-	void         flushTxBatch();
+	uint8_t      fCckTxPwr[6];	/* kalibrasi daya TX CCK 2.4 GHz dari EFUSE */
+	uint8_t      fHt40TxPwr[5];	/* kalibrasi daya TX HT40 1S dari EFUSE */
+	uint8_t      fHt20OfdmDiff;	/* delta daya HT20/OFDM terhadap HT40 */
+	bool         fTxPwrValid;	/* tabel kalibrasi EFUSE TX power tersedia */
+	uint8_t      fTxMcs;		/* indeks MCS HT aktif (0..7) untuk unicast data */
+	uint32_t     fRaTxCnt;		/* sampel TX report dalam jendela adaptasi 1 detik */
+	uint32_t     fRaOkCnt;		/* sampel PKT_OK dalam jendela adaptasi 1 detik */
+	uint32_t     fRaRetryCnt;	/* akumulasi retry dalam jendela adaptasi 1 detik */
+	uint8_t      fRaSuccessStreak;	/* hitungan jendela sukses berturut-turut */
+	int32_t      fAvgRssi;		/* EMA RSSI dBm untuk kontrol penguatan RX (DIG) */
+	uint8_t      fCurRxGain;	/* nilai register IGI (0xc50) aktif */
 	void         applyRsnVariant(uint32_t attempt);
+	void         updateRateAndGain(void);
 	/*
 	 * Setara rtwn_updateslot() + INIRTS_RATE_SEL di OpenBSD.
 	 * Slot time menentukan DIFS/backoff; kalau tidak cocok dengan AP,
@@ -202,7 +202,7 @@ public:
 	    const uint8_t *macaddr, const uint8_t *key, int keylen);
 	void deleteCamKey(int entry);
 
-	void handleRx(const uint8_t *buf, uint32_t len);
+	void handleRx(const uint8_t *buf, uint32_t len, struct mbuf_list *ml);
 	void txStart(struct _ifnet *ifp);
 	void sendFrame(mbuf_t m, struct ieee80211_node *ni, bool isMgmt);
 	void setChannel(struct ieee80211_channel *chan);

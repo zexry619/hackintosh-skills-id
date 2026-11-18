@@ -103,10 +103,15 @@ bool ItlRtl8188E::init()
 	fBw40 = false;
 	fPriChLo = false;
 	memset(fTxScratch, 0, sizeof(fTxScratch));
-	fTxBatchBuf = nullptr;
-	fTxBatchLen = 0;
-	fTxBatchCount = 0;
-	fTxBatchPipe = -1;
+	memset(fCckTxPwr, 0, sizeof(fCckTxPwr));
+	memset(fHt40TxPwr, 0, sizeof(fHt40TxPwr));
+	fHt20OfdmDiff = 0;
+	fTxPwrValid = false;
+	fTxMcs = 7;
+	fRaTxCnt = fRaOkCnt = fRaRetryCnt = 0;
+	fRaSuccessStreak = 0;
+	fAvgRssi = -95;
+	fCurRxGain = 0x32;
 	return true;
 }
 
@@ -143,10 +148,6 @@ void ItlRtl8188E::free()
 			getMainWorkLoop()->removeEventSource(fTxTimer);
 		fTxTimer->release();
 		fTxTimer = nullptr;
-	}
-	if (fTxBatchBuf) {
-		IOFree(fTxBatchBuf, kTxBatchSize);
-		fTxBatchBuf = nullptr;
 	}
 	rxQueueFree();
 	if (fRxLock) {
@@ -215,14 +216,21 @@ int ItlRtl8188E::initChip(void)
 	 * rtwn_seq_read_efuse_offload menulis 0xf4 ke register 0x209 (BCN_HEAD)
 	 * dan mereset MCU 8051 8 kali bila gagal.
 	 */
-	if (rtwn_seq_read_efuse_direct_8188e(&ef, halRead, halWrite,
-	    this) == 0 && ef.efuse_ok) {
+	bool efOk = (rtwn_seq_read_efuse_direct_8188e(&ef, halRead, halWrite,
+	    this) == 0 && ef.efuse_ok);
+	if (!efOk) {
+		efOk = (rtwn_seq_read_efuse_offload(&ef, halRead, halWrite,
+		    this) == 0 && ef.efuse_ok);
+	}
+	if (efOk) {
 		memcpy(res.mac, ef.mac, 6);
 		res.xtal = ef.xtal;
-	} else if (rtwn_seq_read_efuse_offload(&ef, halRead, halWrite, this) == 0 &&
-	    ef.efuse_ok) {
-		memcpy(res.mac, ef.mac, 6);
-		res.xtal = ef.xtal;
+		if (ef.txpwr_ok) {
+			memcpy(fCckTxPwr, ef.cck_tx_pwr, sizeof(fCckTxPwr));
+			memcpy(fHt40TxPwr, ef.ht40_tx_pwr, sizeof(fHt40TxPwr));
+			fHt20OfdmDiff = ef.ht20_ofdm_diff;
+			fTxPwrValid = true;
+		}
 	} else {
 		IOLog(LOGP "EFUSE gagal, pakai MAC default\n");
 		res.mac[0] = 0x02;
@@ -252,6 +260,8 @@ int ItlRtl8188E::initChip(void)
 	rc += rtwn_init_bb_8188e(halRead, halWrite, this, fChip.xtal);
 	rc += rtwn_init_rf_8188e(halRead, halWrite, this);
 	rc += rtwn_core_config_8188e(halRead, halWrite, this, fMac);
+	rtwn_iq_calib_8188e(halRead, halWrite, this);
+	rtwn_lc_calib_8188e(halRead, halWrite, this);
 
 	IOSleep(2);
 	fChipReady = true;
@@ -402,11 +412,6 @@ bool ItlRtl8188E::attach(IOPCIDevice *device)
 	fTxTimer = IOTimerEventSource::timerEventSource(this,
 	    OSMemberFunctionCast(IOTimerEventSource::Action, this,
 	    &ItlRtl8188E::txTimerAction));
-	/* Batch TX buffer: satu IOMalloc untuk semua frame dalam satu flush. */
-	fTxBatchBuf = (uint8_t *)IOMalloc(kTxBatchSize);
-	if (!fTxBatchBuf) {
-		IOLog(LOGP "gagal alokasi TX batch buffer\n");
-	}
 	if (!fRxLock || !fRxTimer || !fTxTimer || !getMainWorkLoop() ||
 	    getMainWorkLoop()->addEventSource(fRxTimer) != kIOReturnSuccess ||
 	    getMainWorkLoop()->addEventSource(fTxTimer) != kIOReturnSuccess) {
@@ -506,10 +511,6 @@ void ItlRtl8188E::detach(IOPCIDevice *device)
 			getMainWorkLoop()->removeEventSource(fTxTimer);
 		fTxTimer->release();
 		fTxTimer = nullptr;
-	}
-	if (fTxBatchBuf) {
-		IOFree(fTxBatchBuf, kTxBatchSize);
-		fTxBatchBuf = nullptr;
 	}
 	rxQueueFree();
 	if (fRxLock) {
@@ -638,13 +639,14 @@ void ItlRtl8188E::setDiag(const char *key, const char *value)
 
 void ItlRtl8188E::publishStats(void)
 {
-	char s[288];
+	char s[320];
 
 	snprintf(s, sizeof(s),
 	    "txm=%u txd=%u txe=%u txf=%u agg=%u rpt=%u txok=%u rty=%u "
 	    "rxm=%u rxd=%u rxe=%u bar=%u encf=%u pipe=%d inf=%d "
 	    "auth=%u/%u assoc=%u/%u try=%u rsnv=%u dlv=%u "
-	    "bw=%u st=%d xf=%08x sndq=%d rxu=%d rxer=%u rec=%u lst=%08x",
+	    "bw=%u mcs=%u igi=%02x rssi=%d st=%d xf=%08x sndq=%d "
+	    "rxu=%d rxer=%u rec=%u lst=%08x",
 	    (unsigned)fTxMgmt, (unsigned)fTxData, (unsigned)fTxEapol,
 	    (unsigned)fTxFail, (unsigned)fTxAgg, (unsigned)fTxReport,
 	    (unsigned)fTxOk, (unsigned)fTxRetry, (unsigned)fRxMgmt,
@@ -656,6 +658,7 @@ void ItlRtl8188E::publishStats(void)
 	    (unsigned)fJoinTry, (unsigned)fRsnVariant,
 	    (unsigned)fRxDelivered,
 	    fBw40 ? 40u : 20u,
+	    (unsigned)fTxMcs, (unsigned)fCurRxGain, (int)fAvgRssi,
 	    (int)fIc.ic_state, (unsigned)fIc.ic_xflags,
 	    fIc.ic_if.if_snd.queue ? 1 : 0,
 	    (int)fChip.usb.rxActive(), (unsigned)fChip.usb.rxErr(),
@@ -692,8 +695,12 @@ void ItlRtl8188E::setChannel(struct ieee80211_channel *chan)
 		    bw40 ? (prichlo ? "+40" : "-40") : "");
 		setDiag("RTL8188E-scan", stage);
 		if (rtwn_set_chan_bw_8188e(halRead, halWrite, this, ch,
-		    bw40, prichlo) != 0)
+		    bw40, prichlo) != 0) {
 			IOLog(LOGP "set kanal %u (bw40=%d) gagal\n", ch, bw40);
+		} else if (fTxPwrValid) {
+			rtwn_set_txpower_8188e(halRead, halWrite, this, ch,
+			    bw40, fCckTxPwr, fHt40TxPwr, fHt20OfdmDiff);
+		}
 	}
 }
 
@@ -911,8 +918,10 @@ int ItlRtl8188E::newstateCb(struct ieee80211com *ic,
 		    R92C_RCR_APP_ICV | R92C_RCR_HTC_LOC_CTRL |
 		    R92C_RCR_APP_MIC | R92C_RCR_APP_PHYSTS;
 		halWrite(me, R92C_RCR, &rcr, 4);
-		if (!me->fScanning)
+		if (!me->fScanning) {
+			me->fCurRxGain = 0x20;
 			rtwn_set_rx_gain_8188e(halRead, halWrite, me, 0x20);
+		}
 
 		me->fScanning = true;
 		if (ic->ic_bss && ic->ic_bss->ni_chan)
@@ -964,6 +973,7 @@ int ItlRtl8188E::newstateCb(struct ieee80211com *ic,
 				    (unsigned)me->fJoinTry);
 			}
 			me->fJoinTry++;
+			me->fCurRxGain = 0x32;
 			rtwn_set_rx_gain_8188e(halRead, halWrite, me, 0x32);
 			me->updateSlot(ic);
 			me->applyRsnVariant(me->fJoinTry);
@@ -988,6 +998,13 @@ int ItlRtl8188E::newstateCb(struct ieee80211com *ic,
 		}
 		if (nstate == IEEE80211_S_RUN) {
 			me->fJoinTry = 0;
+			me->fCurRxGain = 0x32;
+			me->fTxMcs = 7;
+			me->fRaTxCnt = 0;
+			me->fRaOkCnt = 0;
+			me->fRaRetryCnt = 0;
+			me->fRaSuccessStreak = 0;
+			me->fAvgRssi = -95;
 			rtwn_set_rx_gain_8188e(halRead, halWrite, me, 0x32);
 			uint8_t msr = R92C_MSR_NETTYPE_INFRA;
 			me->updateSlot(ic);
@@ -1012,8 +1029,10 @@ int ItlRtl8188E::newstateCb(struct ieee80211com *ic,
 			halWrite(me, R92C_TXPAUSE, &txpause, 1);
 			if (ic->ic_bss) {
 				uint16_t bcn_int = ic->ic_bss->ni_intval ? ic->ic_bss->ni_intval : 100;
+				uint8_t initRate = (uint8_t)(0x0c + me->fTxMcs);
 				halWrite(me, R92C_BCN_INTERVAL, &bcn_int, 2);
-				ic->ic_bss->ni_txmcs = 7;
+				halWrite(me, R92C_INIDATA_RATE_SEL(0), &initRate, 1);
+				ic->ic_bss->ni_txmcs = me->fTxMcs;
 			}
 		}
 		break;
@@ -1057,6 +1076,66 @@ void ItlRtl8188E::scanTimeoutCb(void *arg)
  * TX kita tidak punya antrean yang bisa macet, jadi cukup bersihkan
  * if_timer.
  */
+void ItlRtl8188E::updateRateAndGain(void)
+{
+	if (!fChipReady || fIc.ic_state != IEEE80211_S_RUN || !fIc.ic_bss)
+		return;
+
+	uint32_t txCnt = fRaTxCnt;
+	uint32_t okCnt = fRaOkCnt;
+	uint32_t rtyCnt = fRaRetryCnt;
+	fRaTxCnt = 0;
+	fRaOkCnt = 0;
+	fRaRetryCnt = 0;
+
+	if (txCnt >= 4) {
+		uint8_t prevMcs = fTxMcs;
+		uint32_t failCnt = (txCnt > okCnt) ? (txCnt - okCnt) : 0;
+
+		if (failCnt * 4 > txCnt || rtyCnt * 2 > txCnt * 3) {
+			if (fTxMcs > 0)
+				fTxMcs--;
+			fRaSuccessStreak = 0;
+		} else if (failCnt == 0 && rtyCnt * 5 <= txCnt) {
+			if (fTxMcs < 7) {
+				fRaSuccessStreak++;
+				if (fRaSuccessStreak >= 2 || txCnt >= 16) {
+					fTxMcs++;
+					fRaSuccessStreak = 0;
+				}
+			}
+		} else {
+			fRaSuccessStreak = 0;
+		}
+
+		if (fTxMcs != prevMcs) {
+			uint8_t hwRate = (uint8_t)(0x0c + (fTxMcs & 0x07));
+			halWrite(this, R92C_INIDATA_RATE_SEL(0), &hwRate, 1);
+			fIc.ic_bss->ni_txmcs = fTxMcs;
+		}
+	}
+
+	if (fAvgRssi > -95) {
+		uint8_t nextGain = fCurRxGain;
+
+		if (fAvgRssi <= -72) {
+			nextGain = 0x20;
+		} else if (fAvgRssi >= -56) {
+			nextGain = 0x30;
+		} else if (fAvgRssi >= -69 && fAvgRssi <= -59) {
+			nextGain = 0x26;
+		} else if (fCurRxGain != 0x20 && fCurRxGain != 0x26 &&
+		    fCurRxGain != 0x30) {
+			nextGain = (fAvgRssi < -64) ? 0x20 : 0x26;
+		}
+
+		if (nextGain != fCurRxGain) {
+			fCurRxGain = nextGain;
+			rtwn_set_rx_gain_8188e(halRead, halWrite, this, fCurRxGain);
+		}
+	}
+}
+
 void ItlRtl8188E::watchdogCb(struct _ifnet *ifp)
 {
 	ItlRtl8188E *me = ifp ? (ItlRtl8188E *)ifp->if_softc : nullptr;
@@ -1069,9 +1148,11 @@ void ItlRtl8188E::watchdogCb(struct _ifnet *ifp)
 	if (ifp)
 		ieee80211_watchdog(ifp);
 
-	/* Satu kali per detik: publikasikan penghitung ke ioreg. */
-	if (me)
+	/* Satu kali per detik: adaptasi MCS/RX gain dan publikasi stats ke ioreg. */
+	if (me) {
+		me->updateRateAndGain();
 		me->publishStats();
+	}
 }
 
 /* ------------------------------------------------------------------ */
@@ -1323,38 +1404,13 @@ void ItlRtl8188E::sendFrame(mbuf_t m, struct ieee80211_node *ni, bool isMgmt)
 		}
 
 		total = RTWN_USB_TX_DESC_SIZE + len;
-
-		/*
-		 * USB TX Batch: kumpulkan multiple frame ke satu buffer besar.
-		 * Setiap frame = 32-byte TX descriptor + MPDU, diletakkan
-		 * berurutan di fTxBatchBuf. Firmware RTL8188E memproses semua
-		 * TX descriptor dalam satu bulk transfer.
-		 *
-		 * Flush kondisi:
-		 *   - pipe berbeda dari frame sebelumnya di batch
-		 *   - buffer tidak cukup untuk frame berikutnya
-		 *   - ini frame mgmt (harus dikirim sendiri, tidak di-batch)
-		 */
-		if (isMgmt || !fTxBatchBuf ||
-		    fTxBatchPipe != pipe ||
-		    fTxBatchLen + total > kTxBatchSize) {
-			if (fTxBatchBuf && fTxBatchLen > 0)
-				flushTxBatch();
-		}
-
-		if (isMgmt) {
-			/* Mgmt: pakai fTxScratch, kirim langsung (tidak di-batch). */
-			buf = fTxScratch;
-			if (total > (size_t)sizeof(fTxScratch)) {
-				mbuf_freem(m);
-				if (ni)
-					ieee80211_release_node(&fIc, ni);
-				return;
-			}
-		} else {
-			/* Data: append ke batch buffer. */
-			fTxBatchPipe = pipe;
-			buf = fTxBatchBuf + fTxBatchLen;
+		bool useScratch = (total <= sizeof(fTxScratch));
+		buf = useScratch ? fTxScratch : (uint8_t *)IOMalloc(total);
+		if (!buf) {
+			mbuf_freem(m);
+			if (ni)
+				ieee80211_release_node(&fIc, ni);
+			return;
 		}
 
 		if (isMgmt) {
@@ -1416,13 +1472,15 @@ void ItlRtl8188E::sendFrame(mbuf_t m, struct ieee80211_node *ni, bool isMgmt)
 			buf[19] = 0x00;
 			/*
 			 * txdw4 & txdw5:
-			 *   - Unicast data: 0x13 (MCS 7 = 65/72.2 Mb/s di 20 MHz, 135/150 Mb/s di 40 MHz).
+			 *   - Unicast data: 0x0c + fTxMcs (MCS 0..7 adaptif via CCX_RPT).
 			 *   - Mgmt / Bcast / EAPOL: 0x00 (CCK 1 Mb/s).
 			 *   - 40 MHz (HT40): pasang R92C_TXDW4_40MHZ (buf[19] |= 0x02) + SGI40.
 			 *   - Frame 20 MHz pada BSS 40 MHz: pasang DATA_SC di buf[18] bit 4..5.
 			 */
-			uint8_t rate = (!bcast && !isEapol && !isMgmt) ? 0x13 : 0x00;
-			bool use40 = (rate == 0x13) && fBw40 && ni &&
+			bool isUnicastData = !bcast && !isEapol && !isMgmt;
+			uint8_t rate = isUnicastData ?
+			    (uint8_t)(0x0c + (fTxMcs & 0x07)) : 0x00;
+			bool use40 = isUnicastData && fBw40 && ni &&
 			    (ni->ni_chw == IEEE80211_CHAN_WIDTH_40);
 			if (use40) {
 				buf[19] |= 0x02;	/* R92C_TXDW4_40MHZ */
@@ -1434,13 +1492,17 @@ void ItlRtl8188E::sendFrame(mbuf_t m, struct ieee80211_node *ni, bool isMgmt)
 				if (fBw40) {
 					buf[18] |= (uint8_t)((fPriChLo ? 1 : 2) << 4);
 				}
-				if (rate == 0x13 && fIc.ic_bss &&
+				if (isUnicastData && fIc.ic_bss &&
 				    ((fIc.ic_bss->ni_flags & IEEE80211_NODE_HT_SGI20) ||
 				     (fIc.ic_bss->ni_htcaps & IEEE80211_HTCAP_SGI20))) {
 					rate |= 0x40;
 				}
 			}
-			buf[10] &= ~0x08;	/* pastikan CCX_RPT mati agar tidak membanjiri Bulk-IN */
+			/* Sampel CCX_RPT 1 dari 16 frame unicast untuk AMRR tanpa membanjiri Bulk-IN. */
+			if (isUnicastData && ((fTxData & 0x0f) == 0))
+				buf[10] |= 0x08;
+			else
+				buf[10] &= ~0x08;
 			buf[20] = rate;
 			buf[21] = 0x1f;		/* batas fallback rate (RtWlanU @0x14d22f) */
 			buf[22] = 0x01;
@@ -1450,36 +1512,34 @@ void ItlRtl8188E::sendFrame(mbuf_t m, struct ieee80211_node *ni, bool isMgmt)
 
 		pktlen = len;
 		if (mbuf_copydata(m, 0, pktlen, buf + RTWN_USB_TX_DESC_SIZE) != 0) {
-			if (isMgmt) {
-				/* scratch, tidak perlu IOFree */
-			}
+			if (!useScratch)
+				IOFree(buf, total);
 			mbuf_freem(m);
 			if (ni)
 				ieee80211_release_node(&fIc, ni);
 			return;
 		}
 
-		if (isMgmt) {
-			/* Mgmt: kirim langsung. */
-			if (!fChip.usb.bulkSend(buf, (uint32_t)total, nullptr, nullptr,
-			    pipe)) {
-				static int failLog = 0;
-				if (failLog++ < 10 || (failLog % 100) == 0) {
-					IOLog(LOGP "bulkSend mgmt gagal (%u byte, pipe %d, count %d)\n",
-					    (unsigned)total, pipe, failLog);
-				}
-				fTxFail++;
-			} else {
-				fTxMgmt++;
+		if (!fChip.usb.bulkSend(buf, (uint32_t)total, nullptr, nullptr,
+		    pipe)) {
+			static int failLog = 0;
+			if (failLog++ < 10 || (failLog % 100) == 0) {
+				IOLog(LOGP "bulkSend gagal (%u byte, pipe %d, mgmt=%d, count %d)\n",
+				    (unsigned)total, pipe, isMgmt ? 1 : 0, failLog);
 			}
+			fTxFail++;
 		} else {
-			/* Data: frame sudah di batch buffer, update counter. */
-			fTxBatchLen += (uint32_t)total;
-			fTxBatchCount++;
-			fTxData++;
-			if (fIc.ic_if.netStat)
-				fIc.ic_if.netStat->outputPackets++;
+			if (isMgmt) {
+				fTxMgmt++;
+			} else {
+				fTxData++;
+				if (fIc.ic_if.netStat)
+					fIc.ic_if.netStat->outputPackets++;
+			}
 		}
+
+		if (!useScratch)
+			IOFree(buf, total);
 
 		mbuf_freem(m);
 
@@ -1488,25 +1548,6 @@ void ItlRtl8188E::sendFrame(mbuf_t m, struct ieee80211_node *ni, bool isMgmt)
 			ieee80211_release_node(&fIc, ni);
 		return;
 	}
-}
-
-void ItlRtl8188E::flushTxBatch()
-{
-	if (!fTxBatchBuf || fTxBatchLen == 0)
-		return;
-
-	if (!fChip.usb.bulkSend(fTxBatchBuf, fTxBatchLen, nullptr, nullptr,
-	    fTxBatchPipe)) {
-		static int failLog = 0;
-		if (failLog++ < 10 || (failLog % 100) == 0) {
-			IOLog(LOGP "flushTxBatch gagal (%u byte, pipe %d, count %d)\n",
-			    (unsigned)fTxBatchLen, fTxBatchPipe, failLog);
-		}
-		fTxFail++;
-	}
-	fTxBatchLen = 0;
-	fTxBatchCount = 0;
-	fTxBatchPipe = -1;
 }
 
 void ItlRtl8188E::txDoneHook(void *ctx)
@@ -1584,9 +1625,6 @@ void ItlRtl8188E::txStart(struct _ifnet *ifp)
 		}
 		sendFrame(m, ni, false);
 	}
-
-	/* Flush sisa frame yang terkumpul di batch buffer. */
-	flushTxBatch();
 
 	if (fChip.usb.txBusy()) {
 		ifq_set_oactive(&ifp->if_snd);
@@ -1679,10 +1717,18 @@ void ItlRtl8188E::rxTimerAction(IOTimerEventSource *timer)
 		if (n == 0)
 			break;
 
+		struct mbuf_list ml = MBUF_LIST_INITIALIZER();
 		for (i = 0; i < n; i++) {
 			if (fRxRunning && fIfAttached)
-				handleRx(bufs[i], lens[i]);
+				handleRx(bufs[i], lens[i], &ml);
 			IOFree(bufs[i], lens[i]);
+		}
+		if (ml.ml_len > 0) {
+			fRxDelivered += ml.ml_len;
+			if (fIfAttached && fRxRunning)
+				if_input(&fIc.ic_if, &ml);
+			else
+				ml_purge(&ml);
 		}
 	}
 
@@ -1776,10 +1822,9 @@ rxSlotOk(const uint8_t *buf, uint32_t len, uint32_t off)
 	    type == IEEE80211_FC0_TYPE_CTL;
 }
 
-void ItlRtl8188E::handleRx(const uint8_t *buf, uint32_t len)
+void ItlRtl8188E::handleRx(const uint8_t *buf, uint32_t len, struct mbuf_list *ml)
 {
 	struct _ifnet *ifp = &fIc.ic_if;
-	struct mbuf_list ml = MBUF_LIST_INITIALIZER();
 	uint32_t off = 0;
 
 	while (off + RTWN_USB_RX_DESC_SIZE <= len) {
@@ -1828,11 +1873,14 @@ void ItlRtl8188E::handleRx(const uint8_t *buf, uint32_t len)
 			const uint8_t *rpt = buf + foff;
 
 			fTxReport++;
+			fRaTxCnt++;
 			if (rpt[1] & 0x40) {
 				fTxOk++;
+				fRaOkCnt++;
 			}
 			if (rpt[2] & 0x3f) {
 				fTxRetry++;
+				fRaRetryCnt += (rpt[2] & 0x3f);
 			}
 		}
 
@@ -1998,6 +2046,12 @@ void ItlRtl8188E::handleRx(const uint8_t *buf, uint32_t len)
 
 					rssi = (int8_t)(((sq >> 1) & 0x7f) - 110);
 				}
+				if (fIc.ic_state == IEEE80211_S_RUN && fIc.ic_bss &&
+				    IEEE80211_ADDR_EQ(wh->i_addr2, fIc.ic_bss->ni_bssid) &&
+				    rssi > -100 && rssi < 0) {
+					fAvgRssi = (fAvgRssi <= -95) ? (int32_t)rssi :
+					    ((fAvgRssi * 7 + (int32_t)rssi) / 8);
+				}
 			}
 
 			m = getController() ?
@@ -2031,8 +2085,7 @@ void ItlRtl8188E::handleRx(const uint8_t *buf, uint32_t len)
 							norm = fIc.ic_max_rssi;
 						rxi.rxi_rssi = norm;
 					}
-					ieee80211_inputm(ifp, m, ni, &rxi,
-					    &ml);
+					ieee80211_inputm(ifp, m, ni, &rxi, ml);
 					ieee80211_release_node(&fIc, ni);
 				} else {
 					mbuf_freem(m);
@@ -2044,14 +2097,6 @@ advance:
 		if (next == 0 || next <= off)
 			break;
 		off = next;
-	}
-
-	if (ml.ml_len > 0) {
-		fRxDelivered += ml.ml_len;
-		if (fIfAttached && fRxRunning)
-			if_input(ifp, &ml);
-		else
-			ml_purge(&ml);
 	}
 }
 

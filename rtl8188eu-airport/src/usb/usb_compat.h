@@ -183,7 +183,7 @@ public:
 	uint32_t rxErr() const { return fRxErr; }
 	uint32_t recoverCount() const { return fRxRecover; }
 	uint32_t lastRxStatus() const { return fLastRxStatus; }
-	bool txBusy() const { return fTxInFlight >= 128; }
+	bool txBusy() const { return fTxInFlight >= 64; }
 
 private:
 	/* Satu control transfer dengan batas waktu sendiri (buffers di heap). */

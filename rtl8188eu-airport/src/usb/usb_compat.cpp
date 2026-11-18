@@ -558,7 +558,7 @@ void rtwnBulkComplete(void *owner, void *param, IOReturn status, uint32_t bytes)
 		if (ctx->txCb) {
 			ctx->txCb(ctx->txCtx, status == kIOReturnSuccess ? 0 : -1);
 		}
-		if (self->fTxInFlight <= 96 && self->fTxDoneCb) {
+		if (self->fTxInFlight <= 48 && self->fTxDoneCb) {
 			self->fTxDoneCb(self->fTxDoneCtx);
 		}
 		/*
@@ -828,7 +828,7 @@ bool RtwnUsb::bulkSend(const uint8_t *data, uint32_t len, rtwn_tx_cb cb,
 	if (!data || len == 0 || fBulkClosing || !fAttached || fNumOut <= 0) {
 		return false;
 	}
-	if (fTxInFlight >= 256) {
+	if (fTxInFlight >= 128) {
 		return false;
 	}
 	if (pipeIdx < 0) {
