@@ -369,6 +369,13 @@ rtwn_iq_calib_chain_88e(rtwn_read_fn rd, rtwn_write_fn wr, void *ctx,
 {
 	uint32_t status;
 
+	/* IQ calibration settings untuk chain 0 (port OpenBSD rtwn.c). */
+	rtwn_bb_write(rd, wr, ctx, 0xe30, 0x10008c1fu);	/* R92C_TX_IQK_TONE_A */
+	rtwn_bb_write(rd, wr, ctx, 0xe54, 0x10008c1fu);	/* R92C_RX_IQK_TONE_B */
+	rtwn_bb_write(rd, wr, ctx, 0xe34, 0x10008c1fu);	/* R92C_RX_IQK_TONE_A */
+	rtwn_bb_write(rd, wr, ctx, 0xe38, 0x82140102u);	/* R92C_TX_IQK_PI_A */
+	rtwn_bb_write(rd, wr, ctx, 0xe3c, 0x28160502u);	/* R92C_RX_IQK_PI_A */
+
 	rtwn_bb_write(rd, wr, ctx, 0xe4c, 0x00462911u);	/* R92C_IQK_AGC_RSP */
 	rtwn_bb_write(rd, wr, ctx, 0xe48, 0xf9000000u);	/* R92C_IQK_AGC_PTS */
 	rtwn_bb_write(rd, wr, ctx, 0xe48, 0xf8000000u);
@@ -406,23 +413,23 @@ rtwn_iq_calib_8188e(rtwn_read_fn rd, rtwn_write_fn wr, void *ctx)
 	uint32_t ofdm0_trxpathena = 0, ofdm0_trmuxpar = 0;
 	uint32_t rfsw0 = 0, rfsw1 = 0, rfoe0 = 0, rfoe1 = 0;
 	uint32_t ant_a = 0, ant_b = 0, cck_afe = 0, hssi_p1 = 0;
-	uint32_t gpio_mux = 0;
+	uint8_t gpio_mux = 0;
 	uint8_t txpause = 0, bcn_ctrl = 0, bcn_ctrl1 = 0, xa_agc = 0x20;
 	uint16_t tx[3][2], rx[3][2];
 	int n, i, valid = 0;
 
 	memset(tx, 0, sizeof(tx));
 	memset(rx, 0, sizeof(rx));
+	xa_agc = (uint8_t)(rtwn_bb_read(rd, wr, ctx, 0xc50) & 0xff);
 
 	for (n = 0; n < 3; n++) {
-		xa_agc = (uint8_t)(rtwn_bb_read(rd, wr, ctx, 0xc50) & 0xff);
 		if (n == 0) {
 			for (i = 0; i < 16; i++)
 				save_adda[i] = rtwn_bb_read(rd, wr, ctx, reg_adda[i]);
 			txpause = rtwn_seq_raw_read1(rd, wr, ctx, 0x522);
 			bcn_ctrl = rtwn_seq_raw_read1(rd, wr, ctx, 0x550);
 			bcn_ctrl1 = rtwn_seq_raw_read1(rd, wr, ctx, 0x551);
-			(void)rd(ctx, 0x040, &gpio_mux, 4);
+			gpio_mux = rtwn_seq_raw_read1(rd, wr, ctx, 0x040);
 			ofdm0_trxpathena = rtwn_bb_read(rd, wr, ctx, 0xc04);
 			ofdm0_trmuxpar = rtwn_bb_read(rd, wr, ctx, 0xc08);
 			rfsw0 = rtwn_bb_read(rd, wr, ctx, 0x870);
@@ -480,7 +487,7 @@ rtwn_iq_calib_8188e(rtwn_read_fn rd, rtwn_write_fn wr, void *ctx)
 			rtwn_seq_raw_write1(rd, wr, ctx, 0x522, txpause);
 			rtwn_seq_raw_write1(rd, wr, ctx, 0x550, bcn_ctrl);
 			rtwn_seq_raw_write1(rd, wr, ctx, 0x551, bcn_ctrl1);
-			(void)wr(ctx, 0x040, &gpio_mux, 4);
+			rtwn_seq_raw_write1(rd, wr, ctx, 0x040, gpio_mux);
 			rtwn_bb_write(rd, wr, ctx, 0xc04, ofdm0_trxpathena);
 			rtwn_bb_write(rd, wr, ctx, 0x870, rfsw0);
 			rtwn_bb_write(rd, wr, ctx, 0x874, rfsw1);

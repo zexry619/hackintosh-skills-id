@@ -1091,15 +1091,18 @@ void ItlRtl8188E::updateRateAndGain(void)
 	if (txCnt >= 4) {
 		uint8_t prevMcs = fTxMcs;
 		uint32_t failCnt = (txCnt > okCnt) ? (txCnt - okCnt) : 0;
+		uint8_t minMcs = (failCnt * 2 > txCnt) ? 0 : 2;
 
-		if (failCnt * 4 > txCnt || rtyCnt * 2 > txCnt * 3) {
-			if (fTxMcs > 0)
+		if (failCnt * 3 > txCnt || rtyCnt > txCnt * 3) {
+			if (fTxMcs > minMcs)
 				fTxMcs--;
+			else if (fTxMcs < minMcs)
+				fTxMcs = minMcs;
 			fRaSuccessStreak = 0;
-		} else if (failCnt == 0 && rtyCnt * 5 <= txCnt) {
+		} else if (failCnt * 10 <= txCnt && rtyCnt <= txCnt) {
 			if (fTxMcs < 7) {
 				fRaSuccessStreak++;
-				if (fRaSuccessStreak >= 2 || txCnt >= 16) {
+				if (fRaSuccessStreak >= 2 || txCnt >= 12) {
 					fTxMcs++;
 					fRaSuccessStreak = 0;
 				}
@@ -1805,21 +1808,26 @@ rxSlotOk(const uint8_t *buf, uint32_t len, uint32_t off)
 	dw3 = rxDescDw(buf, off, 3);
 	rpt_sel = (uint8_t)((dw3 >> 14) & 0x03);
 	if (rpt_sel != 0)
-		return info.pktlen > 0 && info.pktlen <= 512;
-	if (info.pktlen == 0 || info.pktlen > 4096)
+		return false;
+	if (info.infosz > 32)
+		return false;
+	if (info.pktlen < sizeof(struct ieee80211_frame_min) ||
+	    info.pktlen > 2400)
 		return false;
 	foff = off + RTWN_USB_RX_DESC_SIZE + info.infosz + info.shift;
-	if (foff + info.pktlen > len ||
-	    info.pktlen < sizeof(struct ieee80211_frame_min))
+	if (foff + info.pktlen > len)
 		return false;
 	wh = (const struct ieee80211_frame *)(buf + foff);
 	if ((wh->i_fc[0] & IEEE80211_FC0_VERSION_MASK) !=
 	    IEEE80211_FC0_VERSION_0)
 		return false;
 	type = wh->i_fc[0] & IEEE80211_FC0_TYPE_MASK;
-	return type == IEEE80211_FC0_TYPE_MGT ||
-	    type == IEEE80211_FC0_TYPE_DATA ||
-	    type == IEEE80211_FC0_TYPE_CTL;
+	if (type == IEEE80211_FC0_TYPE_CTL)
+		return true;
+	if (type != IEEE80211_FC0_TYPE_MGT &&
+	    type != IEEE80211_FC0_TYPE_DATA)
+		return false;
+	return info.pktlen >= sizeof(struct ieee80211_frame);
 }
 
 void ItlRtl8188E::handleRx(const uint8_t *buf, uint32_t len, struct mbuf_list *ml)
@@ -1834,7 +1842,8 @@ void ItlRtl8188E::handleRx(const uint8_t *buf, uint32_t len, struct mbuf_list *m
 		struct ieee80211_node *ni;
 		struct ieee80211_rxinfo rxi;
 		mbuf_t m;
-		int8_t rssi = -95;
+		int8_t rssi = (fAvgRssi > -95 && fAvgRssi < 0) ?
+		    (int8_t)fAvgRssi : -85;
 		uint8_t rpt_sel;
 		bool txReport;
 
@@ -1885,23 +1894,27 @@ void ItlRtl8188E::handleRx(const uint8_t *buf, uint32_t len, struct mbuf_list *m
 		}
 
 		/*
-		 * _SegregateDmaAggPackets_8188E (@0x14c7fa) memakai alignment 8-byte,
-		 * sedangkan _SegregateUsbAggPackets_8188E (@0x14c984) memakai 128-byte.
-		 * Jangan batasi loop dengan npkts ((dw2 >> 16) & 0xff) karena pada
-		 * agregasi DMA atau setelah slot TX report nilainya 0!
+		 * Pada RTL8188E USB aggregation (RXDMA_AGG_EN, OpenBSD if_urtwn.c
+		 * align=127), subframe berada pada kelipatan 128-byte (s128), bukan
+		 * 8-byte (s8) kecuali DMA agg khusus. Periksa s128 lebih dulu lalu s8/s4,
+		 * dan jangan lanjutkan bila slot saat ini berupa report (rpt_sel != 0).
 		 */
-		rawLen = RTWN_USB_RX_DESC_SIZE + info.infosz + info.shift + flen;
-		s4 = (rawLen + 3) & ~3u;
-		s8 = (rawLen + 7) & ~7u;
-		s128 = (rawLen + 127) & ~127u;
-		if (rxSlotOk(buf, len, off + s8))
-			next = off + s8;
-		else if (rxSlotOk(buf, len, off + s4))
-			next = off + s4;
-		else if (rxSlotOk(buf, len, off + s128))
-			next = off + s128;
-		else
+		if (rpt_sel != 0) {
 			next = 0;
+		} else {
+			rawLen = RTWN_USB_RX_DESC_SIZE + info.infosz + info.shift + flen;
+			s4 = (rawLen + 3) & ~3u;
+			s8 = (rawLen + 7) & ~7u;
+			s128 = (rawLen + 127) & ~127u;
+			if (rxSlotOk(buf, len, off + s128))
+				next = off + s128;
+			else if (rxSlotOk(buf, len, off + s8))
+				next = off + s8;
+			else if (rxSlotOk(buf, len, off + s4))
+				next = off + s4;
+			else
+				next = 0;
+		}
 
 		if (!txReport) {
 			uint8_t type, sub;
@@ -2027,7 +2040,8 @@ void ItlRtl8188E::handleRx(const uint8_t *buf, uint32_t len, struct mbuf_list *m
 
 			/* RSSI dari PHY status (rtwn_r88e_get_rssi). */
 			if (info.infosz > 0 && info.hasPhyStatus) {
-				const uint8_t *phy = buf + foff - info.infosz;
+				const uint8_t *phy = buf + off +
+				    RTWN_USB_RX_DESC_SIZE;
 
 				if (info.rate <= 3) {
 					static const int8_t cckoff[] =
@@ -2038,6 +2052,17 @@ void ItlRtl8188E::handleRx(const uint8_t *buf, uint32_t len, struct mbuf_list *m
 					rssi = ((agc & 0x1f) > 27) ? -94 :
 					    (int8_t)(cckoff[rpt] -
 					    ((agc & 0x1f) << 1));
+					if (fIc.ic_state == IEEE80211_S_RUN &&
+					    fIc.ic_bss &&
+					    IEEE80211_ADDR_EQ(wh->i_addr2,
+					    fIc.ic_bss->ni_bssid) &&
+					    rssi > -100 && rssi < 0) {
+						fAvgRssi = (fAvgRssi <= -95) ?
+						    (int32_t)rssi :
+						    ((fAvgRssi * 7 + (int32_t)rssi) / 8);
+					}
+				} else if (fAvgRssi > -95 && fAvgRssi < 0) {
+					rssi = (int8_t)fAvgRssi;
 				} else {
 					uint32_t sq = (uint32_t)phy[4] |
 					    ((uint32_t)phy[5] << 8) |
@@ -2045,12 +2070,6 @@ void ItlRtl8188E::handleRx(const uint8_t *buf, uint32_t len, struct mbuf_list *m
 					    ((uint32_t)phy[7] << 24);
 
 					rssi = (int8_t)(((sq >> 1) & 0x7f) - 110);
-				}
-				if (fIc.ic_state == IEEE80211_S_RUN && fIc.ic_bss &&
-				    IEEE80211_ADDR_EQ(wh->i_addr2, fIc.ic_bss->ni_bssid) &&
-				    rssi > -100 && rssi < 0) {
-					fAvgRssi = (fAvgRssi <= -95) ? (int32_t)rssi :
-					    ((fAvgRssi * 7 + (int32_t)rssi) / 8);
 				}
 			}
 
