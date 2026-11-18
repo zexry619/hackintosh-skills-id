@@ -248,19 +248,12 @@ rtwn_aggr_init_8188e(rtwn_read_fn rd, rtwn_write_fn wr, void *ctx)
 	uint32_t reg = 0;
 
 	/*
-	 * Aktifkan RX DMA aggregation (sesuai OpenBSD if_urtwn.c urtwn_aggr_init):
+	 * Aktifkan RX DMA aggregation (OpenBSD if_urtwn.c):
 	 *   - R92C_TRXDMA_CTRL |= RXDMA_AGG_EN
-	 *   - R92C_RXDMA_AGG_PG_TH = 24 halaman (3 KB, masuk ke buffer RX 16 KB)
-	 *   - timeout (0x281) = 4 (~128 us) agar Assoc/ARP/ICMP tetap responsif
-	 *     sekaligus menggabungkan burst TCP RX ke dalam satu bulk-in URB.
-	 *   - R92C_TDECTRL (0x208) BLK_DESC_NUM = 1 untuk 8188E.
+	 *   - R92C_RXDMA_AGG_PG_TH = 24 halaman (3 KB), timeout = 4 (~128 us)
+	 * Pertahankan R92C_TDECTRL (0x208) dan R92C_TXDMA_OFFSET_CHK (0x20c = 0x0604)
+	 * sesuai nilai stabil v0.9.1 / RtWlanU agar TX Bulk-OUT tidak terpengaruh.
 	 */
-	if (rd32(rd, ctx, R92C_TDECTRL, &reg) == 0) {
-		reg &= ~(uint32_t)R92C_TDECTRL_BLK_DESC_NUM_M;
-		reg |= ((uint32_t)1 << R92C_TDECTRL_BLK_DESC_NUM_S);
-		wr32(rd, wr, ctx, R92C_TDECTRL, reg);
-	}
-
 	{
 		uint8_t v = 0;
 		if (rd(ctx, R92C_TRXDMA_CTRL, &v, 1) == 0) {
@@ -272,9 +265,10 @@ rtwn_aggr_init_8188e(rtwn_read_fn rd, rtwn_write_fn wr, void *ctx)
 	wr8(rd, wr, ctx, R92C_RXDMA_AGG_PG_TH, 24);
 	wr8(rd, wr, ctx, (uint16_t)(R92C_RXDMA_AGG_PG_TH + 1), 4);
 
-	/* Drop bulk-out yang tidak valid (R92C_TXDMA_OFFSET_CHK = 0x20c). */
+	/* Drop bulk-out yang tidak benar (0x020c = 0x00000604 di RtWlanU). */
 	if (rd32(rd, ctx, R92C_TXDMA_OFFSET_CHK, &reg) == 0) {
-		reg |= R92C_TXDMA_OFFSET_CHK_DROP_DATA_EN;
+		reg &= ~(uint32_t)R92C_TDECTRL_BLK_DESC_NUM_M;
+		reg |= ((uint32_t)6 << 8) | R92C_TXDMA_OFFSET_CHK_DROP_DATA_EN;
 		wr32(rd, wr, ctx, R92C_TXDMA_OFFSET_CHK, reg);
 	}
 }

@@ -253,15 +253,17 @@ int ItlRtl8188E::initChip(void)
 	memcpy(fChip.macaddr, res.mac, 6);
 	fChip.xtal = res.xtal ? res.xtal : 0x20;
 
-	IOLog(LOGP "MAC %02x:%02x:%02x:%02x:%02x:%02x xtal=0x%02x\n",
-	    fMac[0], fMac[1], fMac[2], fMac[3], fMac[4], fMac[5], fChip.xtal);
+	IOLog(LOGP "MAC %02x:%02x:%02x:%02x:%02x:%02x xtal=0x%02x txpwr_ok=%d "
+	    "cck=%02x:%02x:%02x ht40=%02x:%02x:%02x diff=%02x\n",
+	    fMac[0], fMac[1], fMac[2], fMac[3], fMac[4], fMac[5], fChip.xtal,
+	    fTxPwrValid ? 1 : 0,
+	    fCckTxPwr[0], fCckTxPwr[2], fCckTxPwr[4],
+	    fHt40TxPwr[0], fHt40TxPwr[2], fHt40TxPwr[4], fHt20OfdmDiff);
 
 	rc += rtwn_init_mac_8188e(halRead, halWrite, this);
 	rc += rtwn_init_bb_8188e(halRead, halWrite, this, fChip.xtal);
 	rc += rtwn_init_rf_8188e(halRead, halWrite, this);
 	rc += rtwn_core_config_8188e(halRead, halWrite, this, fMac);
-	/* Jangan panggil rtwn_iq_calib_8188e (port 92C merusak TX IQK 8188E). */
-	rtwn_lc_calib_8188e(halRead, halWrite, this);
 
 	IOSleep(2);
 	fChipReady = true;
@@ -695,12 +697,8 @@ void ItlRtl8188E::setChannel(struct ieee80211_channel *chan)
 		    bw40 ? (prichlo ? "+40" : "-40") : "");
 		setDiag("RTL8188E-scan", stage);
 		if (rtwn_set_chan_bw_8188e(halRead, halWrite, this, ch,
-		    bw40, prichlo) != 0) {
+		    bw40, prichlo) != 0)
 			IOLog(LOGP "set kanal %u (bw40=%d) gagal\n", ch, bw40);
-		} else if (fTxPwrValid) {
-			rtwn_set_txpower_8188e(halRead, halWrite, this, ch,
-			    bw40, fCckTxPwr, fHt40TxPwr, fHt20OfdmDiff);
-		}
 	}
 }
 
@@ -1029,9 +1027,7 @@ int ItlRtl8188E::newstateCb(struct ieee80211com *ic,
 			halWrite(me, R92C_TXPAUSE, &txpause, 1);
 			if (ic->ic_bss) {
 				uint16_t bcn_int = ic->ic_bss->ni_intval ? ic->ic_bss->ni_intval : 100;
-				uint8_t initRate = (uint8_t)(0x0c + me->fTxMcs);
 				halWrite(me, R92C_BCN_INTERVAL, &bcn_int, 2);
-				halWrite(me, R92C_INIDATA_RATE_SEL(0), &initRate, 1);
 				ic->ic_bss->ni_txmcs = me->fTxMcs;
 			}
 		}
@@ -1112,8 +1108,6 @@ void ItlRtl8188E::updateRateAndGain(void)
 		}
 
 		if (fTxMcs != prevMcs) {
-			uint8_t hwRate = (uint8_t)(0x0c + (fTxMcs & 0x07));
-			halWrite(this, R92C_INIDATA_RATE_SEL(0), &hwRate, 1);
 			fIc.ic_bss->ni_txmcs = fTxMcs;
 		}
 	}
@@ -1124,11 +1118,11 @@ void ItlRtl8188E::updateRateAndGain(void)
 		if (fAvgRssi <= -72) {
 			nextGain = 0x20;
 		} else if (fAvgRssi >= -56) {
-			nextGain = 0x30;
+			nextGain = 0x32;
 		} else if (fAvgRssi >= -69 && fAvgRssi <= -59) {
 			nextGain = 0x26;
 		} else if (fCurRxGain != 0x20 && fCurRxGain != 0x26 &&
-		    fCurRxGain != 0x30) {
+		    fCurRxGain != 0x32) {
 			nextGain = (fAvgRssi < -64) ? 0x20 : 0x26;
 		}
 
@@ -1501,8 +1495,8 @@ void ItlRtl8188E::sendFrame(mbuf_t m, struct ieee80211_node *ni, bool isMgmt)
 					rate |= 0x40;
 				}
 			}
-			/* Sampel CCX_RPT 1 dari 16 frame unicast untuk AMRR tanpa membanjiri Bulk-IN. */
-			if (isUnicastData && ((fTxData & 0x0f) == 0))
+			/* Sampel CCX_RPT 1 dari 16 frame unicast + EAPOL untuk AMRR/diagnostik. */
+			if ((isUnicastData && ((fTxData & 0x0f) == 0)) || isEapol)
 				buf[10] |= 0x08;
 			else
 				buf[10] &= ~0x08;
@@ -1880,16 +1874,29 @@ void ItlRtl8188E::handleRx(const uint8_t *buf, uint32_t len, struct mbuf_list *m
 
 		if (rpt_sel == 1 && foff + 4 <= len) {
 			const uint8_t *rpt = buf + foff;
+			bool ok = (rpt[1] & 0x40) != 0;
+			uint8_t retries = (uint8_t)(rpt[2] & 0x3f);
+			uint8_t frate = (foff + 6 <= len) ? (rpt[5] & 0x3f) : 0x0c;
 
 			fTxReport++;
-			fRaTxCnt++;
-			if (rpt[1] & 0x40) {
+			if (ok)
 				fTxOk++;
-				fRaOkCnt++;
-			}
-			if (rpt[2] & 0x3f) {
+			if (retries)
 				fTxRetry++;
-				fRaRetryCnt += (rpt[2] & 0x3f);
+			if (frate >= 0x04) {
+				fRaTxCnt++;
+				if (ok)
+					fRaOkCnt++;
+				if (retries)
+					fRaRetryCnt += retries;
+			}
+			if (fTxReport <= 12) {
+				IOLog(LOGP "CCX_RPT #%u ok=%d b0=%02x b1=%02x b2=%02x "
+				    "fr=%02x q=%02x\n",
+				    (unsigned)fTxReport, ok ? 1 : 0,
+				    rpt[0], rpt[1], rpt[2],
+				    (foff + 6 <= len) ? rpt[5] : 0xff,
+				    (foff + 7 <= len) ? rpt[6] : 0xff);
 			}
 		}
 
