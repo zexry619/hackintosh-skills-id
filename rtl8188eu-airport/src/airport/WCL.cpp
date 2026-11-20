@@ -740,8 +740,9 @@ IOReturn AirportItlwmSkywalkInterface::leaveWCLNetwork()
     bzero(joinBSSID, sizeof(joinBSSID));
     disassocIsVoluntary = true;
     ic->ic_deauth_reason = IEEE80211_REASON_AUTH_LEAVE;
-    if ((ic->ic_state == IEEE80211_S_RUN || ic->ic_state == IEEE80211_S_ASSOC) &&
-        ic->ic_bss && ic->ic_bss->ni_bssid[0] != 0) {
+    const uint8_t *bssid = ic->ic_bss ? ic->ic_bss->ni_bssid : nullptr;
+    if (ic->ic_state > IEEE80211_S_SCAN && bssid &&
+        (bssid[0] | bssid[1] | bssid[2] | bssid[3] | bssid[4] | bssid[5]) != 0) {
         IEEE80211_SEND_MGMT(ic, ic->ic_bss,
             IEEE80211_FC0_SUBTYPE_DEAUTH, IEEE80211_REASON_AUTH_LEAVE);
     }
@@ -752,7 +753,7 @@ IOReturn AirportItlwmSkywalkInterface::leaveWCLNetwork()
     explicit_bzero(ic->ic_psk, sizeof(ic->ic_psk));
     clearWCLPMKSA();
     ic->ic_wcl_enterprise = false;
-    ic->ic_flags &= ~(IEEE80211_F_PSK | IEEE80211_F_DESBSSID);
+    ic->ic_flags &= ~(IEEE80211_F_PSK | IEEE80211_F_DESBSSID | IEEE80211_F_BGSCAN);
     ic->ic_des_esslen = 0;
     bzero(ic->ic_des_essid, sizeof(ic->ic_des_essid));
     return kIOReturnSuccess;

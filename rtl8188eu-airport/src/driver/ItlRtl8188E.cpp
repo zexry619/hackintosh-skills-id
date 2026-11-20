@@ -946,6 +946,11 @@ void ItlRtl8188E::deleteKeyCb(struct ieee80211com *ic, struct ieee80211_node *ni
 	ieee80211_delete_key(ic, ni, k);
 }
 
+static inline bool bssidNonZero(const uint8_t b[IEEE80211_ADDR_LEN])
+{
+	return (b[0] | b[1] | b[2] | b[3] | b[4] | b[5]) != 0;
+}
+
 int ItlRtl8188E::newstateCb(struct ieee80211com *ic,
     enum ieee80211_state nstate, int arg)
 {
@@ -975,6 +980,9 @@ int ItlRtl8188E::newstateCb(struct ieee80211com *ic,
 	switch (nstate) {
 	case IEEE80211_S_SCAN: {
 		int dwell = 30;
+
+		/* Bersihkan flag BGSCAN agar beginWCLScan() tidak tertolak permanen. */
+		ic->ic_flags &= ~IEEE80211_F_BGSCAN;
 
 		/*
 		 * Turunkan link state internal sebelum scan.
@@ -1025,7 +1033,7 @@ int ItlRtl8188E::newstateCb(struct ieee80211com *ic,
 		 */
 		if (nstate == IEEE80211_S_AUTH) {
 			bool isSameBssid = (ic->ic_bss &&
-			    ic->ic_bss->ni_bssid[0] != 0 &&
+			    bssidNonZero(ic->ic_bss->ni_bssid) &&
 			    IEEE80211_ADDR_EQ(ic->ic_bss->ni_bssid, me->fLastJoinBssid));
 			if (!isSameBssid) {
 				me->fJoinTry = 0;
@@ -1041,7 +1049,7 @@ int ItlRtl8188E::newstateCb(struct ieee80211com *ic,
 			 * pernah datang).
 			 */
 			if (me->fJoinTry > 0 && isSameBssid && ic->ic_bss &&
-			    ic->ic_bss->ni_bssid[0] != 0) {
+			    bssidNonZero(ic->ic_bss->ni_bssid)) {
 				IEEE80211_SEND_MGMT(ic, ic->ic_bss,
 				    IEEE80211_FC0_SUBTYPE_DEAUTH,
 				    IEEE80211_REASON_AUTH_LEAVE);
@@ -1123,7 +1131,7 @@ int ItlRtl8188E::newstateCb(struct ieee80211com *ic,
 		 * menganggap kita terasosiasi; join berikutnya (bahkan
 		 * setelah reboot) bisa diabaikan AP.
 		 */
-		if (ic->ic_bss && ic->ic_bss->ni_bssid[0] != 0)
+		if (ic->ic_bss && bssidNonZero(ic->ic_bss->ni_bssid))
 			IEEE80211_SEND_MGMT(ic, ic->ic_bss,
 			    IEEE80211_FC0_SUBTYPE_DEAUTH,
 			    IEEE80211_REASON_AUTH_LEAVE);
