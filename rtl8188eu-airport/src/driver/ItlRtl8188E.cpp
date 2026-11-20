@@ -587,7 +587,7 @@ IOReturn ItlRtl8188E::enable(IONetworkInterface *interface)
 
 	if (!fBulkReady) {
 		setDiag("RTL8188E-stage", "resume-bulk-open");
-		if (!fInterface || !fChip.usb.bulkOpen(fInterface)) {
+		if (!fInterface || !fChip.usb.bulkOpen(fInterface, true)) {
 			IOLog(LOGP "enable: bulkOpen gagal pasca-resume\n");
 			setDiag("RTL8188E-stage", "fail-resume-bulk");
 			return kIOReturnError;
@@ -633,6 +633,10 @@ IOReturn ItlRtl8188E::enable(IONetworkInterface *interface)
 
 	if (fIc.ic_event_handler)
 		fIc.ic_event_handler(&fIc, IEEE80211_EVT_DRIVER_RESET_BEGIN, NULL);
+
+	fIc.ic_wcl_scan_requested = false;
+	fIc.ic_wcl_scan_ssid_length = 0;
+	fIc.ic_wcl_scan_restricted = false;
 
 	if (fIc.ic_state == IEEE80211_S_INIT)
 		ieee80211_new_state(&fIc, IEEE80211_S_SCAN, -1);
